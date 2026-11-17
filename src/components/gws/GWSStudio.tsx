@@ -1,0 +1,585 @@
+import React, { useState, useEffect } from 'react';
+import { useStorage } from '../../context/StorageContext';
+import { GWSSession } from '../../types/schema';
+import { 
+  Play, 
+  Pause, 
+  RotateCcw, 
+  CheckCircle, 
+  Flame, 
+  Clock, 
+  Star, 
+  Trash2, 
+  Search, 
+  Calendar,
+  Sparkles,
+  Award,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react';
+
+interface GWSStudioProps {
+  onClose?: () => void;
+  isModal?: boolean;
+}
+
+export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }) => {
+  const { 
+    selectedDate, 
+    gwsSessions, 
+    addGWSSession, 
+    deleteGWSSession 
+  } = useStorage();
+
+  // Active session state
+  const [taskName, setTaskName] = useState('');
+  const [plannedMinutes, setPlannedMinutes] = useState(50);
+  const [actualMinutes, setActualMinutes] = useState(0);
+
+  // Live timer state
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [isTimerRunning, setIsTimerRunning] = useState(false);
+
+  // Ratings
+  const [focus, setFocus] = useState<number>(4);
+  const [execution, setExecution] = useState<number>(4);
+  const [output, setOutput] = useState<number>(4);
+
+  // Reflexions
+  const [accomplished, setAccomplished] = useState('');
+  const [heldBack, setHeldBack] = useState('');
+  const [improveNext, setImproveNext] = useState('');
+
+  // History filtering
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+
+  // Auto total calculation
+  const totalScore = focus + execution + output; // out of 15
+
+  // Timer interval
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (isTimerRunning) {
+      interval = setInterval(() => {
+        setTimerSeconds(prev => {
+          const next = prev + 1;
+          setActualMinutes(Math.max(1, Math.round(next / 60)));
+          return next;
+        });
+      }, 1000);
+    } else if (interval) {
+      clearInterval(interval);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isTimerRunning]);
+
+  const formatTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const handleStartTimer = () => setIsTimerRunning(true);
+  const handlePauseTimer = () => setIsTimerRunning(false);
+  const handleResetTimer = () => {
+    setIsTimerRunning(false);
+    setTimerSeconds(0);
+    setActualMinutes(0);
+  };
+
+  const getScoreBadge = (score: number) => {
+    if (score >= 14) {
+      return { label: 'Elite Execution', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' };
+    }
+    if (score >= 11) {
+      return { label: 'Strong Sprint', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+    }
+    if (score >= 8) {
+      return { label: 'Moderate / Friction', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' };
+    }
+    return { label: 'Calibration Needed', color: 'bg-rose-500/20 text-rose-400 border-rose-500/30' };
+  };
+
+  const handleSaveSession = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!taskName.trim()) {
+      alert('Please enter a Task Name for this GWS session.');
+      return;
+    }
+
+    const sessionActual = actualMinutes > 0 ? actualMinutes : (plannedMinutes || 45);
+
+    addGWSSession({
+      date: selectedDate,
+      taskName: taskName.trim(),
+      plannedMinutes,
+      actualMinutes: sessionActual,
+      ratings: {
+        focus,
+        execution,
+        output,
+        total: totalScore
+      },
+      reflexions: {
+        accomplished: accomplished.trim(),
+        heldBack: heldBack.trim(),
+        improveNext: improveNext.trim()
+      }
+    });
+
+    // Reset form
+    setTaskName('');
+    handleResetTimer();
+    setAccomplished('');
+    setHeldBack('');
+    setImproveNext('');
+
+    if (isModal && onClose) {
+      onClose();
+    }
+  };
+
+  // Filtered session history
+  const filteredSessions = gwsSessions.filter(s => 
+    s.taskName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.reflexions.accomplished.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.reflexions.heldBack.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.date.includes(searchQuery)
+  );
+
+  return (
+    <div className={`space-y-8 ${isModal ? 'p-2' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}`}>
+      
+      {/* Header */}
+      {!isModal && (
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-6 border-b border-slate-800">
+          <div>
+            <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+              <Clock className="w-4 h-4" />
+              <span>Deep Work Protocol</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 mt-1">
+              GWS (Goal Work Session) Studio
+            </h1>
+            <p className="text-sm text-slate-400 mt-1">
+              Time: Planned vs. Actual • Focus, Execution & Output (/15) • Actionable Reflexions
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-4 bg-slate-900 border border-slate-800 px-4 py-2.5 rounded-2xl">
+            <div className="text-right">
+              <div className="text-xs text-slate-400">Target Session Date</div>
+              <div className="text-sm font-bold text-amber-400 font-mono">{selectedDate}</div>
+            </div>
+            <Calendar className="w-5 h-5 text-slate-500" />
+          </div>
+        </div>
+      )}
+
+      {/* Main Grid: Live Session Form (Left) + Recent Log/Stats (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        {/* Left Column: Interactive GWS Form */}
+        <div className="lg:col-span-7 space-y-6">
+          <form onSubmit={handleSaveSession} className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+            {/* Subtle top accent */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-600" />
+
+            <div className="flex items-center justify-between mb-6">
+              <span className="text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center space-x-1.5">
+                <Flame className="w-3.5 h-3.5 text-amber-400" />
+                <span>Live GWS Cockpit</span>
+              </span>
+
+              {/* Total score pill */}
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-slate-400 font-medium">Session Score:</span>
+                <span className="text-lg font-extrabold text-amber-400 font-mono">{totalScore} <span className="text-xs text-slate-500">/ 15</span></span>
+              </div>
+            </div>
+
+            {/* Task input */}
+            <div className="space-y-2 mb-6">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                Task Description:
+              </label>
+              <input
+                type="text"
+                value={taskName}
+                onChange={(e) => setTaskName(e.target.value)}
+                placeholder="e.g. Finish Discord onboarding test run & verify commitment"
+                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+                required
+              />
+            </div>
+
+            {/* Time: Planned vs Actual + Live Stopwatch */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80">
+              
+              {/* Planned Minutes */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-400 flex items-center justify-between">
+                  <span>Planned Duration:</span>
+                  <span className="font-mono text-amber-400 font-bold">{plannedMinutes} min</span>
+                </label>
+                <div className="flex items-center space-x-1.5">
+                  {[25, 45, 50, 60, 90].map(mins => (
+                    <button
+                      type="button"
+                      key={mins}
+                      onClick={() => setPlannedMinutes(mins)}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        plannedMinutes === mins
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                      }`}
+                    >
+                      {mins}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Actual Minutes / Live Timer */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-400 flex items-center justify-between">
+                  <span>Actual Time Spent:</span>
+                  <span className="font-mono text-slate-100 font-bold">{formatTimer(timerSeconds)} ({actualMinutes}m)</span>
+                </label>
+                
+                <div className="flex items-center space-x-2">
+                  {!isTimerRunning ? (
+                    <button
+                      type="button"
+                      onClick={handleStartTimer}
+                      className="flex-1 flex items-center justify-center space-x-1 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-bold transition-colors"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Start Timer</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handlePauseTimer}
+                      className="flex-1 flex items-center justify-center space-x-1 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/40 text-xs font-bold transition-colors"
+                    >
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                      <span>Pause</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleResetTimer}
+                    title="Reset Stopwatch"
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Performance Ratings (1-5): Focus, Execution, Output */}
+            <div className="space-y-4 mb-6 p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Performance (1–5):
+                </span>
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${getScoreBadge(totalScore).color}`}>
+                  {getScoreBadge(totalScore).label}
+                </span>
+              </div>
+
+              {/* Focus (1-5) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-300 font-medium">Focus:</span>
+                  <span className="font-mono font-bold text-amber-400">{focus} / 5</span>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[1, 2, 3, 4, 5].map((val) => (
+                    <button
+                      type="button"
+                      key={val}
+                      onClick={() => setFocus(val)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        focus === val
+                          ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Execution (1-5) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-300 font-medium">Execution:</span>
+                  <span className="font-mono font-bold text-amber-400">{execution} / 5</span>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[1, 2, 3, 4, 5].map((val) => (
+                    <button
+                      type="button"
+                      key={val}
+                      onClick={() => setExecution(val)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        execution === val
+                          ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Output (1-5) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-300 font-medium">Output:</span>
+                  <span className="font-mono font-bold text-amber-400">{output} / 5</span>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[1, 2, 3, 4, 5].map((val) => (
+                    <button
+                      type="button"
+                      key={val}
+                      onClick={() => setOutput(val)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        output === val
+                          ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Total Display */}
+              <div className="pt-2 flex items-center justify-between border-t border-slate-800/80">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Performance:</span>
+                <span className="text-base font-extrabold font-mono text-slate-100">
+                  <strong className="text-amber-400">{totalScore}</strong> / 15
+                </span>
+              </div>
+            </div>
+
+            {/* Reflexions: 3 questions */}
+            <div className="space-y-4 mb-6">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reflexions:</span>
+              </div>
+
+              {/* 1. What did I accomplish? */}
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-slate-400">
+                  1. What did I accomplish?
+                </label>
+                <textarea
+                  value={accomplished}
+                  onChange={(e) => setAccomplished(e.target.value)}
+                  placeholder="Concrete milestones, decisions, or code shipped..."
+                  rows={2}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-none transition-colors"
+                />
+              </div>
+
+              {/* 2. What held me back? */}
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-slate-400">
+                  2. What held me back?
+                </label>
+                <textarea
+                  value={heldBack}
+                  onChange={(e) => setHeldBack(e.target.value)}
+                  placeholder="Distractions, lack of clarity, rabbit holes, fatigue..."
+                  rows={2}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-none transition-colors"
+                />
+              </div>
+
+              {/* 3. What will I improve next session? */}
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-slate-400">
+                  3. What will I improve next session?
+                </label>
+                <textarea
+                  value={improveNext}
+                  onChange={(e) => setImproveNext(e.target.value)}
+                  placeholder="Single sharp actionable correction for the next sprint..."
+                  rows={2}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-none transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex items-center space-x-3">
+              <button
+                type="submit"
+                className="flex-1 flex items-center justify-center space-x-2 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-amber-500/20 active:scale-98 transition-all"
+              >
+                <CheckCircle className="w-4 h-4 fill-current" />
+                <span>Save & Record GWS Session</span>
+              </button>
+              {isModal && onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+
+          </form>
+        </div>
+
+        {/* Right Column: GWS History & Performance Metrics */}
+        <div className="lg:col-span-5 space-y-6">
+          
+          {/* Quick Metrics Header */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs text-slate-400 font-medium">Total Sprints Logged</div>
+              <div className="text-2xl font-extrabold text-slate-100 font-mono mt-1">
+                {gwsSessions.length}
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs text-slate-400 font-medium">Avg Score</div>
+              <div className="text-2xl font-extrabold text-amber-400 font-mono mt-1">
+                {gwsSessions.length > 0 
+                  ? (gwsSessions.reduce((acc, s) => acc + s.ratings.total, 0) / gwsSessions.length).toFixed(1) 
+                  : '0'} <span className="text-xs text-slate-500">/ 15</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Search bar */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search session tasks, reflexions, or date..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/40"
+            />
+          </div>
+
+          {/* Session Cards List */}
+          <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Recorded Sessions ({filteredSessions.length})
+            </h3>
+
+            {filteredSessions.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800 text-slate-500 text-xs">
+                No GWS sessions found. Start a sprint above to record!
+              </div>
+            ) : (
+              filteredSessions.map((session) => {
+                const isExpanded = expandedSessionId === session.id;
+                const badge = getScoreBadge(session.ratings.total);
+
+                return (
+                  <div
+                    key={session.id}
+                    className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-4 transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 cursor-pointer" onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[11px] font-mono text-amber-400 font-semibold">{session.date}</span>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {session.actualMinutes || session.plannedMinutes}m
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-100 mt-1 hover:text-amber-400 transition-colors">
+                          {session.taskName}
+                        </h4>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${badge.color}`}>
+                          {session.ratings.total}/15
+                        </span>
+                        <button
+                          onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                          className="p-1 text-slate-400 hover:text-slate-200"
+                        >
+                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete GWS session: "${session.taskName}"?`)) {
+                              deleteGWSSession(session.id);
+                            }
+                          }}
+                          className="p-1 text-slate-600 hover:text-rose-400 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Breakdown metrics */}
+                    <div className="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                      <span>Focus: <strong className="text-slate-200">{session.ratings.focus}/5</strong></span>
+                      <span>Execution: <strong className="text-slate-200">{session.ratings.execution}/5</strong></span>
+                      <span>Output: <strong className="text-slate-200">{session.ratings.output}/5</strong></span>
+                    </div>
+
+                    {/* Expanded reflexions */}
+                    {isExpanded && (
+                      <div className="mt-3 pt-3 border-t border-slate-800/80 space-y-2 text-xs">
+                        {session.reflexions.accomplished && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                            <span className="font-semibold text-emerald-400 block mb-0.5">1. Accomplished:</span>
+                            <p className="text-slate-300">{session.reflexions.accomplished}</p>
+                          </div>
+                        )}
+                        {session.reflexions.heldBack && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                            <span className="font-semibold text-orange-400 block mb-0.5">2. Held Back:</span>
+                            <p className="text-slate-300">{session.reflexions.heldBack}</p>
+                          </div>
+                        )}
+                        {session.reflexions.improveNext && (
+                          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                            <span className="font-semibold text-amber-400 block mb-0.5">3. Improve Next:</span>
+                            <p className="text-slate-300">{session.reflexions.improveNext}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  </div>
+                );
+              })
+            )}
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+  );
+};
