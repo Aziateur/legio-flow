@@ -4,9 +4,12 @@ import {
   ChevronLeft, 
   ChevronRight, 
   Calendar as CalendarIcon, 
+  CheckCircle2,
   Sliders, 
   Clock,
-  Sparkles
+  Sparkles,
+  Target,
+  ArrowRight
 } from 'lucide-react';
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
@@ -24,8 +27,12 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     getEntryForDate,
     saveDailyEntry,
     gwsSessions,
+    weeklyPlans,
+    selectedWeekId,
     templates
   } = useStorage();
+
+  const activeWeeklyPlan = weeklyPlans[selectedWeekId] || weeklyPlans['week_3'];
 
   const currentEntry = getEntryForDate(selectedDate);
   // Find active template for daily category
@@ -218,6 +225,38 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         gwsSessions={gwsSessions}
         onApplyParsedPlan={handleApplyParsedPlan}
       />
+
+      {/* Week Focus Quick Bridge (One-Click Pull into Day) */}
+      {activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0 && (
+        <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3.5 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-slate-300 flex items-center space-x-1.5">
+              <Target className="w-3.5 h-3.5 text-amber-400" />
+              <span>Week {activeWeeklyPlan.weekNumber} Goals:</span>
+              <span className="text-slate-500 font-normal">Click any goal to pull into today's mission</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            {activeWeeklyPlan.tasks.map((task) => (
+              <button
+                key={task.id}
+                type="button"
+                onClick={() => handleApplyParsedPlan(task.text)}
+                className={`text-xs px-2.5 py-1.5 rounded-xl border transition-all flex items-center space-x-1.5 ${
+                  task.completed
+                    ? 'bg-slate-950/60 border-slate-800 text-slate-500 line-through'
+                    : 'bg-slate-950 hover:bg-slate-800/80 border-slate-800 hover:border-amber-500/40 text-slate-200'
+                }`}
+                title="Click to add to today's priorities"
+              >
+                <span>{task.text}</span>
+                <span className="text-[10px] text-amber-400 font-mono">+{task.score}p</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* DYNAMIC TEMPLATE-DRIVEN CARDS GRID */}
       {dailyTemplate && (

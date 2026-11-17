@@ -1,21 +1,19 @@
 import React, { useState } from 'react';
 import { useStorage } from '../../context/StorageContext';
-import { WeeklyPlan, TaskItem, RewardTier } from '../../types/schema';
+import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { 
   Target, 
   Gift, 
-  Award, 
   CheckCircle2, 
   Circle, 
   Plus, 
   Trash2, 
   Sparkles, 
   Flame, 
-  Info,
-  Calendar,
   ChevronRight,
-  HelpCircle,
-  TrendingUp
+  ArrowDownToLine,
+  ChevronDown,
+  Layers
 } from 'lucide-react';
 
 export const WeeklyGoalCrusherView: React.FC = () => {
@@ -24,27 +22,28 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     selectedWeekId, 
     setSelectedWeekId, 
     saveWeeklyPlan,
-    setActiveTab,
-    setReviewSubTab
+    setSelectedDate,
+    selectedDate,
+    saveDailyEntry,
+    getEntryForDate
   } = useStorage();
 
   const plan = weeklyPlans[selectedWeekId] || weeklyPlans['week_3'] || Object.values(weeklyPlans)[0];
 
-  // Local editing states
-  const [newTaskText, setNewTaskText] = useState('');
-  const [newTaskScore, setNewTaskScore] = useState(2);
-  const [showInstructions, setShowInstructions] = useState(false);
+  const [newGoalInput, setNewGoalInput] = useState('');
+  const [showRewardLadder, setShowRewardLadder] = useState(false);
+  const [pulledNotice, setPulledNotice] = useState<string | null>(null);
 
-  // Calculate sum of tasks total potential points and achieved points
+  // Score stats
   const totalPossible = plan.tasks.reduce((acc, t) => acc + (t.score || 0), 0);
   const achievedScore = plan.tasks
     .filter(t => t.completed)
     .reduce((acc, t) => acc + (t.score || 0), 0);
 
-  // Task actions
-  const handleTaskToggle = (taskId: string) => {
+  // Toggle goal done
+  const handleToggleGoal = (id: string) => {
     const nextTasks = plan.tasks.map(t =>
-      t.id === taskId ? { ...t, completed: !t.completed } : t
+      t.id === id ? { ...t, completed: !t.completed } : t
     );
     saveWeeklyPlan({
       ...plan,
@@ -53,22 +52,19 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     });
   };
 
-  const handleTaskScoreChange = (taskId: string, score: number) => {
-    const nextTasks = plan.tasks.map(t =>
-      t.id === taskId ? { ...t, score: Math.max(1, score) } : t
-    );
-    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+  // Inline goal edit
+  const handleEditGoal = (id: string, text: string) => {
+    saveWeeklyPlan({
+      ...plan,
+      tasks: plan.tasks.map(t => t.id === id ? { ...t, text } : t)
+    });
   };
 
-  const handleTaskTextChange = (taskId: string, text: string) => {
+  // Inline score weight change
+  const handleChangeScore = (id: string, score: number) => {
     const nextTasks = plan.tasks.map(t =>
-      t.id === taskId ? { ...t, text } : t
+      t.id === id ? { ...t, score: Math.max(1, score) } : t
     );
-    saveWeeklyPlan({ ...plan, tasks: nextTasks });
-  };
-
-  const handleDeleteTask = (taskId: string) => {
-    const nextTasks = plan.tasks.filter(t => t.id !== taskId);
     saveWeeklyPlan({
       ...plan,
       tasks: nextTasks,
@@ -76,35 +72,42 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     });
   };
 
-  const handleAddTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTaskText.trim()) return;
-
-    const newTask: TaskItem = {
-      id: `task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      text: newTaskText.trim(),
-      score: newTaskScore,
-      completed: false
-    };
-
+  const handleDeleteGoal = (id: string) => {
+    const nextTasks = plan.tasks.filter(t => t.id !== id);
     saveWeeklyPlan({
       ...plan,
-      tasks: [...plan.tasks, newTask]
+      tasks: nextTasks,
+      achievedScore: nextTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
     });
-
-    setNewTaskText('');
-    setNewTaskScore(2);
   };
 
-  const handleFocusChange = (focusTheme: string) => {
-    saveWeeklyPlan({ ...plan, focusTheme });
+  // Effortless Enter-key goal addition (Notion / Linear style)
+  const handleKeyDownNew = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && newGoalInput.trim()) {
+      e.preventDefault();
+      const newTask: TaskItem = {
+        id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: newGoalInput.trim(),
+        score: 2, // default 2 points
+        completed: false
+      };
+      saveWeeklyPlan({
+        ...plan,
+        tasks: [...plan.tasks, newTask]
+      });
+      setNewGoalInput('');
+    }
   };
 
-  const handleRewardChange = (tierId: string, reward: string) => {
-    const nextRewards = plan.rewards.map(r =>
-      r.id === tierId ? { ...r, reward } : r
-    );
-    saveWeeklyPlan({ ...plan, rewards: nextRewards });
+  // Bridge: "Pull this Goal into Today's Plan"
+  const handlePullToToday = (goalText: string) => {
+    const currentDaily = getEntryForDate(selectedDate);
+    const existing = currentDaily.planNotes ? `${currentDaily.planNotes}\n` : '';
+    saveDailyEntry(selectedDate, {
+      planNotes: `${existing}${goalText}`
+    });
+    setPulledNotice(`Added "${goalText.slice(0, 32)}..." to Today (${selectedDate})`);
+    setTimeout(() => setPulledNotice(null), 2500);
   };
 
   const handleCreateNewWeek = () => {
@@ -113,7 +116,6 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     const nextNum = maxNum + 1;
     const nextId = `week_${nextNum}`;
 
-    // Clean blank slate for new week
     const newPlan: WeeklyPlan = {
       id: nextId,
       weekNumber: nextNum,
@@ -125,11 +127,11 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       totalPossibleScore: 10,
       achievedScore: 0,
       rewards: [
-        { id: 'r1', minScore: 6, reward: 'Tier 1 Celebration' },
-        { id: 'r2', minScore: 7, reward: 'Tier 2 Reward' },
-        { id: 'r3', minScore: 8, reward: 'Tier 3 Celebration Day' },
-        { id: 'r4', minScore: 9, reward: 'Tier 4 Milestone Splurge' },
-        { id: 'r5', minScore: 10, reward: 'Ultimate Mastery Reward' }
+        { id: 'r1', minScore: 6, reward: 'Nice dinner / Celebration break' },
+        { id: 'r2', minScore: 7, reward: 'Productivity tool upgrade / Book' },
+        { id: 'r3', minScore: 8, reward: 'Full day of celebration freedom' },
+        { id: 'r4', minScore: 9, reward: 'Major milestone splurge' },
+        { id: 'r5', minScore: 10, reward: 'Ultimate victory reward' }
       ],
       updatedAt: new Date().toISOString()
     };
@@ -138,311 +140,222 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     setSelectedWeekId(nextId);
   };
 
-  const isCurrentActiveWeek = plan.id === 'week_3';
-
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       
-      {/* Week Selector Bar with Clear Status Badges */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
-        <div className="flex items-center space-x-3">
-          <div className="p-3 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-slate-950 font-bold shadow-md shadow-amber-500/20">
-            <Target className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400">Weekly Goal Crusher</span>
-              {isCurrentActiveWeek ? (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  CURRENT ACTIVE SPRINT
-                </span>
-              ) : plan.weekNumber === 1 ? (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                  ARCHIVED REFERENCE (WEEK 1)
-                </span>
-              ) : null}
-            </div>
-            <h1 className="text-2xl font-extrabold text-slate-100 mt-0.5">
-              Week {plan.weekNumber}: {plan.focusTheme || 'Set Weekly Focus Headline'}
-            </h1>
-          </div>
+      {/* Toast Notice when pulling goal into today */}
+      {pulledNotice && (
+        <div className="fixed bottom-6 right-6 z-50 p-3.5 rounded-2xl bg-emerald-500 text-slate-950 font-bold text-xs shadow-2xl flex items-center space-x-2 animate-bounce">
+          <Sparkles className="w-4 h-4" />
+          <span>{pulledNotice}</span>
         </div>
+      )}
 
-        {/* Week Switcher Chips */}
-        <div className="flex items-center space-x-2 flex-wrap">
+      {/* Week Switcher Minimal Bar */}
+      <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+        <div className="flex items-center space-x-1.5 overflow-x-auto">
           {Object.values(weeklyPlans).map((p) => {
             const isSelected = p.id === plan.id;
             return (
               <button
                 key={p.id}
                 onClick={() => setSelectedWeekId(p.id)}
-                className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold font-mono transition-all ${
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold font-mono transition-all ${
                   isSelected
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 ring-2 ring-amber-400'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
                 }`}
               >
-                <span>Week {p.weekNumber}</span>
-                {p.id === 'week_3' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                Week {p.weekNumber}
               </button>
             );
           })}
-
           <button
             onClick={handleCreateNewWeek}
-            className="flex items-center space-x-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"
-            title="Create next week"
+            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-200 hover:bg-slate-900 transition-colors"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ New Week</span>
+            + New Week
           </button>
         </div>
+
+        {/* Reward Ladder Collapsible Toggle */}
+        <button
+          onClick={() => setShowRewardLadder(!showRewardLadder)}
+          className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+            showRewardLadder
+              ? 'bg-sky-500/20 text-sky-400 border-sky-500/30'
+              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+          }`}
+        >
+          <Gift className="w-3.5 h-3.5" />
+          <span>Reward Ladder ({achievedScore}/10 pts)</span>
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showRewardLadder ? 'rotate-180' : ''}`} />
+        </button>
       </div>
 
-      {/* Educational Banner (Dismissible / Toggleable) */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center space-x-2">
-          <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
-          <span>
-            <strong>How Goal Crusher Works:</strong> Define 3–6 real tasks with scores totaling <strong>10 points</strong>. Tick tasks as you ship them to unlock reward tiers (6+ to 10).
-          </span>
-        </div>
-      </div>
+      {/* Collapsible Reward Ladder Drawer (Only visible when toggled) */}
+      {showRewardLadder && (
+        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3 shadow-xl">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+              <Gift className="w-4 h-4 text-sky-400" />
+              <span>Milestone Rewards Ladder</span>
+            </span>
+            <span className="text-xs font-mono font-extrabold text-amber-400">
+              Current: {achievedScore} Pts
+            </span>
+          </div>
 
-      {/* Main Execution Grid: Weekly Tasks Table (8 cols) + Reward Ladder (4 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* Left Column: Tasks Breakdown (Table Style) */}
-        <div className="lg:col-span-8 space-y-6">
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-            
-            {/* Weekly Focus Box */}
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
-              <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
-                Weekly Strategic Focus Headline:
-              </label>
-              <input
-                type="text"
-                value={plan.focusTheme}
-                onChange={(e) => handleFocusChange(e.target.value)}
-                placeholder="e.g. Discord cohort launch & Miro trading roadmap"
-                className="w-full bg-transparent text-sm sm:text-base font-extrabold text-amber-400 placeholder-amber-400/30 focus:outline-none"
-              />
-            </div>
-
-            {/* Sub-header instruction */}
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-400 pb-2 border-b border-slate-800">
-              <span>Break the goal down into real tasks (Sum should reach 10 pts):</span>
-              <span className={`font-mono font-extrabold text-xs px-2 py-0.5 rounded border ${
-                totalPossible === 10
-                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                  : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-              }`}>
-                Allocated: {totalPossible} / 10 Pts
-              </span>
-            </div>
-
-            {/* Tasks Table */}
-            <div className="space-y-3">
-              {plan.tasks.length === 0 ? (
-                <div className="p-8 text-center bg-slate-950/60 rounded-2xl border border-slate-800/80 text-xs text-slate-500">
-                  No tasks added to Week {plan.weekNumber} yet. Use the form below to add your first high-leverage task.
-                </div>
-              ) : (
-                plan.tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className={`flex items-center justify-between p-3.5 sm:p-4 rounded-2xl border transition-all ${
-                      task.completed
-                        ? 'bg-emerald-500/5 border-emerald-500/30 shadow-sm'
-                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    {/* Checkbox & Task Name */}
-                    <div className="flex items-center space-x-3 flex-1 min-w-0 pr-3">
-                      <button
-                        type="button"
-                        onClick={() => handleTaskToggle(task.id)}
-                        className="shrink-0 transition-transform active:scale-90"
-                        title={task.completed ? 'Mark pending' : 'Mark done'}
-                      >
-                        {task.completed ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                        ) : (
-                          <Circle className="w-5 h-5 text-slate-600 hover:text-slate-400" />
-                        )}
-                      </button>
-
-                      <input
-                        type="text"
-                        value={task.text}
-                        onChange={(e) => handleTaskTextChange(task.id, e.target.value)}
-                        className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
-                          task.completed ? 'line-through text-slate-500' : 'text-slate-200'
-                        }`}
-                      />
-                    </div>
-
-                    {/* Score Weight Pill & Delete */}
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <div className="flex items-center space-x-1 bg-slate-900 border border-slate-800 rounded-xl px-2 py-1">
-                        <span className="text-[10px] text-slate-500 font-mono">Weight:</span>
-                        <select
-                          value={task.score || 1}
-                          onChange={(e) => handleTaskScoreChange(task.id, parseInt(e.target.value))}
-                          className="bg-transparent text-amber-400 font-mono font-extrabold text-xs focus:outline-none cursor-pointer"
-                        >
-                          {[1, 2, 3, 4, 5].map((pts) => (
-                            <option key={pts} value={pts}>{pts} pt{pts > 1 ? 's' : ''}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTask(task.id)}
-                        className="p-1.5 text-slate-600 hover:text-rose-400 rounded-lg hover:bg-slate-900 transition-colors"
-                        title="Delete task"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Score Totals Bar */}
-            <div className={`p-4 rounded-2xl border flex items-center justify-between ${
-              achievedScore >= 6
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                : 'bg-slate-950 border-slate-800 text-slate-300'
-            }`}>
-              <div className="flex items-center space-x-2">
-                <Flame className={`w-5 h-5 ${achievedScore >= 6 ? 'text-emerald-400' : 'text-amber-400'}`} />
-                <span className="text-xs font-bold uppercase tracking-wider">
-                  Weekly Score Progress:
-                </span>
-              </div>
-              <div className="font-mono font-extrabold text-base sm:text-lg">
-                <span className={achievedScore >= 6 ? 'text-emerald-300' : 'text-amber-400'}>
-                  {achievedScore}
-                </span>
-                <span className="text-slate-500 text-sm"> / {totalPossible || 10} pts</span>
-              </div>
-            </div>
-
-            {/* Add Task Form */}
-            <form onSubmit={handleAddTask} className="flex flex-col sm:flex-row items-center gap-3 pt-4 border-t border-slate-800">
-              <input
-                type="text"
-                value={newTaskText}
-                onChange={(e) => setNewTaskText(e.target.value)}
-                placeholder="Type a new high-leverage deliverable..."
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/50"
-              />
-              <div className="flex items-center space-x-2 w-full sm:w-auto">
-                <div className="flex items-center space-x-1 text-xs text-slate-400 font-medium">
-                  <span>Pts:</span>
-                  <select
-                    value={newTaskScore}
-                    onChange={(e) => setNewTaskScore(parseInt(e.target.value))}
-                    className="bg-slate-950 border border-slate-800 rounded-xl py-2 px-2 text-xs font-mono font-bold text-amber-400 focus:outline-none cursor-pointer"
-                  >
-                    {[1, 2, 3, 4, 5].map((pts) => (
-                      <option key={pts} value={pts}>{pts} pt{pts > 1 ? 's' : ''}</option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="submit"
-                  className="flex-1 sm:flex-none flex items-center justify-center space-x-1 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition-colors shadow-md shadow-amber-500/20"
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-1">
+            {plan.rewards.map((r) => {
+              const isUnlocked = achievedScore >= r.minScore;
+              return (
+                <div
+                  key={r.id}
+                  className={`p-3 rounded-2xl border transition-all ${
+                    isUnlocked
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 font-bold'
+                      : 'bg-slate-950 border-slate-800/80 text-slate-500'
+                  }`}
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Add Task</span>
+                  <div className="flex justify-between items-center text-[10px] font-mono mb-1">
+                    <span>{r.minScore}+ Pts</span>
+                    {isUnlocked && <Sparkles className="w-3 h-3 text-emerald-400" />}
+                  </div>
+                  <input
+                    type="text"
+                    value={r.reward}
+                    onChange={(e) => {
+                      const updated = plan.rewards.map(rw => rw.id === r.id ? { ...rw, reward: e.target.value } : rw);
+                      saveWeeklyPlan({ ...plan, rewards: updated });
+                    }}
+                    className="w-full bg-transparent text-xs focus:outline-none"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Clean Document View: Week Focus Headline */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
+        
+        <div>
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 block mb-1">
+            Weekly Singular Mission (Week {plan.weekNumber})
+          </span>
+          <input
+            type="text"
+            value={plan.focusTheme}
+            onChange={(e) => saveWeeklyPlan({ ...plan, focusTheme: e.target.value })}
+            placeholder="What is the one big outcome that matters this week?"
+            className="w-full bg-transparent text-xl sm:text-2xl font-extrabold text-amber-400 placeholder-slate-700 focus:outline-none"
+          />
+        </div>
+
+        {/* Clean Goals Checklist */}
+        <div className="space-y-2 pt-4 border-t border-slate-800/80">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-400 pb-1">
+            <span>Weekly Deliverables ({plan.tasks.length})</span>
+            <span className="font-mono text-slate-500 text-[11px]">
+              Allocated: <strong className="text-amber-400">{totalPossible}</strong> / 10 Pts
+            </span>
+          </div>
+
+          {plan.tasks.map((task, idx) => (
+            <div
+              key={task.id}
+              className={`group flex items-center justify-between p-3.5 rounded-2xl border transition-all ${
+                task.completed
+                  ? 'bg-emerald-500/5 border-emerald-500/25'
+                  : 'bg-slate-950 border-slate-800/90 hover:border-slate-700'
+              }`}
+            >
+              {/* Checkbox & Text */}
+              <div className="flex items-center space-x-3 flex-1 min-w-0 pr-3">
+                <button
+                  type="button"
+                  onClick={() => handleToggleGoal(task.id)}
+                  className="transition-transform active:scale-90 shrink-0"
+                >
+                  {task.completed ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  ) : (
+                    <Circle className="w-5 h-5 text-slate-600 hover:text-slate-400" />
+                  )}
+                </button>
+
+                <input
+                  type="text"
+                  value={task.text}
+                  onChange={(e) => handleEditGoal(task.id, e.target.value)}
+                  className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
+                    task.completed ? 'line-through text-slate-500' : 'text-slate-100'
+                  }`}
+                />
+              </div>
+
+              {/* Actions & Point Weight */}
+              <div className="flex items-center space-x-2 shrink-0">
+                {/* Bridge button: "Pull to Today" */}
+                <button
+                  type="button"
+                  onClick={() => handlePullToToday(task.text)}
+                  className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[11px] font-semibold border border-slate-800 transition-colors"
+                  title={`Pull this goal into ${selectedDate}'s plan`}
+                >
+                  <ArrowDownToLine className="w-3 h-3 text-amber-400" />
+                  <span>Pull to Today</span>
+                </button>
+
+                {/* Score weight badge */}
+                <select
+                  value={task.score || 2}
+                  onChange={(e) => handleChangeScore(task.id, parseInt(e.target.value))}
+                  className="bg-slate-900 text-amber-400 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold focus:outline-none cursor-pointer"
+                >
+                  {[1, 2, 3, 4, 5].map((pts) => (
+                    <option key={pts} value={pts}>{pts} pt{pts > 1 ? 's' : ''}</option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => handleDeleteGoal(task.id)}
+                  className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
-            </form>
+            </div>
+          ))}
 
+          {/* Effortless Inline Goal Input (Like Notion - Type & hit Enter) */}
+          <div className="flex items-center space-x-3 p-3.5 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-amber-500/50 transition-colors">
+            <Plus className="w-4 h-4 text-slate-500 shrink-0" />
+            <input
+              type="text"
+              value={newGoalInput}
+              onChange={(e) => setNewGoalInput(e.target.value)}
+              onKeyDown={handleKeyDownNew}
+              placeholder="Type a goal and press Enter to add..."
+              className="w-full bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+            />
+            <span className="text-[10px] text-slate-600 font-mono hidden sm:inline shrink-0">
+              Press Enter ↵
+            </span>
           </div>
+
         </div>
 
-        {/* Right Column: Reward Ladder Table */}
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-            
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center space-x-2">
-                <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400 border border-sky-500/20">
-                  <Gift className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-extrabold text-slate-100 uppercase tracking-wide">
-                    Reward Ladder
-                  </h3>
-                  <p className="text-[11px] text-slate-400">Unlock incentives as you hit points</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Ladder Rows */}
-            <div className="space-y-3">
-              {plan.rewards.map((tier) => {
-                const isUnlocked = achievedScore >= tier.minScore;
-
-                return (
-                  <div
-                    key={tier.id}
-                    className={`rounded-2xl border p-3.5 transition-all ${
-                      isUnlocked
-                        ? 'bg-gradient-to-r from-emerald-500/15 to-emerald-600/10 border-emerald-500/40 shadow-md shadow-emerald-500/10'
-                        : 'bg-slate-950/60 border-slate-800/80 opacity-70'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className={`text-xs font-extrabold font-mono px-2 py-0.5 rounded-lg border ${
-                        isUnlocked
-                          ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                          : 'bg-slate-900 text-slate-400 border-slate-800'
-                      }`}>
-                        {tier.minScore}+ Points
-                      </span>
-
-                      <span className="text-[10px] font-bold uppercase tracking-wider">
-                        {isUnlocked ? (
-                          <span className="text-emerald-400 flex items-center space-x-1">
-                            <Sparkles className="w-3 h-3" />
-                            <span>Unlocked!</span>
-                          </span>
-                        ) : (
-                          <span className="text-slate-500">
-                            {tier.minScore - achievedScore} pts needed
-                          </span>
-                        )}
-                      </span>
-                    </div>
-
-                    <input
-                      type="text"
-                      value={tier.reward}
-                      onChange={(e) => handleRewardChange(tier.id, e.target.value)}
-                      placeholder="Enter custom reward..."
-                      className={`w-full bg-transparent text-xs font-medium focus:outline-none ${
-                        isUnlocked ? 'text-emerald-200' : 'text-slate-400'
-                      }`}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Motivational note */}
-            <p className="text-[11px] text-slate-500 leading-normal pt-2">
-              💡 Tip: Rewarding yourself at 6+ builds self-trust. Don't skip celebrating when you cross tiers!
-            </p>
-
-          </div>
+        {/* Minimal Score Tracker Bar */}
+        <div className="pt-2 flex items-center justify-between text-xs text-slate-400">
+          <span>Weekly progress</span>
+          <span className="font-mono font-bold text-slate-200">
+            <strong className="text-amber-400">{achievedScore}</strong> / {totalPossible || 10} pts completed ({Math.min(100, Math.round((achievedScore / Math.max(1, totalPossible || 10)) * 100))}%)
+          </span>
         </div>
 
       </div>
