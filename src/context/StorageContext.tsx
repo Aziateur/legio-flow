@@ -146,7 +146,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   });
 
-  const [selectedWeekId, setSelectedWeekId] = useState<string>('week_1');
+  const [selectedWeekId, setSelectedWeekIdState] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('legio_selected_week_id');
+      return saved || 'week_3';
+    } catch {
+      return 'week_3';
+    }
+  });
+
+  const setSelectedWeekId = (weekId: string) => {
+    setSelectedWeekIdState(weekId);
+    try {
+      localStorage.setItem('legio_selected_week_id', weekId);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Progressive System Level (1 to 4)
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
