@@ -47,6 +47,7 @@ export const TemplateManager: React.FC = () => {
     { type: 'duration', label: 'Planned vs Actual Time', desc: 'Timer & minute trackers' },
     { type: 'score_target', label: 'Tasks Ratio Counter', desc: 'e.g. 3 / 3 tasks completed' },
     { type: 'textarea', label: 'Multi-line Reflexion Prompt', desc: 'Text box for thoughts, blockers, wins' },
+    { type: 'numbered_list', label: 'Numbered 1, 2, 3 Priorities', desc: 'Discrete numbered input rows with badges' },
     { type: 'text', label: 'Short Text Input', desc: 'Single-line header or task title' },
     { type: 'checkbox', label: 'Yes/No Boolean Toggle', desc: 'Routine or habit completion check' },
     { type: 'checklist', label: 'Interactive Checklist', desc: 'Subtasks with checkboxes' },

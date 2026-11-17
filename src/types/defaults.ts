@@ -55,10 +55,10 @@ export const DEFAULT_TEMPLATES: Template[] = [
         id: 'plan_notes',
         label: 'Day Plan & Direct Priorities',
         description: 'Numbered daily mission objectives',
-        type: 'textarea',
+        type: 'numbered_list',
         width: 'col-span-12',
         shape: 'standard',
-        placeholder: '1. First major priority...\n2. Second priority...\n3. Third priority...'
+        placeholder: 'Enter priority...'
       },
       {
         id: 'daily_reflexion',

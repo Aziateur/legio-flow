@@ -3,6 +3,7 @@ export type FieldType =
   | 'rating_10'        // 1-10 execution score
   | 'text'             // Short string
   | 'textarea'         // Multiline reflexion or notes
+  | 'numbered_list'    // Numbered 1, 2, 3 discrete priority items
   | 'duration'         // Planned vs Actual minutes
   | 'checkbox'         // Single toggle (Automatic tasks done?)
   | 'checklist'        // List of checkable tasks with status
