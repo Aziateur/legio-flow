@@ -79,6 +79,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
 
   const navItems = [
     { id: 'planning' as const, label: 'Planning Hub', icon: Compass },
+    { id: 'matrix' as const, label: 'Weeks Matrix', icon: Calendar },
     { id: 'gws' as const, label: 'GWS Studio', icon: Timer },
     { id: 'review' as const, label: 'Review Hub', icon: TrendingUp },
     { id: 'templates' as const, label: 'Modular Templates', icon: Sliders },

@@ -8,7 +8,7 @@ import {
   INITIAL_THREE_YEAR_PLAN
 } from '../types/defaults';
 
-export type MainTab = 'planning' | 'gws' | 'review' | 'templates';
+export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'three_year';
 export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly';
 
@@ -158,6 +158,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         : 'daily';
       return { main: 'planning', planningSub: sub, reviewSub: 'daily' };
     }
+    if (p1 === 'matrix' || p1 === 'spreadsheet') {
+      return { main: 'matrix', planningSub: 'daily', reviewSub: 'daily' };
+    }
     if (p1 === 'review') {
       const sub = (p2 === 'daily' || p2 === 'gws' || p2 === 'weekly') ? p2 as ReviewSubTab : 'vault';
       return { main: 'review', planningSub: 'daily', reviewSub: sub };
@@ -181,6 +184,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setActiveTabState(tab);
     if (tab === 'planning') {
       window.location.hash = `planning/${planningSubTab}`;
+    } else if (tab === 'matrix') {
+      window.location.hash = 'matrix';
     } else if (tab === 'review') {
       window.location.hash = `review/${reviewSubTab}`;
     } else {

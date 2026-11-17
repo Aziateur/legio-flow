@@ -5,6 +5,7 @@ import { PlanningHub } from './components/planning/PlanningHub';
 import { GWSStudio } from './components/gws/GWSStudio';
 import { ReviewHub } from './components/review/ReviewHub';
 import { TemplateManager } from './components/templates/TemplateManager';
+import { SpreadsheetMatrixView } from './components/matrix/SpreadsheetMatrixView';
 import { X, Sparkles, Shield, Heart } from 'lucide-react';
 
 const MainContent: React.FC = () => {
@@ -24,6 +25,11 @@ const MainContent: React.FC = () => {
             onOpenGWS={() => setIsQuickGWSOpen(true)} 
             onCustomizeTemplate={() => setActiveTab('templates')}
           />
+        )}
+        {activeTab === 'matrix' && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <SpreadsheetMatrixView />
+          </div>
         )}
         {activeTab === 'gws' && <GWSStudio />}
         {activeTab === 'review' && <ReviewHub />}
