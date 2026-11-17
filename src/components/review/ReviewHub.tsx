@@ -732,7 +732,70 @@ export const ReviewHub: React.FC = () => {
             
             {/* Left 5 cols: Telemetry & Day Plan Recap */}
             <div className="lg:col-span-5 space-y-6">
+              
+              {/* Daily Execution Score (1-10) Interactive Card */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      <Flame className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-100">
+                      Execution Discipline Score (1–10)
+                    </span>
+                  </div>
+                  <span className="text-xs font-extrabold font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    {currentDailyEntry.executionScore > 0 ? `${currentDailyEntry.executionScore}/10` : 'Not Rated'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-10 gap-1 pt-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
+                    <button
+                      key={score}
+                      type="button"
+                      onClick={() => saveDailyEntry(selectedDate, { executionScore: score })}
+                      className={`py-2 rounded-xl text-xs font-bold font-mono transition-all ${
+                        currentDailyEntry.executionScore === score
+                          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 font-extrabold shadow-md shadow-amber-500/20'
+                          : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {score}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono px-1">
+                  <span>1: Low Discipline</span>
+                  <span>6: Solid Baseline</span>
+                  <span>10: Flawless Beast</span>
+                </div>
+              </div>
+
+              {/* Automatic Tasks Completed Toggle Card */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-100 block">
+                    Automatic Habits Completed?
+                  </span>
+                  <span className="text-[11px] text-slate-400">Routines, hydration, boot camp, backups</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => saveDailyEntry(selectedDate, { automaticTasksCompleted: !currentDailyEntry.automaticTasksCompleted })}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+                    currentDailyEntry.automaticTasksCompleted
+                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}
+                >
+                  {currentDailyEntry.automaticTasksCompleted ? 'Yes (Locked In)' : 'No (Pending)'}
+                </button>
+              </div>
+
+              {/* Day Plan Recap */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
                 <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
                   What Was Planned for {selectedDate}
                 </span>
@@ -745,6 +808,7 @@ export const ReviewHub: React.FC = () => {
                   <span>Autosaved</span>
                 </div>
               </div>
+
             </div>
 
             {/* Right 7 cols: Write Course Correction */}

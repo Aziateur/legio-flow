@@ -3,14 +3,23 @@ import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPla
 export const DEFAULT_TEMPLATES: Template[] = [
   {
     id: 'tpl_daily_default',
-    name: 'Daily Execution & Review',
-    description: 'Day-by-day task planning, execution score /10, automatic habits, GWS links, and reflexions.',
+    name: 'Daily Mission & Checklist',
+    description: 'Day plan, numbered priorities, target delivery counter, and linked GWS blocks.',
     category: 'daily',
     isDefault: true,
     columns: 2,
     createdAt: '2026-10-25T00:00:00.000Z',
     updatedAt: '2026-10-25T00:00:00.000Z',
     fields: [
+      {
+        id: 'plan_notes',
+        label: 'Day Mission & Priorities',
+        description: 'Numbered daily execution targets',
+        type: 'numbered_list',
+        width: 'col-span-12',
+        shape: 'standard',
+        placeholder: 'Enter priority...'
+      },
       {
         id: 'main_tasks_ratio',
         label: 'Main Tasks Completed',
@@ -22,6 +31,27 @@ export const DEFAULT_TEMPLATES: Template[] = [
         max: 10,
         defaultValue: { completed: 3, total: 3 }
       },
+      {
+        id: 'gws_sessions_done',
+        label: 'GWS Sessions Done Today',
+        description: 'Linked Goal Work Sessions completed today',
+        type: 'gws_session_link',
+        width: 'col-span-6',
+        shape: 'compact',
+        defaultValue: []
+      }
+    ]
+  },
+  {
+    id: 'tpl_daily_review_default',
+    name: 'Daily Execution Review & Reflexion',
+    description: 'Execution score /10, automatic habits audit, and end-of-day course correction notes.',
+    category: 'review',
+    isDefault: true,
+    columns: 2,
+    createdAt: '2026-10-25T00:00:00.000Z',
+    updatedAt: '2026-10-25T00:00:00.000Z',
+    fields: [
       {
         id: 'execution_score',
         label: 'Daily Execution Score (out of 10)',
@@ -41,24 +71,6 @@ export const DEFAULT_TEMPLATES: Template[] = [
         width: 'col-span-6',
         shape: 'compact',
         defaultValue: true
-      },
-      {
-        id: 'gws_sessions_done',
-        label: 'GWS Sessions Done Today',
-        description: 'Linked Goal Work Sessions completed today',
-        type: 'gws_session_link',
-        width: 'col-span-6',
-        shape: 'compact',
-        defaultValue: []
-      },
-      {
-        id: 'plan_notes',
-        label: 'Day Plan & Direct Priorities',
-        description: 'Numbered daily mission objectives',
-        type: 'numbered_list',
-        width: 'col-span-12',
-        shape: 'standard',
-        placeholder: 'Enter priority...'
       },
       {
         id: 'daily_reflexion',
