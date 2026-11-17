@@ -338,6 +338,93 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         );
       }
 
+      // 10. Task Points Table (Weekly Goal Crusher)
+      case 'task_points_table': {
+        const tasks: Array<{ id: string; text: string; score: number; completed: boolean }> = Array.isArray(value) ? value : [];
+        const toggleTask = (id: string) => {
+          onChange(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+        };
+        const updateTaskScore = (id: string, score: number) => {
+          onChange(tasks.map(t => t.id === id ? { ...t, score: Math.max(1, score) } : t));
+        };
+        const deleteTask = (id: string) => {
+          onChange(tasks.filter(t => t.id !== id));
+        };
+
+        const totalPoints = tasks.reduce((acc, t) => acc + (t.score || 0), 0);
+        const earned = tasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0);
+
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800">
+              <span className="text-slate-400">Total Goal Breakdown:</span>
+              <span className="font-mono font-bold text-amber-400">
+                {earned} / {totalPoints} Pts Earned
+              </span>
+            </div>
+
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {tasks.map((t) => (
+                <div key={t.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleTask(t.id)}
+                    className="flex items-center space-x-2 text-left flex-1"
+                  >
+                    <CheckCircle2 className={`w-4 h-4 shrink-0 ${t.completed ? 'text-emerald-400' : 'text-slate-600'}`} />
+                    <span className={`text-xs ${t.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+                      {t.text}
+                    </span>
+                  </button>
+
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      {t.score} pt{t.score > 1 ? 's' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteTask(t.id)}
+                      className="text-slate-600 hover:text-rose-400 p-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      // 11. Reward Ladder Tier Table
+      case 'reward_ladder': {
+        const rewards: Array<{ id: string; minScore: number; reward: string }> = Array.isArray(value) ? value : [];
+        const updateReward = (id: string, text: string) => {
+          onChange(rewards.map(r => r.id === id ? { ...r, reward: text } : r));
+        };
+
+        return (
+          <div className="space-y-2.5">
+            {rewards.map((r) => (
+              <div key={r.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="flex justify-between items-center text-[11px]">
+                  <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                    {r.minScore}+ Pts
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={r.reward}
+                  onChange={(e) => updateReward(r.id, e.target.value)}
+                  placeholder="Reward details..."
+                  className="w-full bg-transparent text-xs text-slate-200 focus:outline-none"
+                />
+              </div>
+            ))}
+          </div>
+        );
+      }
+
       default:
         return (
           <div className="text-xs text-slate-500">
