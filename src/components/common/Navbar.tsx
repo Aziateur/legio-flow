@@ -14,8 +14,12 @@ import {
   Flame,
   CheckCircle2,
   Menu,
-  X
+  X,
+  Database,
+  Copy,
+  Check
 } from 'lucide-react';
+import { SupabaseSyncModal } from './SupabaseSyncModal';
 
 export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGWS }) => {
   const { 
@@ -31,8 +35,17 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showSupabaseModal, setShowSupabaseModal] = useState(false);
+  const [copiedAllSuccess, setCopiedAllSuccess] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
   const [importError, setImportError] = useState('');
+
+  const handleCopyAllToClipboard = () => {
+    const json = exportData();
+    navigator.clipboard.writeText(json);
+    setCopiedAllSuccess(true);
+    setTimeout(() => setCopiedAllSuccess(false), 2000);
+  };
 
   // Calculate quick stats
   const todayEntry = dailyEntries[selectedDate];
@@ -136,8 +149,22 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 <span>+ GWS Sprint</span>
               </button>
 
-              {/* Data Export / Import Menu */}
+              {/* Data Export / Import / Copy / Supabase Menu */}
               <div className="flex items-center space-x-1 pl-2 border-l border-slate-800">
+                <button
+                  onClick={() => setShowSupabaseModal(true)}
+                  title="Supabase Cloud Sync"
+                  className="p-2 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
+                >
+                  <Database className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleCopyAllToClipboard}
+                  title="Copy Entire Backup to Clipboard"
+                  className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+                >
+                  {copiedAllSuccess ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                </button>
                 <button
                   onClick={handleExport}
                   title="Export Backup (JSON)"
@@ -218,6 +245,12 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
           </div>
         )}
       </header>
+
+      {/* Supabase Sync Modal */}
+      <SupabaseSyncModal
+        isOpen={showSupabaseModal}
+        onClose={() => setShowSupabaseModal(false)}
+      />
 
       {/* Import Modal */}
       {showImportModal && (
