@@ -48,6 +48,7 @@ export const ReviewHub: React.FC = () => {
     setSelectedWeekId,
     saveWeeklyPlan,
     reviews,
+    systemLevel,
     saveReview,
     deleteReview,
     setSelectedDate: selectDateGlobal,
@@ -371,7 +372,7 @@ export const ReviewHub: React.FC = () => {
           {/* Switcher & Action Button */}
           <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
             
-            {/* Segmented Switcher Controls */}
+            {/* Segmented Switcher Controls filtered by systemLevel */}
             <div className="flex items-center space-x-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80 overflow-x-auto">
               <button
                 onClick={() => setReviewSubTab('vault')}
@@ -386,18 +387,6 @@ export const ReviewHub: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReviewSubTab('weekly')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
-                  reviewSubTab === 'weekly'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Target className="w-3.5 h-3.5" />
-                <span>Weekly Review</span>
-              </button>
-
-              <button
                 onClick={() => setReviewSubTab('daily')}
                 className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
                   reviewSubTab === 'daily'
@@ -409,17 +398,33 @@ export const ReviewHub: React.FC = () => {
                 <span>Daily Review</span>
               </button>
 
-              <button
-                onClick={() => setReviewSubTab('gws')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
-                  reviewSubTab === 'gws'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Timer className="w-3.5 h-3.5" />
-                <span>GWS Review</span>
-              </button>
+              {systemLevel >= 2 && (
+                <button
+                  onClick={() => setReviewSubTab('gws')}
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                    reviewSubTab === 'gws'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Timer className="w-3.5 h-3.5" />
+                  <span>GWS Review</span>
+                </button>
+              )}
+
+              {systemLevel >= 3 && (
+                <button
+                  onClick={() => setReviewSubTab('weekly')}
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                    reviewSubTab === 'weekly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>Weekly Review</span>
+                </button>
+              )}
             </div>
 
             {/* Clear PROMINENT "Create Review" Button */}

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan } from '../types/schema';
+import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
 import { 
   DEFAULT_TEMPLATES, 
   INITIAL_DAILY_ENTRIES, 
@@ -24,6 +24,8 @@ interface StorageContextType {
   activeTab: MainTab;
   planningSubTab: PlanningSubTab;
   reviewSubTab: ReviewSubTab;
+  systemLevel: SystemLevel;
+  setSystemLevel: (lvl: SystemLevel) => void;
   
   // Navigation
   setSelectedDate: (date: string) => void;
@@ -74,6 +76,7 @@ const STORAGE_KEYS = {
   THREE_YEAR: 'legio_three_year_v1',
   REVIEWS: 'legio_reviews_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
+  SYSTEM_LEVEL: 'legio_system_level_v1',
 };
 
 const StorageContext = createContext<StorageContextType | undefined>(undefined);
@@ -144,6 +147,29 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [selectedWeekId, setSelectedWeekId] = useState<string>('week_1');
+
+  // Progressive System Level (1 to 4)
+  const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL);
+      if (saved) {
+        const parsed = parseInt(saved);
+        if (parsed >= 1 && parsed <= 4) return parsed as SystemLevel;
+      }
+      return 3; // Default to Level 3 (includes Weekly Goal Crusher)
+    } catch {
+      return 3;
+    }
+  });
+
+  const setSystemLevel = (lvl: SystemLevel) => {
+    setSystemLevelState(lvl);
+    try {
+      localStorage.setItem(STORAGE_KEYS.SYSTEM_LEVEL, String(lvl));
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Parse initial route from hash
   const parseHash = (): { main: MainTab; planningSub: PlanningSubTab; reviewSub: ReviewSubTab } => {
@@ -500,6 +526,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeTab,
         planningSubTab,
         reviewSubTab,
+        systemLevel,
+        setSystemLevel,
         setSelectedDate,
         setSelectedWeekId,
         setActiveTab,

@@ -28,11 +28,14 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     selectedDate, 
     gwsSessions, 
     dailyEntries,
+    systemLevel,
+    setSystemLevel,
     exportData, 
     importData, 
     resetAllData 
   } = useStorage();
 
+  const [levelDropdownOpen, setLevelDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
@@ -77,13 +80,23 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     }
   };
 
-  const navItems = [
-    { id: 'planning' as const, label: 'Planning Hub', icon: Compass },
-    { id: 'matrix' as const, label: 'Weeks Matrix', icon: Calendar },
-    { id: 'gws' as const, label: 'GWS Studio', icon: Timer },
-    { id: 'review' as const, label: 'Review Hub', icon: TrendingUp },
-    { id: 'templates' as const, label: 'Modular Templates', icon: Sliders },
+  // Filter nav tabs according to selected progressive system level (1 to 4)
+  const allNavItems = [
+    { id: 'planning' as const, label: 'Planning Hub', icon: Compass, minLevel: 1 },
+    { id: 'matrix' as const, label: 'Weeks Matrix', icon: Calendar, minLevel: 3 },
+    { id: 'gws' as const, label: 'GWS Studio', icon: Timer, minLevel: 2 },
+    { id: 'review' as const, label: 'Review Hub', icon: TrendingUp, minLevel: 1 },
+    { id: 'templates' as const, label: 'Modular Templates', icon: Sliders, minLevel: 1 },
   ];
+
+  const navItems = allNavItems.filter(item => systemLevel >= item.minLevel);
+
+  const levelDescriptions = {
+    1: { name: 'Level 1: Basic Flow', desc: 'Daily checklist, mission plan & daily review' },
+    2: { name: 'Level 2: Deep Work', desc: 'Adds GWS cockpit, stopwatch & reflexions' },
+    3: { name: 'Level 3: Goal Crusher', desc: 'Adds Weekly Goal Crusher (10 Pts) & Weeks Matrix' },
+    4: { name: 'Level 4: Mastery 3-Year', desc: 'Adds 3-Year Strategic Roadmap & Macro Reviews' }
+  };
 
   return (
     <>
@@ -118,7 +131,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-all duration-150 ${
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-semibold transition-all duration-150 ${
                       isActive
                         ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -132,7 +145,46 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
             </nav>
 
             {/* Quick Metrics & Actions */}
-            <div className="hidden lg:flex items-center space-x-3">
+            <div className="hidden lg:flex items-center space-x-2.5">
+              
+              {/* Level Selector Dropdown Pill */}
+              <div className="relative">
+                <button
+                  onClick={() => setLevelDropdownOpen(!levelDropdownOpen)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold transition-all shadow-sm"
+                  title="Switch Experience Level"
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>LVL {systemLevel}</span>
+                </button>
+
+                {levelDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl p-2 shadow-2xl z-50 space-y-1">
+                    <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
+                      Select App Complexity Level
+                    </div>
+                    {([1, 2, 3, 4] as const).map((lvl) => (
+                      <button
+                        key={lvl}
+                        onClick={() => {
+                          setSystemLevel(lvl);
+                          setLevelDropdownOpen(false);
+                        }}
+                        className={`w-full text-left p-2 rounded-xl text-xs transition-all flex flex-col ${
+                          systemLevel === lvl
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="font-extrabold">{levelDescriptions[lvl].name}</span>
+                        <span className={`text-[10px] mt-0.5 ${systemLevel === lvl ? 'text-slate-900' : 'text-slate-500'}`}>
+                          {levelDescriptions[lvl].desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {/* Today's quick execution badge */}
               <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-300">
                 <Flame className="w-3.5 h-3.5 text-amber-400" />

@@ -30,6 +30,8 @@ export interface TemplateField {
   defaultValue?: any;
 }
 
+export type SystemLevel = 1 | 2 | 3 | 4;
+
 export type TemplateCategory = 'daily' | 'gws' | 'weekly' | 'review' | 'custom';
 
 export interface Template {

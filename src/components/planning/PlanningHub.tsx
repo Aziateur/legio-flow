@@ -36,7 +36,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     saveWeeklyPlan,
     setSelectedWeekId,
     selectedDate,
-    setSelectedDate
+    setSelectedDate,
+    systemLevel
   } = useStorage();
 
   // Create Plan Modal state
@@ -226,7 +227,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
           {/* Switcher & Action Button */}
           <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
             
-            {/* Segmented Switcher Controls */}
+            {/* Segmented Switcher Controls filtered by systemLevel */}
             <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
               <button
                 onClick={() => setPlanningSubTab('daily')}
@@ -240,29 +241,33 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <span>Daily Plan</span>
               </button>
 
-              <button
-                onClick={() => setPlanningSubTab('weekly')}
-                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-                  planningSubTab === 'weekly'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Target className="w-3.5 h-3.5" />
-                <span>Weekly Plan</span>
-              </button>
+              {systemLevel >= 3 && (
+                <button
+                  onClick={() => setPlanningSubTab('weekly')}
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                    planningSubTab === 'weekly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>Weekly Plan</span>
+                </button>
+              )}
 
-              <button
-                onClick={() => setPlanningSubTab('three_year')}
-                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-                  planningSubTab === 'three_year'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Compass className="w-3.5 h-3.5" />
-                <span>3-Year Plan</span>
-              </button>
+              {systemLevel >= 4 && (
+                <button
+                  onClick={() => setPlanningSubTab('three_year')}
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                    planningSubTab === 'three_year'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>3-Year Plan</span>
+                </button>
+              )}
             </div>
 
             {/* Clear PROMINENT "Create Plan" button */}
