@@ -4,7 +4,8 @@ import {
   getCurrentWeekRange,
   getWeekNumberForDate,
   getPriorityItemsForEntry,
-  formatPriorityItemsToPlanNotes
+  formatPriorityItemsToPlanNotes,
+  computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { 
   ChevronLeft, 
@@ -216,9 +217,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         });
 
         if (matched) {
-          const nextScore = updatedTasks
-            .filter(t => t.completed)
-            .reduce((acc, t) => acc + (t.score || 0), 0);
+          const nextScore = computeWeeklyAchievedScore(updatedTasks);
           saveWeeklyPlan({
             ...activeWeeklyPlan,
             tasks: updatedTasks,
@@ -278,9 +277,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     const updatedTasks = activeWeeklyPlan.tasks.map(t =>
       t.id === taskId ? { ...t, completed: nextCompleted } : t
     );
-    const nextScore = updatedTasks
-      .filter(t => t.completed)
-      .reduce((acc, t) => acc + (t.score || 0), 0);
+    const nextScore = computeWeeklyAchievedScore(updatedTasks);
 
     saveWeeklyPlan({
       ...activeWeeklyPlan,
@@ -325,9 +322,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         completed: allSubsDone
       };
     });
-    const nextScore = updatedTasks
-      .filter(t => t.completed)
-      .reduce((acc, t) => acc + (t.score || 0), 0);
+    const nextScore = computeWeeklyAchievedScore(updatedTasks);
     saveWeeklyPlan({
       ...activeWeeklyPlan,
       tasks: updatedTasks,
@@ -385,6 +380,37 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   const latestGwsCommitment = gwsSessions
     .filter(s => s.reflexions?.improveNext && s.reflexions.improveNext.trim().length > 0)
     .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+  // Find the most recent previous day before selectedDate that has unfinished priorities
+  const prevDayWithUnfinished = Object.values(dailyEntries)
+    .filter(e => e.date < selectedDate)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .find(e => getPriorityItemsForEntry(e).some(p => !p.completed));
+
+  const unfinishedFromPrevDay = prevDayWithUnfinished
+    ? getPriorityItemsForEntry(prevDayWithUnfinished).filter(
+        p => !p.completed && !isGoalInTodayPlan(p.text, p.weeklyTaskId, p.subTaskId)
+      )
+    : [];
+
+  const handleCarryAllPrevUnfinished = () => {
+    if (unfinishedFromPrevDay.length === 0) return;
+    const existingItems = getPriorityItemsForEntry(currentEntry);
+    const additions = unfinishedFromPrevDay.map(p => ({
+      id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: p.text.trim(),
+      completed: false,
+      weeklyTaskId: p.weeklyTaskId,
+      subTaskId: p.subTaskId
+    }));
+    const updatedItems = [...existingItems, ...additions];
+    saveDailyEntry(selectedDate, {
+      planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+      priorityItems: updatedItems,
+      mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+      mainTasksTotal: Math.max(3, updatedItems.length)
+    });
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-5">
@@ -505,6 +531,37 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       )}
 
+      {/* Unfinished Carry-Forward Strip from Previous Day */}
+      {unfinishedFromPrevDay.length > 0 && prevDayWithUnfinished && (
+        <div className="bg-slate-900/70 border border-amber-500/25 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span className="font-extrabold uppercase tracking-wider text-[10px] text-amber-400 mr-1 shrink-0">
+              Unfinished ({prevDayWithUnfinished.date.slice(5)}):
+            </span>
+            {unfinishedFromPrevDay.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handlePullGoalToDay(item.text, false, item.weeklyTaskId, item.subTaskId)}
+                className="px-2.5 py-1 rounded-xl bg-slate-950 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border border-slate-800 hover:border-amber-500/30 text-[11px] font-medium transition-colors"
+                title={`Carry "${item.text}" into ${selectedDate}`}
+              >
+                + {item.text}
+              </button>
+            ))}
+          </div>
+          {unfinishedFromPrevDay.length > 1 && (
+            <button
+              type="button"
+              onClick={handleCarryAllPrevUnfinished}
+              className="px-2.5 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[11px] font-bold shrink-0 transition-colors"
+            >
+              Carry All ({unfinishedFromPrevDay.length})
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
       {dailyTemplate && (
         <ModularCardGrid
@@ -532,7 +589,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                 </span>
               )}
               <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold text-[11px]">
-                {activeWeeklyPlan.achievedScore} / 10 pts
+                {computeWeeklyAchievedScore(activeWeeklyPlan.tasks)} / 10 pts
               </span>
             </div>
 

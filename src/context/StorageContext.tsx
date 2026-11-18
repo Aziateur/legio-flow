@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Template, DailyEntry, DailyPriorityItem, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
+import { Template, DailyEntry, DailyPriorityItem, GWSSession, WeeklyPlan, TaskItem, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
 import { 
   DEFAULT_TEMPLATES, 
   INITIAL_DAILY_ENTRIES, 
@@ -120,6 +120,19 @@ export const formatPriorityItemsToPlanNotes = (items: DailyPriorityItem[]): stri
     .filter(item => item.text.trim().length > 0)
     .map((item, idx) => `${idx + 1} ${item.completed ? '[x] ' : ''}${item.text.trim()}`)
     .join('\n');
+};
+
+export const computeWeeklyAchievedScore = (tasks: TaskItem[]): number => {
+  const raw = tasks.reduce((acc, t) => {
+    const pts = t.score || 0;
+    if (t.completed) return acc + pts;
+    if (t.subTasks && t.subTasks.length > 0) {
+      const doneSubs = t.subTasks.filter(s => s.completed).length;
+      return acc + (doneSubs / t.subTasks.length) * pts;
+    }
+    return acc;
+  }, 0);
+  return Math.round(raw * 10) / 10;
 };
 
 // Ensure all weeks from Week 1 up to the highest week / target date exist without any gaps

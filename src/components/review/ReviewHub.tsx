@@ -4,7 +4,8 @@ import {
   ReviewSubTab,
   getCurrentWeekRange,
   getPriorityItemsForEntry,
-  formatPriorityItemsToPlanNotes
+  formatPriorityItemsToPlanNotes,
+  computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, ReviewEntry } from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
@@ -42,6 +43,55 @@ const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
+
+const stripSourceTag = (line: string): string =>
+  line
+    .replace(/^[•\-\s]+/, '')
+    .replace(/^\[[^\]]+\]\s*/, '')
+    .trim()
+    .toLowerCase();
+
+const mergeUniqueLines = (existing: string, incoming: string[]): string => {
+  const currentLines = existing
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+  const seen = new Set(currentLines.map(stripSourceTag));
+  const toAdd: string[] = [];
+  incoming.forEach(item => {
+    item
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .forEach(sub => {
+        const norm = stripSourceTag(sub);
+        if (norm && !seen.has(norm)) {
+          seen.add(norm);
+          toAdd.push(sub);
+        }
+      });
+  });
+  return [...currentLines, ...toAdd].join('\n');
+};
+
+const dedupeLines = (items: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  items.forEach(item => {
+    item
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .forEach(sub => {
+        const norm = stripSourceTag(sub);
+        if (norm && !seen.has(norm)) {
+          seen.add(norm);
+          result.push(sub);
+        }
+      });
+  });
+  return result;
+};
 
 const getMonthInfo = (monthKey: string) => {
   const [yStr, mStr] = monthKey.split('-');
@@ -342,12 +392,12 @@ export const ReviewHub: React.FC = () => {
     const info = getMonthInfo(monthKey);
     const saved = getSavedMonthlyReview(monthKey);
 
-    // 1. All Weekly Plans & Reviews overlapping this month
+    // 1. Anchor each week strictly to the single Month containing its Monday startDate (prevents boundary double-counting)
     const weeks = Object.values(weeklyPlans)
       .filter(
         w =>
+          w.startDate >= info.startDate &&
           w.startDate <= info.endDate &&
-          w.endDate >= info.startDate &&
           (w.tasks.length > 0 ||
             w.focusTheme.trim().length > 0 ||
             (w.winsNotes && w.winsNotes.trim().length > 0) ||
@@ -357,7 +407,9 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
-    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsAchieved = Math.round(
+      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+    ) / 10;
     const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
     const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
@@ -397,41 +449,70 @@ export const ReviewHub: React.FC = () => {
     const avgGwsTotal =
       gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
 
-    // Extracted smaller-scale Wins, Problems & Course Corrections for 1-click rollup
-    const rolledUpWins = [
-      ...weeks
-        .filter(w => w.winsNotes && w.winsNotes.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
-      ...weeks
-        .flatMap(w => w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)),
-      ...gws
-        .filter(s => s.reflexions.accomplished && s.reflexions.accomplished.trim())
-        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.accomplished.trim()}`)
-    ];
+    // Hierarchical 1-level-below rollup (prevents duplicating blockers imported into Daily/Weekly notes)
+    const weeksWithWins = weeks.filter(w => w.winsNotes && w.winsNotes.trim());
+    const weeksWithProblems = weeks.filter(w => w.problemsEncountered && w.problemsEncountered.trim());
+    const weeksWithCorrections = weeks.filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim());
+    const daysWithProblemsSet = new Set(
+      days.filter(d => d.problemsEncountered && d.problemsEncountered.trim()).map(d => d.date)
+    );
+    const daysWithReviewSet = new Set(
+      days.filter(d => d.reviewNotes && d.reviewNotes.trim()).map(d => d.date)
+    );
 
-    const rolledUpProblems = [
-      ...weeks
-        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
+    const rolledUpWins = dedupeLines([
+      ...weeksWithWins.map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
+      ...weeks.flatMap(w =>
+        w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)
+      ),
+      ...gws
+        .filter(
+          s =>
+            s.reflexions.accomplished?.trim() &&
+            !weeksWithWins.some(w => w.startDate <= s.date && s.date <= w.endDate)
+        )
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.accomplished.trim()}`)
+    ]);
+
+    const rolledUpProblems = dedupeLines([
+      ...weeksWithProblems.map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
       ...days
-        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
+        .filter(
+          d =>
+            d.problemsEncountered?.trim() &&
+            !weeksWithProblems.some(w => w.startDate <= d.date && d.date <= w.endDate)
+        )
         .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
       ...gws
-        .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim())
+        .filter(
+          s =>
+            s.reflexions.heldBack?.trim() &&
+            !daysWithProblemsSet.has(s.date) &&
+            !weeksWithProblems.some(w => w.startDate <= s.date && s.date <= w.endDate)
+        )
         .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
-    ];
+    ]);
 
-    const rolledUpCorrections = [
-      ...weeks
-        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`),
+    const rolledUpCorrections = dedupeLines([
+      ...weeksWithCorrections.map(
+        w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`
+      ),
       ...days
-        .filter(d => d.reviewNotes && d.reviewNotes.trim())
+        .filter(
+          d =>
+            d.reviewNotes?.trim() &&
+            !weeksWithCorrections.some(w => w.startDate <= d.date && d.date <= w.endDate)
+        )
         .map(d => `• [${d.date} Daily] ${d.reviewNotes!.trim()}`),
       ...gws
-        .filter(s => s.reflexions.improveNext && s.reflexions.improveNext.trim())
+        .filter(
+          s =>
+            s.reflexions.improveNext?.trim() &&
+            !daysWithReviewSet.has(s.date) &&
+            !weeksWithCorrections.some(w => w.startDate <= s.date && s.date <= w.endDate)
+        )
         .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.improveNext.trim()}`)
-    ];
+    ]);
 
     return {
       info,
@@ -465,12 +546,12 @@ export const ReviewHub: React.FC = () => {
     // 1. All 3 Monthly Reviews & Rollups in this Quarter
     const monthsData = info.months.map(mKey => compileMonthData(mKey));
 
-    // 2. All Weekly Plans & Reviews overlapping this Quarter
+    // 2. Anchor each week strictly to the Quarter containing its Monday startDate (no boundary double-counting)
     const weeks = Object.values(weeklyPlans)
       .filter(
         w =>
+          w.startDate >= info.startDate &&
           w.startDate <= info.endDate &&
-          w.endDate >= info.startDate &&
           (w.tasks.length > 0 ||
             w.focusTheme.trim().length > 0 ||
             (w.winsNotes && w.winsNotes.trim().length > 0) ||
@@ -480,7 +561,9 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
-    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsAchieved = Math.round(
+      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+    ) / 10;
     const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
     const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
@@ -520,47 +603,30 @@ export const ReviewHub: React.FC = () => {
     const avgGwsTotal =
       gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
 
-    // Extracted smaller-scale Wins, Problems & Course Corrections across the Quarter (Monthly + Weekly + Daily + GWS)
-    const rolledUpWins = [
-      ...monthsData
-        .filter(m => m.saved?.wins && m.saved.wins.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.wins.trim()}`),
-      ...weeks
-        .filter(w => w.winsNotes && w.winsNotes.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
-      ...weeks
-        .flatMap(w => w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)),
-      ...gws
-        .filter(s => s.reflexions.accomplished && s.reflexions.accomplished.trim())
-        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.accomplished.trim()}`)
-    ];
+    // Hierarchical 1-level-below rollup: Saved Monthly Reviews first, fallback to raw month rollups ONLY for months without that monthly field
+    const rolledUpWins = dedupeLines([
+      ...monthsData.flatMap(m =>
+        m.saved?.wins?.trim()
+          ? [`• [${m.info.label} Monthly] ${m.saved.wins.trim()}`]
+          : m.rolledUpWins
+      )
+    ]);
 
-    const rolledUpProblems = [
-      ...monthsData
-        .filter(m => m.saved?.blockers && m.saved.blockers.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.blockers.trim()}`),
-      ...weeks
-        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
-      ...days
-        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
-        .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
-      ...gws
-        .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim())
-        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
-    ];
+    const rolledUpProblems = dedupeLines([
+      ...monthsData.flatMap(m =>
+        m.saved?.blockers?.trim()
+          ? [`• [${m.info.label} Monthly] ${m.saved.blockers.trim()}`]
+          : m.rolledUpProblems
+      )
+    ]);
 
-    const rolledUpCorrections = [
-      ...monthsData
-        .filter(m => m.saved?.courseCorrections && m.saved.courseCorrections.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.courseCorrections.trim()}`),
-      ...weeks
-        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`),
-      ...days
-        .filter(d => d.reviewNotes && d.reviewNotes.trim())
-        .map(d => `• [${d.date} Daily] ${d.reviewNotes!.trim()}`)
-    ];
+    const rolledUpCorrections = dedupeLines([
+      ...monthsData.flatMap(m =>
+        m.saved?.courseCorrections?.trim()
+          ? [`• [${m.info.label} Monthly] ${m.saved.courseCorrections.trim()}`]
+          : m.rolledUpCorrections
+      )
+    ]);
 
     return {
       info,
@@ -623,12 +689,12 @@ export const ReviewHub: React.FC = () => {
       .map(mKey => compileMonthData(mKey))
       .filter(m => !!m.saved || m.weeks.length > 0 || m.days.length > 0 || m.gws.length > 0);
 
-    // 3. All Weekly Plans & Reviews in this Year
+    // 3. Anchor each week strictly to the Year containing its Monday startDate
     const weeks = Object.values(weeklyPlans)
       .filter(
         w =>
+          w.startDate >= info.startDate &&
           w.startDate <= info.endDate &&
-          w.endDate >= info.startDate &&
           (w.tasks.length > 0 ||
             w.focusTheme.trim().length > 0 ||
             (w.winsNotes && w.winsNotes.trim().length > 0) ||
@@ -638,7 +704,9 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
-    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsAchieved = Math.round(
+      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+    ) / 10;
     const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
     const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
@@ -699,50 +767,35 @@ export const ReviewHub: React.FC = () => {
     const completedMilestones = pillarRollups.reduce((acc, p) => acc + p.completedCount, 0);
     const totalMilestones = pillarRollups.reduce((acc, p) => acc + p.totalCount, 0);
 
-    // Extracted smaller-scale Wins, Problems & Course Corrections across the Year
-    const rolledUpWins = [
+    // Hierarchical 1-level-below rollup: 3-Year Milestones + Quarterly Reviews first, fallback to unreviewed lower scales
+    const rolledUpWins = dedupeLines([
       ...pillarRollups.flatMap(pr =>
         pr.milestones
           .filter(m => m.completed)
           .map(m => `• [3-Year Pillar: ${pr.pillar.title} — Y${info.planYearIndex}] ${m.text}`)
       ),
-      ...quartersData
-        .filter(q => q.saved?.wins && q.saved.wins.trim())
-        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.wins.trim()}`),
-      ...monthsData
-        .filter(m => m.saved?.wins && m.saved.wins.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.wins.trim()}`),
-      ...weeks
-        .filter(w => w.winsNotes && w.winsNotes.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`)
-    ];
+      ...quartersData.flatMap(q =>
+        q.saved?.wins?.trim()
+          ? [`• [${q.info.quarterKey} Quarterly] ${q.saved.wins.trim()}`]
+          : q.rolledUpWins
+      )
+    ]);
 
-    const rolledUpProblems = [
-      ...quartersData
-        .filter(q => q.saved?.blockers && q.saved.blockers.trim())
-        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.blockers.trim()}`),
-      ...monthsData
-        .filter(m => m.saved?.blockers && m.saved.blockers.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.blockers.trim()}`),
-      ...weeks
-        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
-      ...days
-        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
-        .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`)
-    ];
+    const rolledUpProblems = dedupeLines([
+      ...quartersData.flatMap(q =>
+        q.saved?.blockers?.trim()
+          ? [`• [${q.info.quarterKey} Quarterly] ${q.saved.blockers.trim()}`]
+          : q.rolledUpProblems
+      )
+    ]);
 
-    const rolledUpCorrections = [
-      ...quartersData
-        .filter(q => q.saved?.courseCorrections && q.saved.courseCorrections.trim())
-        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.courseCorrections.trim()}`),
-      ...monthsData
-        .filter(m => m.saved?.courseCorrections && m.saved.courseCorrections.trim())
-        .map(m => `• [${m.info.label} Monthly] ${m.saved!.courseCorrections.trim()}`),
-      ...weeks
-        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
-        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`)
-    ];
+    const rolledUpCorrections = dedupeLines([
+      ...quartersData.flatMap(q =>
+        q.saved?.courseCorrections?.trim()
+          ? [`• [${q.info.quarterKey} Quarterly] ${q.saved.courseCorrections.trim()}`]
+          : q.rolledUpCorrections
+      )
+    ]);
 
     return {
       info,
@@ -1746,44 +1799,70 @@ export const ReviewHub: React.FC = () => {
             <div className="lg:col-span-5 space-y-6">
               
               {/* Daily Execution Score (1-10) Interactive Card */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      <Flame className="w-4 h-4" />
+              {(() => {
+                const todayGwsForScore = gwsSessions.filter(s => s.date === selectedDate);
+                const todayGwsMinutesForScore = todayGwsForScore.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+                const tasksPart =
+                  (currentDailyEntry.mainTasksCompleted / Math.max(1, currentDailyEntry.mainTasksTotal)) * 6;
+                const habitsPart = currentDailyEntry.automaticTasksCompleted ? 2 : 0;
+                const gwsPart =
+                  todayGwsForScore.length > 0 ? (todayGwsMinutesForScore >= 45 ? 2 : 1) : 0;
+                const suggestedDailyScore = Math.max(
+                  1,
+                  Math.min(10, Math.round(tasksPart + habitsPart + gwsPart))
+                );
+
+                return (
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2">
+                        <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <Flame className="w-4 h-4" />
+                        </div>
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-100">
+                          Execution Discipline Score (1–10)
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => saveDailyEntry(selectedDate, { executionScore: suggestedDailyScore })}
+                          className="text-[11px] font-mono font-bold text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-0.5 rounded-lg border border-emerald-500/30 transition-colors"
+                          title={`Click to apply objective baseline from Tasks (${currentDailyEntry.mainTasksCompleted}/${currentDailyEntry.mainTasksTotal}), Auto Habits (${currentDailyEntry.automaticTasksCompleted ? 'Done' : 'No'}), and GWS (${todayGwsMinutesForScore}m)`}
+                        >
+                          Suggested from data: {suggestedDailyScore}/10
+                        </button>
+                        <span className="text-xs font-extrabold font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                          {currentDailyEntry.executionScore > 0 ? `${currentDailyEntry.executionScore}/10` : 'Not Rated'}
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-100">
-                      Execution Discipline Score (1–10)
-                    </span>
+
+                    <div className="grid grid-cols-10 gap-1 pt-1">
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
+                        <button
+                          key={score}
+                          type="button"
+                          onClick={() => saveDailyEntry(selectedDate, { executionScore: score })}
+                          className={`py-2 rounded-xl text-xs font-bold font-mono transition-all ${
+                            currentDailyEntry.executionScore === score
+                              ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 font-extrabold shadow-md shadow-amber-500/20'
+                              : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                          }`}
+                        >
+                          {score}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-between text-[10px] text-slate-500 font-mono px-1">
+                      <span>1: Low Discipline</span>
+                      <span>6: Solid Baseline</span>
+                      <span>10: Flawless Beast</span>
+                    </div>
                   </div>
-                  <span className="text-xs font-extrabold font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                    {currentDailyEntry.executionScore > 0 ? `${currentDailyEntry.executionScore}/10` : 'Not Rated'}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-10 gap-1 pt-1">
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
-                    <button
-                      key={score}
-                      type="button"
-                      onClick={() => saveDailyEntry(selectedDate, { executionScore: score })}
-                      className={`py-2 rounded-xl text-xs font-bold font-mono transition-all ${
-                        currentDailyEntry.executionScore === score
-                          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 font-extrabold shadow-md shadow-amber-500/20'
-                          : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
-                      }`}
-                    >
-                      {score}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex justify-between text-[10px] text-slate-500 font-mono px-1">
-                  <span>1: Low Discipline</span>
-                  <span>6: Solid Baseline</span>
-                  <span>10: Flawless Beast</span>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Automatic Tasks Completed Toggle Card */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between">
@@ -1939,11 +2018,8 @@ export const ReviewHub: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          const existing = currentDailyEntry.problemsEncountered?.trim()
-                            ? `${currentDailyEntry.problemsEncountered.trim()}\n`
-                            : '';
                           saveDailyEntry(selectedDate, {
-                            problemsEncountered: `${existing}${dayBlockers.join('\n')}`
+                            problemsEncountered: mergeUniqueLines(currentDailyEntry.problemsEncountered || '', dayBlockers)
                           });
                         }}
                         className="px-2.5 py-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border border-orange-500/30 text-[11px] font-bold transition-colors"
@@ -2330,6 +2406,9 @@ export const ReviewHub: React.FC = () => {
           )}
 
           {/* Goal Fulfillment & Unlocked Rewards Summary */}
+          {(() => {
+            const liveWeekAchieved = computeWeeklyAchievedScore(targetPlanForReview.tasks);
+            return (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
             {/* Points Scored */}
@@ -2337,7 +2416,7 @@ export const ReviewHub: React.FC = () => {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Points Fulfilled</span>
                 <span className="text-2xl font-extrabold text-amber-400 font-mono">
-                  {targetPlanForReview.achievedScore} <span className="text-slate-500 text-sm">/ {targetPlanForReview.totalPossibleScore} pts</span>
+                  {liveWeekAchieved} <span className="text-slate-500 text-sm">/ {targetPlanForReview.totalPossibleScore} pts</span>
                 </span>
               </div>
 
@@ -2345,7 +2424,7 @@ export const ReviewHub: React.FC = () => {
                 <div
                   className="h-full bg-gradient-to-r from-amber-500 to-amber-400 rounded-full"
                   style={{
-                    width: `${Math.min(100, Math.round((targetPlanForReview.achievedScore / Math.max(1, targetPlanForReview.totalPossibleScore)) * 100))}%`
+                    width: `${Math.min(100, Math.round((liveWeekAchieved / Math.max(1, targetPlanForReview.totalPossibleScore)) * 100))}%`
                   }}
                 />
               </div>
@@ -2394,7 +2473,7 @@ export const ReviewHub: React.FC = () => {
               ) : (
                 <div className="space-y-2">
                   {targetPlanForReview.rewards.map((r) => {
-                    const unlocked = targetPlanForReview.achievedScore >= r.minScore;
+                    const unlocked = liveWeekAchieved >= r.minScore;
                     return (
                       <div
                         key={r.id}
@@ -2406,7 +2485,7 @@ export const ReviewHub: React.FC = () => {
                       >
                         <span>{r.minScore}+ Points: {r.reward || 'Unnamed reward'}</span>
                         <span className="font-bold uppercase text-[10px]">
-                          {unlocked ? 'Unlocked 🎖️' : `${r.minScore - targetPlanForReview.achievedScore} pts needed`}
+                          {unlocked ? 'Unlocked 🎖️' : `${Math.round((r.minScore - liveWeekAchieved) * 10) / 10} pts needed`}
                         </span>
                       </div>
                     );
@@ -2416,6 +2495,8 @@ export const ReviewHub: React.FC = () => {
             </div>
 
           </div>
+            );
+          })()}
 
           {/* Week GWS Sprints & Daily Problems (Data to Reflect On) */}
           {(() => {
@@ -2426,14 +2507,24 @@ export const ReviewHub: React.FC = () => {
             const weekDailyEntries = Object.values(dailyEntries).filter(
               d => d.date >= targetPlanForReview.startDate && d.date <= targetPlanForReview.endDate
             );
-            const weekProblemsList = [
+            const weekDaysWithProblems = new Set(
+              weekDailyEntries
+                .filter(d => d.problemsEncountered && d.problemsEncountered.trim().length > 0)
+                .map(d => d.date)
+            );
+            const weekProblemsList = dedupeLines([
               ...weekDailyEntries
                 .filter(d => d.problemsEncountered && d.problemsEncountered.trim().length > 0)
                 .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
               ...weekGwsList
-                .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim().length > 0)
+                .filter(
+                  s =>
+                    s.reflexions.heldBack &&
+                    s.reflexions.heldBack.trim().length > 0 &&
+                    !weekDaysWithProblems.has(s.date)
+                )
                 .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
-            ];
+            ]);
 
             return (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2480,9 +2571,7 @@ export const ReviewHub: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          const next = blockersText.trim()
-                            ? `${blockersText.trim()}\n${weekProblemsList.join('\n')}`
-                            : weekProblemsList.join('\n');
+                          const next = mergeUniqueLines(blockersText, weekProblemsList);
                           setBlockersText(next);
                           saveWeeklyPlan({ ...targetPlanForReview, problemsEncountered: next });
                         }}
@@ -2608,6 +2697,9 @@ export const ReviewHub: React.FC = () => {
           setTimeout(() => setCopiedMacroType(null), 2500);
         };
 
+        const prevMonthKey = shiftMonthKey(selectedMonth, -1);
+        const prevMonthCorrection = getSavedMonthlyReview(prevMonthKey)?.courseCorrections?.trim();
+
         return (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Month Navigation & Quick Switcher Bar */}
@@ -2663,6 +2755,18 @@ export const ReviewHub: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {prevMonthCorrection && (
+              <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-purple-500/30 flex items-start space-x-2.5 text-xs">
+                <Sparkles className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-extrabold uppercase tracking-wider text-[10px] text-purple-400 mr-2">
+                    Target Focus from Last Month ({prevMonthKey} Course Correction):
+                  </span>
+                  <span className="text-slate-200">"{prevMonthCorrection}"</span>
+                </div>
+              </div>
+            )}
 
             {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2972,15 +3076,9 @@ export const ReviewHub: React.FC = () => {
                     type="button"
                     onClick={() => {
                       upsertMonthlyReview(selectedMonth, {
-                        wins: monthWins.trim()
-                          ? `${monthWins.trim()}\n${mData.rolledUpWins.join('\n')}`
-                          : mData.rolledUpWins.join('\n'),
-                        blockers: monthProblems.trim()
-                          ? `${monthProblems.trim()}\n${mData.rolledUpProblems.join('\n')}`
-                          : mData.rolledUpProblems.join('\n'),
-                        courseCorrections: monthCorrections.trim()
-                          ? `${monthCorrections.trim()}\n${mData.rolledUpCorrections.join('\n')}`
-                          : mData.rolledUpCorrections.join('\n')
+                        wins: mergeUniqueLines(monthWins, mData.rolledUpWins),
+                        blockers: mergeUniqueLines(monthProblems, mData.rolledUpProblems),
+                        courseCorrections: mergeUniqueLines(monthCorrections, mData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 text-xs font-bold transition-all"
@@ -3001,9 +3099,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertMonthlyReview(selectedMonth, {
-                            wins: monthWins.trim()
-                              ? `${monthWins.trim()}\n${mData.rolledUpWins.join('\n')}`
-                              : mData.rolledUpWins.join('\n')
+                            wins: mergeUniqueLines(monthWins, mData.rolledUpWins)
                           })
                         }
                         className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
@@ -3031,9 +3127,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertMonthlyReview(selectedMonth, {
-                            blockers: monthProblems.trim()
-                              ? `${monthProblems.trim()}\n${mData.rolledUpProblems.join('\n')}`
-                              : mData.rolledUpProblems.join('\n')
+                            blockers: mergeUniqueLines(monthProblems, mData.rolledUpProblems)
                           })
                         }
                         className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
@@ -3061,9 +3155,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertMonthlyReview(selectedMonth, {
-                            courseCorrections: monthCorrections.trim()
-                              ? `${monthCorrections.trim()}\n${mData.rolledUpCorrections.join('\n')}`
-                              : mData.rolledUpCorrections.join('\n')
+                            courseCorrections: mergeUniqueLines(monthCorrections, mData.rolledUpCorrections)
                           })
                         }
                         className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
@@ -3133,6 +3225,9 @@ export const ReviewHub: React.FC = () => {
           setTimeout(() => setCopiedMacroType(null), 2500);
         };
 
+        const prevQuarterKey = shiftQuarterKey(selectedQuarter, -1);
+        const prevQuarterCorrection = getSavedQuarterlyReview(prevQuarterKey)?.courseCorrections?.trim();
+
         return (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Quarter Navigation & Quick Switcher Bar */}
@@ -3188,6 +3283,18 @@ export const ReviewHub: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {prevQuarterCorrection && (
+              <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-cyan-500/30 flex items-start space-x-2.5 text-xs">
+                <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-extrabold uppercase tracking-wider text-[10px] text-cyan-400 mr-2">
+                    Target Focus from Last Quarter ({prevQuarterKey} Course Correction):
+                  </span>
+                  <span className="text-slate-200">"{prevQuarterCorrection}"</span>
+                </div>
+              </div>
+            )}
 
             {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -3514,15 +3621,9 @@ export const ReviewHub: React.FC = () => {
                     type="button"
                     onClick={() => {
                       upsertQuarterlyReview(selectedQuarter, {
-                        wins: quarterWins.trim()
-                          ? `${quarterWins.trim()}\n${qData.rolledUpWins.join('\n')}`
-                          : qData.rolledUpWins.join('\n'),
-                        blockers: quarterProblems.trim()
-                          ? `${quarterProblems.trim()}\n${qData.rolledUpProblems.join('\n')}`
-                          : qData.rolledUpProblems.join('\n'),
-                        courseCorrections: quarterCorrections.trim()
-                          ? `${quarterCorrections.trim()}\n${qData.rolledUpCorrections.join('\n')}`
-                          : qData.rolledUpCorrections.join('\n')
+                        wins: mergeUniqueLines(quarterWins, qData.rolledUpWins),
+                        blockers: mergeUniqueLines(quarterProblems, qData.rolledUpProblems),
+                        courseCorrections: mergeUniqueLines(quarterCorrections, qData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition-all"
@@ -3543,9 +3644,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertQuarterlyReview(selectedQuarter, {
-                            wins: quarterWins.trim()
-                              ? `${quarterWins.trim()}\n${qData.rolledUpWins.join('\n')}`
-                              : qData.rolledUpWins.join('\n')
+                            wins: mergeUniqueLines(quarterWins, qData.rolledUpWins)
                           })
                         }
                         className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
@@ -3573,9 +3672,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertQuarterlyReview(selectedQuarter, {
-                            blockers: quarterProblems.trim()
-                              ? `${quarterProblems.trim()}\n${qData.rolledUpProblems.join('\n')}`
-                              : qData.rolledUpProblems.join('\n')
+                            blockers: mergeUniqueLines(quarterProblems, qData.rolledUpProblems)
                           })
                         }
                         className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
@@ -3603,9 +3700,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertQuarterlyReview(selectedQuarter, {
-                            courseCorrections: quarterCorrections.trim()
-                              ? `${quarterCorrections.trim()}\n${qData.rolledUpCorrections.join('\n')}`
-                              : qData.rolledUpCorrections.join('\n')
+                            courseCorrections: mergeUniqueLines(quarterCorrections, qData.rolledUpCorrections)
                           })
                         }
                         className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
@@ -3691,6 +3786,9 @@ export const ReviewHub: React.FC = () => {
           setTimeout(() => setCopiedMacroType(null), 2500);
         };
 
+        const prevYearKey = shiftYearKey(selectedYear, -1);
+        const prevYearCorrection = getSavedYearlyReview(prevYearKey)?.courseCorrections?.trim();
+
         return (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Year Navigation & Switcher Bar */}
@@ -3751,6 +3849,18 @@ export const ReviewHub: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {prevYearCorrection && (
+              <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-rose-500/30 flex items-start space-x-2.5 text-xs">
+                <Sparkles className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-extrabold uppercase tracking-wider text-[10px] text-rose-400 mr-2">
+                    Target Thesis from Last Year ({prevYearKey} Course Correction):
+                  </span>
+                  <span className="text-slate-200">"{prevYearCorrection}"</span>
+                </div>
+              </div>
+            )}
 
             {/* Top 5 Macro Rollup KPI Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -4241,15 +4351,9 @@ export const ReviewHub: React.FC = () => {
                     type="button"
                     onClick={() => {
                       upsertYearlyReview(selectedYear, {
-                        wins: yearWins.trim()
-                          ? `${yearWins.trim()}\n${yData.rolledUpWins.join('\n')}`
-                          : yData.rolledUpWins.join('\n'),
-                        blockers: yearProblems.trim()
-                          ? `${yearProblems.trim()}\n${yData.rolledUpProblems.join('\n')}`
-                          : yData.rolledUpProblems.join('\n'),
-                        courseCorrections: yearCorrections.trim()
-                          ? `${yearCorrections.trim()}\n${yData.rolledUpCorrections.join('\n')}`
-                          : yData.rolledUpCorrections.join('\n')
+                        wins: mergeUniqueLines(yearWins, yData.rolledUpWins),
+                        blockers: mergeUniqueLines(yearProblems, yData.rolledUpProblems),
+                        courseCorrections: mergeUniqueLines(yearCorrections, yData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold transition-all"
@@ -4270,9 +4374,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertYearlyReview(selectedYear, {
-                            wins: yearWins.trim()
-                              ? `${yearWins.trim()}\n${yData.rolledUpWins.join('\n')}`
-                              : yData.rolledUpWins.join('\n')
+                            wins: mergeUniqueLines(yearWins, yData.rolledUpWins)
                           })
                         }
                         className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
@@ -4300,9 +4402,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertYearlyReview(selectedYear, {
-                            blockers: yearProblems.trim()
-                              ? `${yearProblems.trim()}\n${yData.rolledUpProblems.join('\n')}`
-                              : yData.rolledUpProblems.join('\n')
+                            blockers: mergeUniqueLines(yearProblems, yData.rolledUpProblems)
                           })
                         }
                         className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
@@ -4330,9 +4430,7 @@ export const ReviewHub: React.FC = () => {
                         type="button"
                         onClick={() =>
                           upsertYearlyReview(selectedYear, {
-                            courseCorrections: yearCorrections.trim()
-                              ? `${yearCorrections.trim()}\n${yData.rolledUpCorrections.join('\n')}`
-                              : yData.rolledUpCorrections.join('\n')
+                            courseCorrections: mergeUniqueLines(yearCorrections, yData.rolledUpCorrections)
                           })
                         }
                         className="text-[11px] font-bold text-amber-400 hover:text-amber-300"

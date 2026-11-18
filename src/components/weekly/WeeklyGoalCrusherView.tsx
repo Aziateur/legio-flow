@@ -4,7 +4,8 @@ import {
   getCurrentWeekRange,
   getWeekRangeForWeekNumber,
   getPriorityItemsForEntry,
-  formatPriorityItemsToPlanNotes
+  formatPriorityItemsToPlanNotes,
+  computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { 
@@ -45,11 +46,42 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const [showRewardLadder, setShowRewardLadder] = useState(false);
   const [pulledNotice, setPulledNotice] = useState<string | null>(null);
 
-  // Score stats
+  // Score stats (includes proportional partial credit for completed sub-goals)
   const totalPossible = plan.tasks.reduce((acc, t) => acc + (t.score || 0), 0);
-  const achievedScore = plan.tasks
-    .filter(t => t.completed)
-    .reduce((acc, t) => acc + (t.score || 0), 0);
+  const achievedScore = computeWeeklyAchievedScore(plan.tasks);
+
+  // Previous Week Course Correction & Unfinished Goals Carry-Over
+  const prevWeekPlan = plan.weekNumber > 1 ? weeklyPlans[`week_${plan.weekNumber - 1}`] : undefined;
+  const prevWeekCorrection = (prevWeekPlan?.courseCorrectionNotes || prevWeekPlan?.reviewNotes || '').trim();
+  const prevWeekUnfinished = (prevWeekPlan?.tasks || []).filter(
+    t => !t.completed && !plan.tasks.some(cur => cur.text.toLowerCase().trim() === t.text.toLowerCase().trim())
+  );
+
+  const handleCarryPrevWeekGoal = (task: TaskItem) => {
+    const newTask: TaskItem = {
+      id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: task.text,
+      score: task.score || 2,
+      completed: false,
+      ...(task.subTasks && task.subTasks.length > 0
+        ? {
+            subTasks: task.subTasks
+              .filter(s => !s.completed)
+              .map(s => ({
+                id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                text: s.text,
+                completed: false
+              }))
+          }
+        : {})
+    };
+    const nextTasks = [...plan.tasks, newTask];
+    saveWeeklyPlan({
+      ...plan,
+      tasks: nextTasks,
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
+    });
+  };
 
   // Check if a goal or sub-goal is already in a given day's plan (by ID first, then text)
   const isGoalInDay = (dateStr: string, goalText: string, weeklyTaskId?: string, subTaskId?: string): boolean => {
@@ -74,7 +106,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     saveWeeklyPlan({
       ...plan,
       tasks: nextTasks,
-      achievedScore: nextTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
     });
 
     // Sync completion state across any day in this week where the goal was pulled
@@ -116,7 +148,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     saveWeeklyPlan({
       ...plan,
       tasks: nextTasks,
-      achievedScore: nextTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
     });
   };
 
@@ -125,7 +157,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     saveWeeklyPlan({
       ...plan,
       tasks: nextTasks,
-      achievedScore: nextTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
     });
   };
 
@@ -139,9 +171,9 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       completed: false
     };
     const nextTasks = plan.tasks.map(t =>
-      t.id === goalId ? { ...t, subTasks: [...(t.subTasks || []), newSub] } : t
+      t.id === goalId ? { ...t, subTasks: [...(t.subTasks || []), newSub], completed: false } : t
     );
-    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+    saveWeeklyPlan({ ...plan, tasks: nextTasks, achievedScore: computeWeeklyAchievedScore(nextTasks) });
     setNewSubGoalInputs(prev => ({ ...prev, [goalId]: '' }));
   };
 
@@ -163,9 +195,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         completed: allSubsDone
       };
     });
-    const nextScore = nextTasks
-      .filter(t => t.completed)
-      .reduce((acc, t) => acc + (t.score || 0), 0);
+    const nextScore = computeWeeklyAchievedScore(nextTasks);
     saveWeeklyPlan({
       ...plan,
       tasks: nextTasks,
@@ -208,12 +238,21 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   };
 
   const handleDeleteSubGoal = (goalId: string, subId: string) => {
-    const nextTasks = plan.tasks.map(t =>
-      t.id === goalId
-        ? { ...t, subTasks: (t.subTasks || []).filter(s => s.id !== subId) }
-        : t
-    );
-    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+    const nextTasks = plan.tasks.map(t => {
+      if (t.id !== goalId) return t;
+      const updatedSubs = (t.subTasks || []).filter(s => s.id !== subId);
+      const allSubsDone = updatedSubs.length > 0 && updatedSubs.every(s => s.completed);
+      return {
+        ...t,
+        subTasks: updatedSubs,
+        completed: updatedSubs.length > 0 ? allSubsDone : t.completed
+      };
+    });
+    saveWeeklyPlan({
+      ...plan,
+      tasks: nextTasks,
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
+    });
   };
 
   // Effortless Enter-key goal addition (Notion / Linear style)
@@ -357,7 +396,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                 <button
                   key={p.id}
                   onClick={() => setSelectedWeekId(p.id)}
-                  title={`Week ${p.weekNumber}: ${p.startDate} → ${p.endDate}${isEmptyWeek ? ' (Empty - No Plan)' : ` (${p.achievedScore}/10 pts)`}`}
+                  title={`Week ${p.weekNumber}: ${p.startDate} → ${p.endDate}${isEmptyWeek ? ' (Empty - No Plan)' : ` (${computeWeeklyAchievedScore(p.tasks)}/10 pts)`}`}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all flex items-center space-x-1.5 shrink-0 ${
                     isSelected
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
@@ -372,7 +411,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                   )}
                   {!isEmptyWeek && !isSelected && (
                     <span className="text-[10px] text-amber-400">
-                      {p.achievedScore}p
+                      {computeWeeklyAchievedScore(p.tasks)}p
                     </span>
                   )}
                   {isEmptyWeek && !isSelected && (
@@ -503,6 +542,41 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Previous Week Course Correction & Unfinished Goals Carry-Over */}
+      {(prevWeekCorrection || prevWeekUnfinished.length > 0) && prevWeekPlan && (
+        <div className="p-4 rounded-2xl bg-slate-900/80 border border-emerald-500/25 space-y-2.5 text-xs shadow-lg">
+          {prevWeekCorrection && (
+            <div className="flex items-start space-x-2">
+              <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-extrabold uppercase tracking-wider text-[10px] text-emerald-400 mr-2">
+                  Week {prevWeekPlan.weekNumber} Course Correction:
+                </span>
+                <span className="text-slate-200">"{prevWeekCorrection}"</span>
+              </div>
+            </div>
+          )}
+          {prevWeekUnfinished.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-800/80">
+              <span className="font-extrabold uppercase tracking-wider text-[10px] text-amber-400 mr-1">
+                Unfinished from Week {prevWeekPlan.weekNumber}:
+              </span>
+              {prevWeekUnfinished.map((task) => (
+                <button
+                  key={task.id}
+                  type="button"
+                  onClick={() => handleCarryPrevWeekGoal(task)}
+                  className="px-2.5 py-1 rounded-xl bg-slate-950 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border border-slate-800 hover:border-amber-500/30 text-[11px] font-medium transition-colors"
+                  title={`Carry "${task.text}" (${task.score || 2} pts) to Week ${plan.weekNumber}`}
+                >
+                  + Carry to Week {plan.weekNumber}: {task.text} ({task.score || 2}p)
+                </button>
+              ))}
             </div>
           )}
         </div>
