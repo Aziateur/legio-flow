@@ -37,6 +37,71 @@ import {
   FilePlus 
 } from 'lucide-react';
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+const getMonthInfo = (monthKey: string) => {
+  const [yStr, mStr] = monthKey.split('-');
+  const year = parseInt(yStr) || 2026;
+  const month = Math.min(12, Math.max(1, parseInt(mStr) || 1));
+  const mm = String(month).padStart(2, '0');
+  const lastDay = new Date(year, month, 0).getDate();
+  const startDate = `${year}-${mm}-01`;
+  const endDate = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
+  const label = `${MONTH_NAMES[month - 1]} ${year}`;
+  const quarterNum = Math.ceil(month / 3);
+  return {
+    monthKey: `${year}-${mm}`,
+    year,
+    month,
+    startDate,
+    endDate,
+    label,
+    quarterKey: `${year}-Q${quarterNum}`
+  };
+};
+
+const shiftMonthKey = (monthKey: string, delta: number): string => {
+  const { year, month } = getMonthInfo(monthKey);
+  const d = new Date(year, month - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const getQuarterInfo = (quarterKey: string) => {
+  const [yStr, qPart] = quarterKey.split('-Q');
+  const year = parseInt(yStr) || 2026;
+  const qNum = Math.min(4, Math.max(1, parseInt(qPart) || 4));
+  const startMonth = (qNum - 1) * 3 + 1;
+  const endMonth = startMonth + 2;
+  const months = [
+    `${year}-${String(startMonth).padStart(2, '0')}`,
+    `${year}-${String(startMonth + 1).padStart(2, '0')}`,
+    `${year}-${String(endMonth).padStart(2, '0')}`
+  ];
+  const firstMonthInfo = getMonthInfo(months[0]);
+  const lastMonthInfo = getMonthInfo(months[2]);
+  const shortMonths = `${MONTH_NAMES[startMonth - 1].slice(0, 3)} – ${MONTH_NAMES[endMonth - 1].slice(0, 3)} ${year}`;
+  return {
+    quarterKey: `${year}-Q${qNum}`,
+    year,
+    qNum,
+    months,
+    startDate: firstMonthInfo.startDate,
+    endDate: lastMonthInfo.endDate,
+    label: `Q${qNum} ${year} (${shortMonths})`
+  };
+};
+
+const shiftQuarterKey = (quarterKey: string, delta: number): string => {
+  const { year, qNum } = getQuarterInfo(quarterKey);
+  const totalQ = year * 4 + (qNum - 1) + delta;
+  const nextYear = Math.floor(totalQ / 4);
+  const nextQ = (totalQ % 4) + 1;
+  return `${nextYear}-Q${nextQ}`;
+};
+
 export const ReviewHub: React.FC = () => {
   const { 
     reviewSubTab, 
@@ -68,12 +133,19 @@ export const ReviewHub: React.FC = () => {
 
   // Create Review Modal state
   const [showCreateReviewModal, setShowCreateReviewModal] = useState(false);
-  const [createReviewType, setCreateReviewType] = useState<'weekly' | 'daily' | 'gws'>('weekly');
+  const [createReviewType, setCreateReviewType] = useState<'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('weekly');
 
   // Vault states
-  const [vaultFilter, setVaultFilter] = useState<'all' | 'daily' | 'weekly' | 'gws'>('all');
+  const [vaultFilter, setVaultFilter] = useState<'all' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
   const [vaultSearch, setVaultSearch] = useState('');
   const [copiedReviewId, setCopiedReviewId] = useState<string | null>(null);
+
+  // Monthly & Quarterly active period selection
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => selectedDate.slice(0, 7));
+  const [selectedQuarter, setSelectedQuarter] = useState<string>(() => getMonthInfo(selectedDate.slice(0, 7)).quarterKey);
+  const [monthlyScaleFilter, setMonthlyScaleFilter] = useState<'all' | 'weekly' | 'daily' | 'gws'>('all');
+  const [quarterlyScaleFilter, setQuarterlyScaleFilter] = useState<'all' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
+  const [copiedMacroType, setCopiedMacroType] = useState<'monthly' | 'quarterly' | null>(null);
 
   // GWS filter states
   const [gwsSearchQuery, setGwsSearchQuery] = useState('');
@@ -156,10 +228,338 @@ export const ReviewHub: React.FC = () => {
     .filter(s => s.reflexions.improveNext.trim().length > 0)
     .map(s => ({ date: s.date, task: s.taskName, text: s.reflexions.improveNext }));
 
+  // --- MACRO ROLLUP HELPERS (MONTHLY & QUARTERLY AGGREGATION OF SMALLER SCALES) ---
+  const getSavedMonthlyReview = (monthKey: string): ReviewEntry | undefined => {
+    return reviews.find(
+      r => (r.periodType === 'monthly' && r.periodKey === monthKey) || r.id === `rev_monthly_${monthKey}`
+    );
+  };
+
+  const getSavedQuarterlyReview = (quarterKey: string): ReviewEntry | undefined => {
+    return reviews.find(
+      r => (r.periodType === 'quarterly' && r.periodKey === quarterKey) || r.id === `rev_quarterly_${quarterKey}`
+    );
+  };
+
+  const upsertMonthlyReview = (monthKey: string, updates: Partial<ReviewEntry>) => {
+    const info = getMonthInfo(monthKey);
+    const existing = getSavedMonthlyReview(monthKey);
+    const entry: ReviewEntry = {
+      id: existing?.id || `rev_monthly_${monthKey}`,
+      title: updates.title ?? existing?.title ?? `${info.label} — Monthly Review & Course Correction`,
+      periodType: 'monthly',
+      periodKey: monthKey,
+      startDate: info.startDate,
+      endDate: info.endDate,
+      score: updates.score ?? existing?.score ?? 0,
+      wins: updates.wins ?? existing?.wins ?? '',
+      blockers: updates.blockers ?? existing?.blockers ?? '',
+      courseCorrections: updates.courseCorrections ?? existing?.courseCorrections ?? '',
+      ratings: updates.ratings ?? existing?.ratings ?? { clarity: 4, consistency: 4, overall: 4 },
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    saveReview(entry);
+  };
+
+  const upsertQuarterlyReview = (quarterKey: string, updates: Partial<ReviewEntry>) => {
+    const info = getQuarterInfo(quarterKey);
+    const existing = getSavedQuarterlyReview(quarterKey);
+    const entry: ReviewEntry = {
+      id: existing?.id || `rev_quarterly_${quarterKey}`,
+      title: updates.title ?? existing?.title ?? `${info.label} — Quarterly Strategic Review`,
+      periodType: 'quarterly',
+      periodKey: quarterKey,
+      startDate: info.startDate,
+      endDate: info.endDate,
+      score: updates.score ?? existing?.score ?? 0,
+      wins: updates.wins ?? existing?.wins ?? '',
+      blockers: updates.blockers ?? existing?.blockers ?? '',
+      courseCorrections: updates.courseCorrections ?? existing?.courseCorrections ?? '',
+      ratings: updates.ratings ?? existing?.ratings ?? { clarity: 4, consistency: 4, overall: 4 },
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    saveReview(entry);
+  };
+
+  const compileMonthData = (monthKey: string) => {
+    const info = getMonthInfo(monthKey);
+    const saved = getSavedMonthlyReview(monthKey);
+
+    // 1. All Weekly Plans & Reviews overlapping this month
+    const weeks = Object.values(weeklyPlans)
+      .filter(
+        w =>
+          w.startDate <= info.endDate &&
+          w.endDate >= info.startDate &&
+          (w.tasks.length > 0 ||
+            w.focusTheme.trim().length > 0 ||
+            (w.winsNotes && w.winsNotes.trim().length > 0) ||
+            (w.problemsEncountered && w.problemsEncountered.trim().length > 0) ||
+            (w.courseCorrectionNotes && w.courseCorrectionNotes.trim().length > 0) ||
+            (w.reviewNotes && w.reviewNotes.trim().length > 0))
+      )
+      .sort((a, b) => a.weekNumber - b.weekNumber);
+
+    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
+    const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
+
+    // 2. All Daily Entries & Reviews in this month
+    const days = Object.values(dailyEntries)
+      .filter(
+        d =>
+          d.date >= info.startDate &&
+          d.date <= info.endDate &&
+          (d.executionScore > 0 ||
+            (d.planNotes && d.planNotes.trim().length > 0) ||
+            (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
+            (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
+            d.automaticTasksCompleted)
+      )
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const scoredDays = days.filter(d => d.executionScore > 0);
+    const avgDailyScore =
+      scoredDays.length > 0
+        ? (scoredDays.reduce((acc, d) => acc + d.executionScore, 0) / scoredDays.length).toFixed(1)
+        : '0.0';
+    const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
+    const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
+    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
+    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+
+    // 3. All GWS Sprints in this month
+    const gws = gwsSessions
+      .filter(s => s.date >= info.startDate && s.date <= info.endDate)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const gwsMinutes = gws.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+    const gwsHours = (gwsMinutes / 60).toFixed(1);
+    const avgGwsTotal =
+      gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
+
+    // Extracted smaller-scale Wins, Problems & Course Corrections for 1-click rollup
+    const rolledUpWins = [
+      ...weeks
+        .filter(w => w.winsNotes && w.winsNotes.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
+      ...weeks
+        .flatMap(w => w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)),
+      ...gws
+        .filter(s => s.reflexions.accomplished && s.reflexions.accomplished.trim())
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.accomplished.trim()}`)
+    ];
+
+    const rolledUpProblems = [
+      ...weeks
+        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
+      ...days
+        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
+        .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
+      ...gws
+        .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim())
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
+    ];
+
+    const rolledUpCorrections = [
+      ...weeks
+        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`),
+      ...days
+        .filter(d => d.reviewNotes && d.reviewNotes.trim())
+        .map(d => `• [${d.date} Daily] ${d.reviewNotes!.trim()}`),
+      ...gws
+        .filter(s => s.reflexions.improveNext && s.reflexions.improveNext.trim())
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.improveNext.trim()}`)
+    ];
+
+    return {
+      info,
+      saved,
+      weeks,
+      weeklyPointsAchieved,
+      weeklyPointsPossible,
+      avgWeeklyScore,
+      weeklyTasksDone,
+      weeklyTasksTotal,
+      days,
+      avgDailyScore,
+      dailyTasksDone,
+      dailyTasksTotal,
+      habitDaysLocked,
+      habitRatePct,
+      gws,
+      gwsMinutes,
+      gwsHours,
+      avgGwsTotal,
+      rolledUpWins,
+      rolledUpProblems,
+      rolledUpCorrections
+    };
+  };
+
+  const compileQuarterData = (quarterKey: string) => {
+    const info = getQuarterInfo(quarterKey);
+    const saved = getSavedQuarterlyReview(quarterKey);
+
+    // 1. All 3 Monthly Reviews & Rollups in this Quarter
+    const monthsData = info.months.map(mKey => compileMonthData(mKey));
+
+    // 2. All Weekly Plans & Reviews overlapping this Quarter
+    const weeks = Object.values(weeklyPlans)
+      .filter(
+        w =>
+          w.startDate <= info.endDate &&
+          w.endDate >= info.startDate &&
+          (w.tasks.length > 0 ||
+            w.focusTheme.trim().length > 0 ||
+            (w.winsNotes && w.winsNotes.trim().length > 0) ||
+            (w.problemsEncountered && w.problemsEncountered.trim().length > 0) ||
+            (w.courseCorrectionNotes && w.courseCorrectionNotes.trim().length > 0) ||
+            (w.reviewNotes && w.reviewNotes.trim().length > 0))
+      )
+      .sort((a, b) => a.weekNumber - b.weekNumber);
+
+    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
+    const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
+
+    // 3. All Daily Entries & Reviews in this Quarter
+    const days = Object.values(dailyEntries)
+      .filter(
+        d =>
+          d.date >= info.startDate &&
+          d.date <= info.endDate &&
+          (d.executionScore > 0 ||
+            (d.planNotes && d.planNotes.trim().length > 0) ||
+            (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
+            (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
+            d.automaticTasksCompleted)
+      )
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const scoredDays = days.filter(d => d.executionScore > 0);
+    const avgDailyScore =
+      scoredDays.length > 0
+        ? (scoredDays.reduce((acc, d) => acc + d.executionScore, 0) / scoredDays.length).toFixed(1)
+        : '0.0';
+    const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
+    const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
+    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
+    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+
+    // 4. All GWS Sprints in this Quarter
+    const gws = gwsSessions
+      .filter(s => s.date >= info.startDate && s.date <= info.endDate)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const gwsMinutes = gws.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+    const gwsHours = (gwsMinutes / 60).toFixed(1);
+    const avgGwsTotal =
+      gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
+
+    // Extracted smaller-scale Wins, Problems & Course Corrections across the Quarter (Monthly + Weekly + Daily + GWS)
+    const rolledUpWins = [
+      ...monthsData
+        .filter(m => m.saved?.wins && m.saved.wins.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.wins.trim()}`),
+      ...weeks
+        .filter(w => w.winsNotes && w.winsNotes.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
+      ...weeks
+        .flatMap(w => w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)),
+      ...gws
+        .filter(s => s.reflexions.accomplished && s.reflexions.accomplished.trim())
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.accomplished.trim()}`)
+    ];
+
+    const rolledUpProblems = [
+      ...monthsData
+        .filter(m => m.saved?.blockers && m.saved.blockers.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.blockers.trim()}`),
+      ...weeks
+        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
+      ...days
+        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
+        .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
+      ...gws
+        .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim())
+        .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
+    ];
+
+    const rolledUpCorrections = [
+      ...monthsData
+        .filter(m => m.saved?.courseCorrections && m.saved.courseCorrections.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.courseCorrections.trim()}`),
+      ...weeks
+        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`),
+      ...days
+        .filter(d => d.reviewNotes && d.reviewNotes.trim())
+        .map(d => `• [${d.date} Daily] ${d.reviewNotes!.trim()}`)
+    ];
+
+    return {
+      info,
+      saved,
+      monthsData,
+      weeks,
+      weeklyPointsAchieved,
+      weeklyPointsPossible,
+      avgWeeklyScore,
+      weeklyTasksDone,
+      weeklyTasksTotal,
+      days,
+      avgDailyScore,
+      dailyTasksDone,
+      dailyTasksTotal,
+      habitDaysLocked,
+      habitRatePct,
+      gws,
+      gwsMinutes,
+      gwsHours,
+      avgGwsTotal,
+      rolledUpWins,
+      rolledUpProblems,
+      rolledUpCorrections
+    };
+  };
+
+  // Discover all active months and quarters from existing data + current selectedMonth/selectedQuarter
+  const allKnownMonths = Array.from(
+    new Set([
+      selectedDate.slice(0, 7),
+      selectedMonth,
+      ...Object.keys(dailyEntries).map(d => d.slice(0, 7)),
+      ...gwsSessions.map(s => s.date.slice(0, 7)),
+      ...Object.values(weeklyPlans)
+        .filter(w => w.tasks.length > 0 || w.focusTheme.trim().length > 0)
+        .map(w => w.startDate.slice(0, 7)),
+      ...reviews.filter(r => r.periodType === 'monthly' && r.periodKey).map(r => r.periodKey!)
+    ])
+  ).sort();
+
+  const allKnownQuarters = Array.from(
+    new Set([
+      getMonthInfo(selectedDate.slice(0, 7)).quarterKey,
+      selectedQuarter,
+      ...allKnownMonths.map(m => getMonthInfo(m).quarterKey),
+      ...reviews.filter(r => r.periodType === 'quarterly' && r.periodKey).map(r => r.periodKey!)
+    ])
+  ).sort();
+
   // --- UNIFIED VAULT ITEMS AGGREGATION ---
   interface VaultItem {
     id: string;
-    type: 'daily' | 'weekly' | 'gws';
+    type: 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws';
     dateOrPeriod: string;
     title: string;
     scoreBadge?: string;
@@ -295,9 +695,122 @@ export const ReviewHub: React.FC = () => {
     }
   }));
 
+  // 4. Gather all Monthly reviews (from saved monthly reviews OR months with active smaller-scale reviews)
+  const monthlyVaultItems: VaultItem[] = allKnownMonths
+    .map(mKey => {
+      const mData = compileMonthData(mKey);
+      const hasActivity =
+        !!mData.saved ||
+        mData.weeks.length > 0 ||
+        mData.days.length > 0 ||
+        mData.gws.length > 0;
+      if (!hasActivity) return null;
+
+      const structuredMonthlyReview = [
+        mData.saved?.wins?.trim() ? `1. Monthly Wins & Shipped:\n${mData.saved.wins.trim()}` : '',
+        mData.saved?.blockers?.trim() ? `2. Problems Encountered & Bottlenecks:\n${mData.saved.blockers.trim()}` : '',
+        mData.saved?.courseCorrections?.trim()
+          ? `3. Monthly Course Corrections:\n${mData.saved.courseCorrections.trim()}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      const autoRollupFallback = [
+        mData.rolledUpWins.length > 0 ? `Rolled-Up Wins (${mData.rolledUpWins.length}):\n${mData.rolledUpWins.slice(0, 6).join('\n')}` : '',
+        mData.rolledUpProblems.length > 0 ? `Rolled-Up Problems (${mData.rolledUpProblems.length}):\n${mData.rolledUpProblems.slice(0, 6).join('\n')}` : '',
+        mData.rolledUpCorrections.length > 0 ? `Rolled-Up Course Corrections (${mData.rolledUpCorrections.length}):\n${mData.rolledUpCorrections.slice(0, 6).join('\n')}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      return {
+        id: `vault_monthly_${mKey}`,
+        type: 'monthly' as const,
+        dateOrPeriod: `${mData.info.label} (${mData.info.startDate} → ${mData.info.endDate})`,
+        title: mData.saved?.title || `${mData.info.label} — Monthly Review & Multi-Scale Rollup`,
+        scoreBadge:
+          mData.saved?.score && mData.saved.score > 0
+            ? `Month ${mData.saved.score}/10`
+            : `Weeks ${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts`,
+        scoreNumber: mData.saved?.score || mData.weeklyPointsAchieved,
+        plannedOrContext: `Smaller-Scale Rollup (${mData.info.label}):\n• Weekly Reviews: ${mData.weeks.length} weeks (${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts, ${mData.weeklyTasksDone}/${mData.weeklyTasksTotal} goals done)\n• Daily Reviews: ${mData.days.length} days logged (Avg Discipline: ${mData.avgDailyScore}/10, Tasks: ${mData.dailyTasksDone}/${mData.dailyTasksTotal}, Habits: ${mData.habitRatePct}%)\n• GWS Sprints: ${mData.gws.length} sessions (${mData.gwsHours}h deep work, Avg Score: ${mData.avgGwsTotal}/15)`,
+        reviewContent:
+          structuredMonthlyReview ||
+          autoRollupFallback ||
+          'Click "Inspect / Edit" to synthesize your Monthly Review from all Weekly, Daily, and GWS data.',
+        secondaryContent: `Contains: ${mData.weeks.length} Weekly Reviews • ${mData.days.length} Daily Reviews • ${mData.gws.length} GWS Sprints`,
+        rawDate: mData.info.endDate,
+        jumpTarget: () => {
+          setSelectedMonth(mKey);
+          setReviewSubTab('monthly');
+        }
+      };
+    })
+    .filter(Boolean) as VaultItem[];
+
+  // 5. Gather all Quarterly reviews (from saved quarterly reviews OR quarters with active smaller-scale reviews)
+  const quarterlyVaultItems: VaultItem[] = allKnownQuarters
+    .map(qKey => {
+      const qData = compileQuarterData(qKey);
+      const hasActivity =
+        !!qData.saved ||
+        qData.weeks.length > 0 ||
+        qData.days.length > 0 ||
+        qData.gws.length > 0;
+      if (!hasActivity) return null;
+
+      const structuredQuarterlyReview = [
+        qData.saved?.wins?.trim() ? `1. Quarterly Wins & Major Deliverables:\n${qData.saved.wins.trim()}` : '',
+        qData.saved?.blockers?.trim() ? `2. Structural Problems & Bottlenecks:\n${qData.saved.blockers.trim()}` : '',
+        qData.saved?.courseCorrections?.trim()
+          ? `3. Next Quarter Thesis & Course Corrections:\n${qData.saved.courseCorrections.trim()}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      const autoRollupFallback = [
+        qData.rolledUpWins.length > 0 ? `Quarter Rolled-Up Wins (${qData.rolledUpWins.length}):\n${qData.rolledUpWins.slice(0, 6).join('\n')}` : '',
+        qData.rolledUpProblems.length > 0 ? `Quarter Rolled-Up Problems (${qData.rolledUpProblems.length}):\n${qData.rolledUpProblems.slice(0, 6).join('\n')}` : '',
+        qData.rolledUpCorrections.length > 0 ? `Quarter Rolled-Up Course Corrections (${qData.rolledUpCorrections.length}):\n${qData.rolledUpCorrections.slice(0, 6).join('\n')}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      return {
+        id: `vault_quarterly_${qKey}`,
+        type: 'quarterly' as const,
+        dateOrPeriod: `${qData.info.label} (${qData.info.startDate} → ${qData.info.endDate})`,
+        title: qData.saved?.title || `${qData.info.label} — Quarterly Strategic Review`,
+        scoreBadge:
+          qData.saved?.score && qData.saved.score > 0
+            ? `Quarter ${qData.saved.score}/10`
+            : `${qData.weeklyPointsAchieved}/${qData.weeklyPointsPossible} wk pts`,
+        scoreNumber: qData.saved?.score || qData.weeklyPointsAchieved,
+        plannedOrContext: `Smaller-Scale Rollup (${qData.info.label}):\n• Monthly Reviews: 3 months (${qData.info.months.join(', ')})\n• Weekly Reviews: ${qData.weeks.length} weeks (${qData.weeklyPointsAchieved}/${qData.weeklyPointsPossible} pts, Avg: ${qData.avgWeeklyScore}/10)\n• Daily Reviews: ${qData.days.length} days logged (Avg Discipline: ${qData.avgDailyScore}/10, Tasks: ${qData.dailyTasksDone}/${qData.dailyTasksTotal}, Habits: ${qData.habitRatePct}%)\n• GWS Sprints: ${qData.gws.length} sessions (${qData.gwsHours}h deep work, Avg Score: ${qData.avgGwsTotal}/15)`,
+        reviewContent:
+          structuredQuarterlyReview ||
+          autoRollupFallback ||
+          'Click "Inspect / Edit" to synthesize your Quarterly Review from all Monthly, Weekly, Daily, and GWS data.',
+        secondaryContent: `Contains: 3 Months • ${qData.weeks.length} Weekly Reviews • ${qData.days.length} Daily Reviews • ${qData.gws.length} GWS Sprints`,
+        rawDate: qData.info.endDate,
+        jumpTarget: () => {
+          setSelectedQuarter(qKey);
+          setReviewSubTab('quarterly');
+        }
+      };
+    })
+    .filter(Boolean) as VaultItem[];
+
   // Combine and sort chronologically (most recent first)
-  const allVaultItems: VaultItem[] = [...dailyVaultItems, ...weeklyVaultItems, ...gwsVaultItems]
-    .sort((a, b) => b.rawDate.localeCompare(a.rawDate));
+  const allVaultItems: VaultItem[] = [
+    ...quarterlyVaultItems,
+    ...monthlyVaultItems,
+    ...weeklyVaultItems,
+    ...dailyVaultItems,
+    ...gwsVaultItems
+  ].sort((a, b) => b.rawDate.localeCompare(a.rawDate));
 
   // Filter vault items
   const filteredVaultItems = allVaultItems.filter(item => {
@@ -450,6 +963,8 @@ export const ReviewHub: React.FC = () => {
                 {reviewSubTab === 'daily' && 'Daily Review & Reflexion'}
                 {reviewSubTab === 'gws' && 'GWS Sprint Telemetry & Bottlenecks'}
                 {reviewSubTab === 'weekly' && 'Weekly Retrospective & Milestones'}
+                {reviewSubTab === 'monthly' && 'Monthly Review (Contains Weekly, Daily & GWS Data)'}
+                {reviewSubTab === 'quarterly' && 'Quarterly Review (Contains Monthly, Weekly, Daily & GWS Data)'}
               </div>
             </div>
           </div>
@@ -461,7 +976,7 @@ export const ReviewHub: React.FC = () => {
             <div className="flex items-center space-x-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80 overflow-x-auto">
               <button
                 onClick={() => setReviewSubTab('vault')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   reviewSubTab === 'vault'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
@@ -473,41 +988,69 @@ export const ReviewHub: React.FC = () => {
 
               <button
                 onClick={() => setReviewSubTab('daily')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   reviewSubTab === 'daily'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
                 <CalendarIcon className="w-3.5 h-3.5" />
-                <span>Daily Review</span>
+                <span>Daily</span>
               </button>
 
               {systemLevel >= 2 && (
                 <button
                   onClick={() => setReviewSubTab('gws')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     reviewSubTab === 'gws'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
                   <Timer className="w-3.5 h-3.5" />
-                  <span>GWS Review</span>
+                  <span>GWS</span>
                 </button>
               )}
 
               {systemLevel >= 3 && (
                 <button
                   onClick={() => setReviewSubTab('weekly')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     reviewSubTab === 'weekly'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
                   <Target className="w-3.5 h-3.5" />
-                  <span>Weekly Review</span>
+                  <span>Weekly</span>
+                </button>
+              )}
+
+              {systemLevel >= 4 && (
+                <button
+                  onClick={() => setReviewSubTab('monthly')}
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    reviewSubTab === 'monthly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Monthly</span>
+                </button>
+              )}
+
+              {systemLevel >= 4 && (
+                <button
+                  onClick={() => setReviewSubTab('quarterly')}
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    reviewSubTab === 'quarterly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  <span>Quarterly</span>
                 </button>
               )}
             </div>
@@ -515,10 +1058,20 @@ export const ReviewHub: React.FC = () => {
             {/* Clear PROMINENT "Create Review" Button */}
             <button
               onClick={() => {
-                setCreateReviewType(reviewSubTab === 'weekly' ? 'weekly' : reviewSubTab === 'daily' ? 'daily' : 'weekly');
+                setCreateReviewType(
+                  reviewSubTab === 'quarterly'
+                    ? 'quarterly'
+                    : reviewSubTab === 'monthly'
+                    ? 'monthly'
+                    : reviewSubTab === 'weekly'
+                    ? 'weekly'
+                    : reviewSubTab === 'daily'
+                    ? 'daily'
+                    : 'weekly'
+                );
                 setShowCreateReviewModal(true);
               }}
-              className="flex items-center space-x-1.5 px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95"
+              className="flex items-center space-x-1.5 px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95 shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>+ Create Review</span>
@@ -570,6 +1123,14 @@ export const ReviewHub: React.FC = () => {
                     <strong className="text-base text-amber-400 font-extrabold">{allVaultItems.length}</strong>
                   </div>
                   <div className="px-3 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                    <span className="text-slate-500 block text-[9px]">QUARTERLY</span>
+                    <strong className="text-base text-cyan-400 font-extrabold">{quarterlyVaultItems.length}</strong>
+                  </div>
+                  <div className="px-3 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                    <span className="text-slate-500 block text-[9px]">MONTHLY</span>
+                    <strong className="text-base text-purple-400 font-extrabold">{monthlyVaultItems.length}</strong>
+                  </div>
+                  <div className="px-3 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
                     <span className="text-slate-500 block text-[9px]">WEEKLY</span>
                     <strong className="text-base text-slate-200 font-extrabold">{weeklyVaultItems.length}</strong>
                   </div>
@@ -592,7 +1153,7 @@ export const ReviewHub: React.FC = () => {
               <div className="flex items-center space-x-2 w-full sm:w-auto overflow-x-auto">
                 <button
                   onClick={() => setVaultFilter('all')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     vaultFilter === 'all'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
@@ -602,36 +1163,58 @@ export const ReviewHub: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={() => setVaultFilter('quarterly')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    vaultFilter === 'quarterly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                  }`}
+                >
+                  🏆 Quarterly ({quarterlyVaultItems.length})
+                </button>
+
+                <button
+                  onClick={() => setVaultFilter('monthly')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    vaultFilter === 'monthly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                  }`}
+                >
+                  📊 Monthly ({monthlyVaultItems.length})
+                </button>
+
+                <button
                   onClick={() => setVaultFilter('weekly')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     vaultFilter === 'weekly'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
                   }`}
                 >
-                  🎯 Weekly Retrospectives ({weeklyVaultItems.length})
+                  🎯 Weekly ({weeklyVaultItems.length})
                 </button>
 
                 <button
                   onClick={() => setVaultFilter('daily')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     vaultFilter === 'daily'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
                   }`}
                 >
-                  📅 Daily Reviews ({dailyVaultItems.length})
+                  📅 Daily ({dailyVaultItems.length})
                 </button>
 
                 <button
                   onClick={() => setVaultFilter('gws')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     vaultFilter === 'gws'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
                   }`}
                 >
-                  ⏱️ GWS Reflexions ({gwsVaultItems.length})
+                  ⏱️ GWS ({gwsVaultItems.length})
                 </button>
               </div>
 
@@ -662,6 +1245,16 @@ export const ReviewHub: React.FC = () => {
                 const isCopied = copiedReviewId === item.id;
 
                 const getTypeStyle = () => {
+                  if (item.type === 'quarterly') return {
+                    label: 'Quarterly Strategic Review',
+                    color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+                    icon: Award
+                  };
+                  if (item.type === 'monthly') return {
+                    label: 'Monthly Macro Review',
+                    color: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+                    icon: Layers
+                  };
                   if (item.type === 'daily') return {
                     label: 'Daily Review',
                     color: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
@@ -1660,6 +2253,1069 @@ export const ReviewHub: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
+      {/* SUB-TAB 4: MONTHLY REVIEW (CONTAINS ALL WEEKLY, DAILY & GWS DATA)         */}
+      {/* ========================================================================= */}
+      {reviewSubTab === 'monthly' && (() => {
+        const mData = compileMonthData(selectedMonth);
+        const monthScore = mData.saved?.score || 0;
+        const monthWins = mData.saved?.wins || '';
+        const monthProblems = mData.saved?.blockers || '';
+        const monthCorrections = mData.saved?.courseCorrections || '';
+
+        const handleCopyMonthlyPlain = () => {
+          let text = `${mData.info.label} (${mData.info.monthKey}) — Monthly Review\n\n`;
+          text += `Monthly Score: ${monthScore > 0 ? `${monthScore}/10` : 'Unscored'}\n`;
+          text += `Weekly Points: ${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts across ${mData.weeks.length} weeks (Avg ${mData.avgWeeklyScore}/10)\n`;
+          text += `Daily Execution: ${mData.days.length} days logged • Avg Discipline ${mData.avgDailyScore}/10 • Tasks ${mData.dailyTasksDone}/${mData.dailyTasksTotal} • Habits ${mData.habitRatePct}%\n`;
+          text += `GWS Deep Work: ${mData.gwsHours}h across ${mData.gws.length} sprints (Avg ${mData.avgGwsTotal}/15)\n`;
+
+          if (monthWins.trim()) {
+            text += `\n1. Monthly Wins & Shipped:\n${monthWins.trim()}\n`;
+          }
+          if (monthProblems.trim()) {
+            text += `\n2. Problems Encountered & Bottlenecks:\n${monthProblems.trim()}\n`;
+          }
+          if (monthCorrections.trim()) {
+            text += `\n3. Monthly Course Corrections:\n${monthCorrections.trim()}\n`;
+          }
+
+          navigator.clipboard.writeText(text.trim());
+          setCopiedMacroType('monthly');
+          setTimeout(() => setCopiedMacroType(null), 2500);
+        };
+
+        return (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+            {/* Month Navigation & Quick Switcher Bar */}
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMonth(shiftMonthKey(selectedMonth, -1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Previous Month"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-400 block">
+                    Monthly Multi-Scale Review ({mData.info.startDate} → {mData.info.endDate})
+                  </span>
+                  <div className="text-xl font-extrabold text-slate-100">{mData.info.label}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMonth(shiftMonthKey(selectedMonth, 1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Next Month"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 justify-end">
+                {allKnownMonths.map(mKey => (
+                  <button
+                    key={mKey}
+                    type="button"
+                    onClick={() => setSelectedMonth(mKey)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all ${
+                      mKey === selectedMonth
+                        ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {mKey}
+                  </button>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={handleCopyMonthlyPlain}
+                  className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-sm transition-all"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiedMacroType === 'monthly' ? 'Copied Monthly Review!' : 'Copy Monthly Review'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Weekly Reviews in Month ({mData.weeks.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {mData.weeklyPointsAchieved} <span className="text-xs text-slate-500">/ {mData.weeklyPointsPossible} pts</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg {mData.avgWeeklyScore}/10 • {mData.weeklyTasksDone}/{mData.weeklyTasksTotal} weekly goals done
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
+                  Daily Reviews in Month ({mData.days.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {mData.avgDailyScore} <span className="text-xs text-slate-500">/ 10 avg score</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Tasks: {mData.dailyTasksDone}/{mData.dailyTasksTotal} • Habits: {mData.habitRatePct}% locked
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  GWS Sprints in Month ({mData.gws.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {mData.gwsHours} <span className="text-xs text-slate-500">hours deep work</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg Sprint Score: {mData.avgGwsTotal} / 15
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-purple-400">
+                    Monthly Score (1–10)
+                  </span>
+                  <span className="text-xs font-mono font-bold text-purple-300">
+                    {monthScore > 0 ? `${monthScore}/10` : 'Unscored'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-10 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => upsertMonthlyReview(selectedMonth, { score: sc })}
+                      className={`py-1.5 rounded-lg text-[11px] font-bold font-mono transition-all ${
+                        monthScore === sc
+                          ? 'bg-purple-500 text-slate-950 font-extrabold shadow'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Smaller Time-Scale Reviews Container (Weekly + Daily + GWS) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-400">
+                    All Contained Smaller-Scale Reviews ({mData.info.label})
+                  </span>
+                  <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                    Weekly Retrospectives, Daily Reviews & GWS Sprints in {mData.info.label}
+                  </h2>
+                </div>
+
+                <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
+                  {(
+                    [
+                      { id: 'all', label: `All Scales (${mData.weeks.length + mData.days.length + mData.gws.length})` },
+                      { id: 'weekly', label: `Weekly (${mData.weeks.length})` },
+                      { id: 'daily', label: `Daily (${mData.days.length})` },
+                      { id: 'gws', label: `GWS (${mData.gws.length})` }
+                    ] as const
+                  ).map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setMonthlyScaleFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                        monthlyScaleFilter === tab.id
+                          ? 'bg-purple-500 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 1. Weekly Reviews in this Month */}
+              {(monthlyScaleFilter === 'all' || monthlyScaleFilter === 'weekly') && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                      <Target className="w-4 h-4" />
+                      <span>1. Weekly Plans & Retrospectives in {mData.info.label} ({mData.weeks.length})</span>
+                    </span>
+                  </div>
+
+                  {mData.weeks.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No weekly plans or retrospectives recorded during {mData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {mData.weeks.map(w => (
+                        <div key={w.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="font-extrabold text-amber-400 font-mono">
+                                Week {w.weekNumber} ({w.startDate} → {w.endDate})
+                              </span>
+                              <div className="font-bold text-slate-100 mt-0.5">{w.focusTheme || 'No theme set'}</div>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold">
+                                {w.achievedScore}/{w.totalPossibleScore} pts
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectWeekGlobal(w.id);
+                                  setReviewSubTab('weekly');
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                                title="Inspect Week Review"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {w.tasks.length > 0 && (
+                            <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                                Weekly Deliverables ({w.tasks.filter(t => t.completed).length}/{w.tasks.length} Done):
+                              </span>
+                              {w.tasks.map(t => (
+                                <div key={t.id} className="text-[11px] flex items-center justify-between text-slate-300">
+                                  <span className={t.completed ? 'line-through text-slate-500' : ''}>
+                                    {t.completed ? '[x]' : '[ ]'} {t.text}
+                                  </span>
+                                  <span className="font-mono text-amber-400">{t.score}pts</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {w.winsNotes?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Wins & Shipped:</strong> {w.winsNotes.trim()}
+                            </div>
+                          )}
+                          {w.problemsEncountered?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems Encountered:</strong> {w.problemsEncountered.trim()}
+                            </div>
+                          )}
+                          {(w.courseCorrectionNotes || w.reviewNotes)?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-amber-400">Course Correction:</strong>{' '}
+                              {(w.courseCorrectionNotes || w.reviewNotes)!.trim()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 2. Daily Reviews in this Month */}
+              {(monthlyScaleFilter === 'all' || monthlyScaleFilter === 'daily') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 flex items-center space-x-1.5">
+                    <CalendarIcon className="w-4 h-4" />
+                    <span>2. Daily Plans & Reviews in {mData.info.label} ({mData.days.length})</span>
+                  </span>
+
+                  {mData.days.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily entries or reviews recorded during {mData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
+                      {mData.days.map(d => (
+                        <div key={d.date} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-extrabold text-blue-400">{d.date}</span>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono text-[11px] text-slate-300">
+                                Tasks: {d.mainTasksCompleted}/{d.mainTasksTotal}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold text-[11px]">
+                                {d.executionScore > 0 ? `${d.executionScore}/10` : 'Unscored'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectDateGlobal(d.date);
+                                  setReviewSubTab('daily');
+                                }}
+                                className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200"
+                                title="Inspect Daily Review"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {d.planNotes?.trim() && (
+                            <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800/80 font-mono text-[11px] text-slate-400 whitespace-pre-wrap">
+                              {d.planNotes.trim()}
+                            </div>
+                          )}
+                          {d.problemsEncountered?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {d.problemsEncountered.trim()}
+                            </div>
+                          )}
+                          {d.reviewNotes?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Reflexion:</strong> {d.reviewNotes.trim()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. GWS Sprints in this Month */}
+              {(monthlyScaleFilter === 'all' || monthlyScaleFilter === 'gws') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                    <Timer className="w-4 h-4" />
+                    <span>3. GWS Deep Work Sprints in {mData.info.label} ({mData.gws.length})</span>
+                  </span>
+
+                  {mData.gws.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS deep work sprints logged during {mData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
+                      {mData.gws.map(s => (
+                        <div key={s.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                            <span className="font-mono text-[11px] text-amber-400 shrink-0">
+                              {s.date} • {s.actualMinutes}m • {s.ratings.total}/15
+                            </span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Done:</strong> {s.reflexions.accomplished}
+                            </p>
+                          )}
+                          {s.reflexions.heldBack && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Held Back:</strong> {s.reflexions.heldBack}
+                            </p>
+                          )}
+                          {s.reflexions.improveNext && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-amber-400">Improve Next:</strong> {s.reflexions.improveNext}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Monthly Synthesis & Course Correction Editor */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    Monthly Retrospective & Course Correction
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Synthesize {mData.info.label}
+                  </h2>
+                </div>
+
+                {(mData.rolledUpWins.length > 0 || mData.rolledUpProblems.length > 0 || mData.rolledUpCorrections.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      upsertMonthlyReview(selectedMonth, {
+                        wins: monthWins.trim()
+                          ? `${monthWins.trim()}\n${mData.rolledUpWins.join('\n')}`
+                          : mData.rolledUpWins.join('\n'),
+                        blockers: monthProblems.trim()
+                          ? `${monthProblems.trim()}\n${mData.rolledUpProblems.join('\n')}`
+                          : mData.rolledUpProblems.join('\n'),
+                        courseCorrections: monthCorrections.trim()
+                          ? `${monthCorrections.trim()}\n${mData.rolledUpCorrections.join('\n')}`
+                          : mData.rolledUpCorrections.join('\n')
+                      });
+                    }}
+                    className="px-4 py-2 rounded-2xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 text-xs font-bold transition-all"
+                  >
+                    + Auto-Import All Smaller-Scale Reviews into Monthly Draft
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      1. Monthly Wins, Shipped Systems & Major Milestones
+                    </label>
+                    {mData.rolledUpWins.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertMonthlyReview(selectedMonth, {
+                            wins: monthWins.trim()
+                              ? `${monthWins.trim()}\n${mData.rolledUpWins.join('\n')}`
+                              : mData.rolledUpWins.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
+                      >
+                        + Pull Weekly & GWS Wins ({mData.rolledUpWins.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={monthWins}
+                    onChange={e => upsertMonthlyReview(selectedMonth, { wins: e.target.value })}
+                    rows={4}
+                    placeholder="What major deliverables, habits, and breakthroughs shipped this month?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
+                      2. Problems Encountered & Systemic Bottlenecks
+                    </label>
+                    {mData.rolledUpProblems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertMonthlyReview(selectedMonth, {
+                            blockers: monthProblems.trim()
+                              ? `${monthProblems.trim()}\n${mData.rolledUpProblems.join('\n')}`
+                              : mData.rolledUpProblems.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
+                      >
+                        + Pull Weekly, Daily & GWS Problems ({mData.rolledUpProblems.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={monthProblems}
+                    onChange={e => upsertMonthlyReview(selectedMonth, { blockers: e.target.value })}
+                    rows={4}
+                    placeholder="What recurring problems, distractions, or bottlenecks held you back across the weeks of this month?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      3. Monthly Course Correction & Next Month Focus
+                    </label>
+                    {mData.rolledUpCorrections.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertMonthlyReview(selectedMonth, {
+                            courseCorrections: monthCorrections.trim()
+                              ? `${monthCorrections.trim()}\n${mData.rolledUpCorrections.join('\n')}`
+                              : mData.rolledUpCorrections.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
+                      >
+                        + Pull Weekly & Daily Course Corrections ({mData.rolledUpCorrections.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={monthCorrections}
+                    onChange={e => upsertMonthlyReview(selectedMonth, { courseCorrections: e.target.value })}
+                    rows={4}
+                    placeholder="What structural adjustments, systems, or rule changes will you lock in for next month?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
+                  <span>Autosaved to Review Vault & included in {mData.info.quarterKey} Quarterly Review</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedQuarter(mData.info.quarterKey);
+                      setReviewSubTab('quarterly');
+                    }}
+                    className="text-cyan-400 hover:text-cyan-300 font-bold"
+                  >
+                    View in {mData.info.quarterKey} Quarterly Review →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
+      {/* SUB-TAB 5: QUARTERLY REVIEW (CONTAINS MONTHLY, WEEKLY, DAILY & GWS DATA)  */}
+      {/* ========================================================================= */}
+      {reviewSubTab === 'quarterly' && (() => {
+        const qData = compileQuarterData(selectedQuarter);
+        const quarterScore = qData.saved?.score || 0;
+        const quarterWins = qData.saved?.wins || '';
+        const quarterProblems = qData.saved?.blockers || '';
+        const quarterCorrections = qData.saved?.courseCorrections || '';
+
+        const handleCopyQuarterlyPlain = () => {
+          let text = `${qData.info.label} — Quarterly Review\n\n`;
+          text += `Quarterly Score: ${quarterScore > 0 ? `${quarterScore}/10` : 'Unscored'}\n`;
+          text += `Months Covered: ${qData.info.months.join(', ')}\n`;
+          text += `Weekly Points: ${qData.weeklyPointsAchieved}/${qData.weeklyPointsPossible} pts across ${qData.weeks.length} weeks (Avg ${qData.avgWeeklyScore}/10)\n`;
+          text += `Daily Execution: ${qData.days.length} days logged • Avg Discipline ${qData.avgDailyScore}/10 • Tasks ${qData.dailyTasksDone}/${qData.dailyTasksTotal} • Habits ${qData.habitRatePct}%\n`;
+          text += `GWS Deep Work: ${qData.gwsHours}h across ${qData.gws.length} sprints (Avg ${qData.avgGwsTotal}/15)\n`;
+
+          if (quarterWins.trim()) {
+            text += `\n1. Quarterly Wins & Major Deliverables:\n${quarterWins.trim()}\n`;
+          }
+          if (quarterProblems.trim()) {
+            text += `\n2. Structural Problems & Bottlenecks:\n${quarterProblems.trim()}\n`;
+          }
+          if (quarterCorrections.trim()) {
+            text += `\n3. Next Quarter Strategic Thesis & Course Corrections:\n${quarterCorrections.trim()}\n`;
+          }
+
+          navigator.clipboard.writeText(text.trim());
+          setCopiedMacroType('quarterly');
+          setTimeout(() => setCopiedMacroType(null), 2500);
+        };
+
+        return (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+            {/* Quarter Navigation & Quick Switcher Bar */}
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedQuarter(shiftQuarterKey(selectedQuarter, -1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Previous Quarter"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-cyan-400 block">
+                    Quarterly Multi-Scale Review ({qData.info.startDate} → {qData.info.endDate})
+                  </span>
+                  <div className="text-xl font-extrabold text-slate-100">{qData.info.label}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedQuarter(shiftQuarterKey(selectedQuarter, 1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Next Quarter"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 justify-end">
+                {allKnownQuarters.map(qKey => (
+                  <button
+                    key={qKey}
+                    type="button"
+                    onClick={() => setSelectedQuarter(qKey)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all ${
+                      qKey === selectedQuarter
+                        ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {qKey}
+                  </button>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={handleCopyQuarterlyPlain}
+                  className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-sm transition-all"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiedMacroType === 'quarterly' ? 'Copied Quarterly Review!' : 'Copy Quarterly Review'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Quarter Weekly Points ({qData.weeks.length} wks)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.weeklyPointsAchieved} <span className="text-xs text-slate-500">/ {qData.weeklyPointsPossible} pts</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg {qData.avgWeeklyScore}/10 • {qData.weeklyTasksDone}/{qData.weeklyTasksTotal} weekly goals done
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
+                  Quarter Daily Discipline ({qData.days.length}d)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.avgDailyScore} <span className="text-xs text-slate-500">/ 10 avg score</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Tasks: {qData.dailyTasksDone}/{qData.dailyTasksTotal} • Habits: {qData.habitRatePct}% locked
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  Quarter GWS Deep Work ({qData.gws.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.gwsHours} <span className="text-xs text-slate-500">hours deep work</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg Sprint Score: {qData.avgGwsTotal} / 15
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-cyan-400">
+                    Quarterly Score (1–10)
+                  </span>
+                  <span className="text-xs font-mono font-bold text-cyan-300">
+                    {quarterScore > 0 ? `${quarterScore}/10` : 'Unscored'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-10 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => upsertQuarterlyReview(selectedQuarter, { score: sc })}
+                      className={`py-1.5 rounded-lg text-[11px] font-bold font-mono transition-all ${
+                        quarterScore === sc
+                          ? 'bg-cyan-500 text-slate-950 font-extrabold shadow'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Smaller Time-Scale Reviews Container (Monthly + Weekly + Daily + GWS) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-cyan-400">
+                    All Contained Smaller-Scale Reviews ({qData.info.label})
+                  </span>
+                  <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                    Monthly Reviews, Weekly Retrospectives, Daily Reviews & GWS Sprints
+                  </h2>
+                </div>
+
+                <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
+                  {(
+                    [
+                      { id: 'all', label: 'All Scales' },
+                      { id: 'monthly', label: 'Monthly (3)' },
+                      { id: 'weekly', label: `Weekly (${qData.weeks.length})` },
+                      { id: 'daily', label: `Daily (${qData.days.length})` },
+                      { id: 'gws', label: `GWS (${qData.gws.length})` }
+                    ] as const
+                  ).map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setQuarterlyScaleFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                        quarterlyScaleFilter === tab.id
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 1. Monthly Reviews inside this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'monthly') && (
+                <div className="space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center space-x-1.5">
+                    <Layers className="w-4 h-4" />
+                    <span>1. Monthly Reviews in {qData.info.label} (3 Months)</span>
+                  </span>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {qData.monthsData.map(m => (
+                      <div key={m.info.monthKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-mono text-[11px] text-purple-400 font-bold">{m.info.monthKey}</span>
+                            <div className="font-extrabold text-slate-100 text-sm">{m.info.label}</div>
+                          </div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="px-2 py-0.5 rounded-lg bg-purple-500/15 text-purple-300 border border-purple-500/30 font-mono font-bold text-[11px]">
+                              {m.saved?.score ? `${m.saved.score}/10` : `${m.weeklyPointsAchieved}/${m.weeklyPointsPossible}pts`}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedMonth(m.info.monthKey);
+                                setReviewSubTab('monthly');
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                              title="Open Monthly Review"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 font-mono text-[11px] text-slate-400 space-y-0.5">
+                          <div>Weeks: {m.weeks.length} ({m.weeklyPointsAchieved}/{m.weeklyPointsPossible} pts)</div>
+                          <div>Days: {m.days.length} (Avg {m.avgDailyScore}/10 • Habits {m.habitRatePct}%)</div>
+                          <div>GWS: {m.gws.length} sprints ({m.gwsHours}h • Avg {m.avgGwsTotal}/15)</div>
+                        </div>
+
+                        {m.saved?.wins?.trim() ? (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-emerald-400">Monthly Wins:</strong> {m.saved.wins.trim()}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-500 italic">No monthly wins summary written yet.</div>
+                        )}
+                        {m.saved?.blockers?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-orange-400">Monthly Problems:</strong> {m.saved.blockers.trim()}
+                          </div>
+                        )}
+                        {m.saved?.courseCorrections?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-amber-400">Monthly Correction:</strong> {m.saved.courseCorrections.trim()}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Weekly Reviews in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'weekly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                    <Target className="w-4 h-4" />
+                    <span>2. Weekly Plans & Retrospectives in {qData.info.label} ({qData.weeks.length})</span>
+                  </span>
+
+                  {qData.weeks.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No weekly plans or retrospectives recorded during {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto pr-1">
+                      {qData.weeks.map(w => (
+                        <div key={w.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-mono font-bold text-amber-400">
+                                Week {w.weekNumber} ({w.startDate} → {w.endDate})
+                              </span>
+                              <div className="font-bold text-slate-100">{w.focusTheme || 'No theme set'}</div>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold">
+                                {w.achievedScore}/{w.totalPossibleScore} pts
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectWeekGlobal(w.id);
+                                  setReviewSubTab('weekly');
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          {w.winsNotes?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Wins:</strong> {w.winsNotes.trim()}
+                            </div>
+                          )}
+                          {w.problemsEncountered?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {w.problemsEncountered.trim()}
+                            </div>
+                          )}
+                          {(w.courseCorrectionNotes || w.reviewNotes)?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-amber-400">Correction:</strong>{' '}
+                              {(w.courseCorrectionNotes || w.reviewNotes)!.trim()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. Daily Reviews in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'daily') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 flex items-center space-x-1.5">
+                    <CalendarIcon className="w-4 h-4" />
+                    <span>3. Daily Reviews in {qData.info.label} ({qData.days.length})</span>
+                  </span>
+
+                  {qData.days.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily reviews logged in {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
+                      {qData.days.map(d => (
+                        <div key={d.date} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-400">{d.date}</span>
+                            <span className="font-mono text-[11px] text-amber-400">
+                              Tasks {d.mainTasksCompleted}/{d.mainTasksTotal} • Score {d.executionScore}/10
+                            </span>
+                          </div>
+                          {d.problemsEncountered?.trim() && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {d.problemsEncountered.trim()}
+                            </p>
+                          )}
+                          {d.reviewNotes?.trim() && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Reflexion:</strong> {d.reviewNotes.trim()}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. GWS Sprints in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'gws') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                    <Timer className="w-4 h-4" />
+                    <span>4. GWS Deep Work Sprints in {qData.info.label} ({qData.gws.length})</span>
+                  </span>
+
+                  {qData.gws.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS sprints logged in {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {qData.gws.map(s => (
+                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                            <span className="font-mono text-[11px] text-amber-400 shrink-0">
+                              {s.date} • {s.actualMinutes}m • {s.ratings.total}/15
+                            </span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Done:</strong> {s.reflexions.accomplished}
+                            </p>
+                          )}
+                          {s.reflexions.heldBack && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Held Back:</strong> {s.reflexions.heldBack}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Quarterly Retrospective & Strategic Realignment Editor */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    Quarterly Strategic Review & Realignment
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Synthesize {qData.info.label}
+                  </h2>
+                </div>
+
+                {(qData.rolledUpWins.length > 0 || qData.rolledUpProblems.length > 0 || qData.rolledUpCorrections.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      upsertQuarterlyReview(selectedQuarter, {
+                        wins: quarterWins.trim()
+                          ? `${quarterWins.trim()}\n${qData.rolledUpWins.join('\n')}`
+                          : qData.rolledUpWins.join('\n'),
+                        blockers: quarterProblems.trim()
+                          ? `${quarterProblems.trim()}\n${qData.rolledUpProblems.join('\n')}`
+                          : qData.rolledUpProblems.join('\n'),
+                        courseCorrections: quarterCorrections.trim()
+                          ? `${quarterCorrections.trim()}\n${qData.rolledUpCorrections.join('\n')}`
+                          : qData.rolledUpCorrections.join('\n')
+                      });
+                    }}
+                    className="px-4 py-2 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition-all"
+                  >
+                    + Auto-Import All Smaller-Scale Reviews into Quarterly Draft
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      1. Quarterly Wins, Major Deliverables & ROI
+                    </label>
+                    {qData.rolledUpWins.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertQuarterlyReview(selectedQuarter, {
+                            wins: quarterWins.trim()
+                              ? `${quarterWins.trim()}\n${qData.rolledUpWins.join('\n')}`
+                              : qData.rolledUpWins.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
+                      >
+                        + Pull Monthly, Weekly & GWS Wins ({qData.rolledUpWins.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={quarterWins}
+                    onChange={e => upsertQuarterlyReview(selectedQuarter, { wins: e.target.value })}
+                    rows={4}
+                    placeholder="What major strategic milestones, systems, and capabilities did you ship this quarter?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
+                      2. Structural Problems & Recurring Bottlenecks
+                    </label>
+                    {qData.rolledUpProblems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertQuarterlyReview(selectedQuarter, {
+                            blockers: quarterProblems.trim()
+                              ? `${quarterProblems.trim()}\n${qData.rolledUpProblems.join('\n')}`
+                              : qData.rolledUpProblems.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
+                      >
+                        + Pull Monthly, Weekly, Daily & GWS Problems ({qData.rolledUpProblems.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={quarterProblems}
+                    onChange={e => upsertQuarterlyReview(selectedQuarter, { blockers: e.target.value })}
+                    rows={4}
+                    placeholder="What systemic bottlenecks or root-cause problems repeated across the months and weeks of this quarter?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      3. Next Quarter Strategic Thesis & Course Corrections
+                    </label>
+                    {qData.rolledUpCorrections.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertQuarterlyReview(selectedQuarter, {
+                            courseCorrections: quarterCorrections.trim()
+                              ? `${quarterCorrections.trim()}\n${qData.rolledUpCorrections.join('\n')}`
+                              : qData.rolledUpCorrections.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
+                      >
+                        + Pull Monthly, Weekly & Daily Corrections ({qData.rolledUpCorrections.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={quarterCorrections}
+                    onChange={e => upsertQuarterlyReview(selectedQuarter, { courseCorrections: e.target.value })}
+                    rows={4}
+                    placeholder="What is your core thesis, system upgrade, and strategic direction for next quarter?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
+                  <span>Autosaved to Review Vault & Cloud Sync</span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('vault')}
+                    className="text-amber-400 hover:text-amber-300 font-bold"
+                  >
+                    Open Review Vault →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
       {/* GLOBAL CREATE REVIEW MODAL (Unambiguous, Prominent Creation Center)        */}
       {/* ========================================================================= */}
       {showCreateReviewModal && (
@@ -1684,41 +3340,129 @@ export const ReviewHub: React.FC = () => {
             </div>
 
             {/* Type selector */}
-            <div className="grid grid-cols-3 gap-2 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+            <div className="grid grid-cols-5 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCreateReviewType('quarterly')}
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
+                  createReviewType === 'quarterly'
+                    ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                🏆 Quarterly
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreateReviewType('monthly')}
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
+                  createReviewType === 'monthly'
+                    ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                📊 Monthly
+              </button>
               <button
                 type="button"
                 onClick={() => setCreateReviewType('weekly')}
-                className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
                   createReviewType === 'weekly'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                🎯 Weekly Review
+                🎯 Weekly
               </button>
               <button
                 type="button"
                 onClick={() => setCreateReviewType('daily')}
-                className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
                   createReviewType === 'daily'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                📅 Daily Review
+                📅 Daily
               </button>
               <button
                 type="button"
                 onClick={() => setCreateReviewType('gws')}
-                className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
                   createReviewType === 'gws'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                ⏱️ GWS Reflexion
+                ⏱️ GWS
               </button>
             </div>
+
+            {/* FORM 0A: QUARTERLY REVIEW CREATION */}
+            {createReviewType === 'quarterly' && (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Quarter</label>
+                  <select
+                    value={selectedQuarter}
+                    onChange={(e) => setSelectedQuarter(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none"
+                  >
+                    {allKnownQuarters.map(qKey => (
+                      <option key={qKey} value={qKey}>
+                        {getQuarterInfo(qKey).label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Opens the full Quarterly Multi-Scale Review containing all Monthly, Weekly, Daily, and GWS data for {getQuarterInfo(selectedQuarter).label}.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateReviewModal(false);
+                    setReviewSubTab('quarterly');
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/20"
+                >
+                  Open {getQuarterInfo(selectedQuarter).label} Review & Rollup →
+                </button>
+              </div>
+            )}
+
+            {/* FORM 0B: MONTHLY REVIEW CREATION */}
+            {createReviewType === 'monthly' && (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Month</label>
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none"
+                  >
+                    {allKnownMonths.map(mKey => (
+                      <option key={mKey} value={mKey}>
+                        {getMonthInfo(mKey).label} ({mKey})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Opens the full Monthly Multi-Scale Review containing all Weekly, Daily, and GWS data for {getMonthInfo(selectedMonth).label}.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateReviewModal(false);
+                    setReviewSubTab('monthly');
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-purple-500/20"
+                >
+                  Open {getMonthInfo(selectedMonth).label} Review & Rollup →
+                </button>
+              </div>
+            )}
 
             {/* FORM 1: WEEKLY REVIEW CREATION */}
             {createReviewType === 'weekly' && (

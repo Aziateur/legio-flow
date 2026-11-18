@@ -30,7 +30,7 @@ export interface TemplateField {
   defaultValue?: any;
 }
 
-export type SystemLevel = 1 | 2 | 3 | 4;
+export type SystemLevel = 1 | 2 | 3 | 4 | 5;
 
 export type TemplateCategory = 'daily' | 'gws' | 'weekly' | 'review' | 'custom';
 
@@ -155,9 +155,11 @@ export interface ThreeYearPlan {
 export interface ReviewEntry {
   id: string;
   title: string;
-  periodType: 'daily' | 'weekly' | 'custom';
+  periodType: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'custom';
+  periodKey?: string; // e.g. '2026-11' for monthly, '2026-Q4' for quarterly
   startDate: string;
   endDate: string;
+  score?: number; // 1-10 execution/discipline rating for the period
   wins: string;
   blockers: string;
   courseCorrections: string;
@@ -167,4 +169,5 @@ export interface ReviewEntry {
     overall: number;
   };
   createdAt: string;
+  updatedAt?: string;
 }

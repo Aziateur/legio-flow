@@ -16,7 +16,7 @@ import {
 
 export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'three_year';
-export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly';
+export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly';
 
 export const getTodayDateString = (): string => {
   const now = new Date();
@@ -254,7 +254,7 @@ const STORAGE_KEYS = {
   THREE_YEAR: 'legio_three_year_v1',
   REVIEWS: 'legio_reviews_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
-  SYSTEM_LEVEL: 'legio_system_level_v1',
+  SYSTEM_LEVEL: 'legio_system_level_v2',
 };
 
 const StorageContext = createContext<StorageContextType | undefined>(undefined);
@@ -432,17 +432,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setWeeklyPlans(prev => ensureContinuousWeeks(prev, todayDate));
   }, [todayDate]);
 
-  // Progressive System Level (1 to 4)
+  // Progressive System Level (1 to 5)
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL);
       if (saved) {
         const parsed = parseInt(saved);
-        if (parsed >= 1 && parsed <= 4) return parsed as SystemLevel;
+        if (parsed >= 1 && parsed <= 5) return parsed as SystemLevel;
       }
-      return 3; // Default to Level 3 (includes Weekly Goal Crusher)
+      return 4; // Default to Level 4 (includes Monthly & Quarterly Macro Reviews)
     } catch {
-      return 3;
+      return 4;
     }
   });
 
@@ -472,7 +472,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return { main: 'matrix', planningSub: 'daily', reviewSub: 'daily' };
     }
     if (p1 === 'review') {
-      const sub = (p2 === 'daily' || p2 === 'gws' || p2 === 'weekly') ? p2 as ReviewSubTab : 'vault';
+      const sub = (p2 === 'daily' || p2 === 'gws' || p2 === 'weekly' || p2 === 'monthly' || p2 === 'quarterly')
+        ? (p2 as ReviewSubTab)
+        : 'vault';
       return { main: 'review', planningSub: 'daily', reviewSub: sub };
     }
     if (p1 === 'gws') return { main: 'gws', planningSub: 'daily', reviewSub: 'daily' };
@@ -844,7 +846,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updatedAt: new Date().toISOString()
       } as ThreeYearPlan,
       reviews: [] as ReviewEntry[],
-      systemLevel: 3 as SystemLevel
+      systemLevel: 4 as SystemLevel
     };
   };
 
@@ -1004,7 +1006,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (state.weeklyPlans) setWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch));
     if (state.threeYearPlan) setThreeYearPlan(state.threeYearPlan);
     if (Array.isArray(state.reviews)) setReviews(state.reviews);
-    if (state.systemLevel >= 1 && state.systemLevel <= 4) setSystemLevelState(state.systemLevel);
+    if (state.systemLevel >= 1 && state.systemLevel <= 5) {
+      // Auto-upgrade legacy default 3 to 4 so Monthly & Quarterly Reviews are unlocked automatically
+      const nextLvl = state.systemLevel === 3 && !localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL) ? 4 : state.systemLevel;
+      setSystemLevelState(nextLvl as SystemLevel);
+    }
     setTimeout(() => {
       isHydratingFromCloudRef.current = false;
     }, 300);

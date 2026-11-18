@@ -110,7 +110,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     1: { name: 'Level 1: Basic Flow', desc: 'Daily checklist, mission plan & daily review' },
     2: { name: 'Level 2: Deep Work', desc: 'Adds GWS cockpit, stopwatch & reflexions' },
     3: { name: 'Level 3: Goal Crusher', desc: 'Adds Weekly Goal Crusher (10 Pts) & Weeks Matrix' },
-    4: { name: 'Level 4: Mastery 3-Year', desc: 'Adds 3-Year Strategic Roadmap & Macro Reviews' }
+    4: { name: 'Level 4: Macro Reviews', desc: 'Adds Monthly & Quarterly Reviews (all smaller time scales)' },
+    5: { name: 'Level 5: Mastery 3-Year', desc: 'Adds 3-Year Strategic Roadmap & Full Alignment' }
   };
 
   return (
@@ -178,7 +179,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
                       Select App Complexity Level
                     </div>
-                    {([1, 2, 3, 4] as const).map((lvl) => (
+                    {([1, 2, 3, 4, 5] as const).map((lvl) => (
                       <button
                         key={lvl}
                         onClick={() => {
