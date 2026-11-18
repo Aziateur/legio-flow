@@ -133,6 +133,11 @@ export const SpreadsheetMatrixView: React.FC = () => {
                 const plan = weeklyPlans[week.id];
                 const achievedScore = plan?.achievedScore || 0;
                 const totalPoints = plan?.totalPossibleScore || 10;
+                const weekGwsSessions = gwsSessions.filter(
+                  s => s.date >= week.startDate && s.date <= week.endDate
+                );
+                const weekGwsMinutes = weekGwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+                const weekAutoDaysDone = week.days.filter(d => dailyEntries[d]?.automaticTasksCompleted).length;
 
                 return (
                   <tr key={week.id} className="hover:bg-slate-850/40 transition-colors">
@@ -154,7 +159,17 @@ export const SpreadsheetMatrixView: React.FC = () => {
                     {week.days.map((dateStr) => {
                       const entry = dailyEntries[dateStr];
                       const dayGws = gwsSessions.filter(s => s.date === dateStr);
-                      const hasData = entry && (entry.executionScore > 0 || (entry.planNotes && entry.planNotes.trim().length > 0) || dayGws.length > 0 || (entry.reviewNotes && entry.reviewNotes.trim().length > 0));
+                      const dayGwsMinutes = dayGws.reduce((a, b) => a + (b.actualMinutes || 0), 0);
+                      const autoDone = !!entry?.automaticTasksCompleted;
+                      const hasData = Boolean(
+                        (entry &&
+                          (entry.executionScore > 0 ||
+                            (entry.planNotes && entry.planNotes.trim().length > 0) ||
+                            entry.mainTasksCompleted > 0 ||
+                            entry.automaticTasksCompleted ||
+                            (entry.reviewNotes && entry.reviewNotes.trim().length > 0))) ||
+                        dayGws.length > 0
+                      );
 
                       const isTodayCell = dateStr === todayDate;
 
@@ -170,17 +185,23 @@ export const SpreadsheetMatrixView: React.FC = () => {
                               : 'bg-slate-900/50'
                           }`}
                         >
-                          <div className="flex flex-col h-full min-h-[90px] justify-between p-2 rounded-2xl border border-transparent hover:border-amber-500/30">
+                          <div className="flex flex-col h-full min-h-[104px] justify-between p-2 rounded-2xl border border-transparent hover:border-amber-500/30">
                             
                             {/* Date + Status */}
-                            <div className="flex items-center justify-between text-[11px]">
+                            <div className="flex items-center justify-between text-[11px] gap-1">
                               <span className={`font-mono font-bold ${isTodayCell ? 'text-amber-400' : 'text-slate-300'}`}>
                                 {dateStr.slice(5)} {isTodayCell ? '• TODAY' : ''}
                               </span>
                               {hasData ? (
-                                <span className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${getScoreColor(entry?.executionScore || 0)}`}>
-                                  {entry?.executionScore ? `${entry.executionScore}/10` : 'Log'}
-                                </span>
+                                entry && entry.executionScore > 0 ? (
+                                  <span className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${getScoreColor(entry.executionScore)}`}>
+                                    {entry.executionScore}/10
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-700 bg-slate-950 text-slate-300">
+                                    {entry?.mainTasksCompleted || 0}/{entry?.mainTasksTotal || 3} tasks
+                                  </span>
+                                )
                               ) : (
                                 <span className="text-[10px] font-mono text-slate-600 bg-slate-950 px-1 py-0.5 rounded border border-slate-800/80">
                                   Empty
@@ -188,10 +209,10 @@ export const SpreadsheetMatrixView: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Content Snippet or Empty Spot */}
-                            <div className="my-1.5">
+                            {/* Content Snippet, GWS & Automatic Tasks */}
+                            <div className="my-1.5 space-y-1.5">
                               {hasData ? (
-                                <div className="space-y-1">
+                                <>
                                   {entry?.planNotes ? (
                                     <div className="text-[11px] text-slate-300 line-clamp-2 font-medium leading-tight">
                                       {entry.planNotes}
@@ -201,13 +222,28 @@ export const SpreadsheetMatrixView: React.FC = () => {
                                       No written plan
                                     </div>
                                   )}
-                                  {dayGws.length > 0 && (
-                                    <div className="flex items-center space-x-1 text-[10px] font-mono text-amber-400">
-                                      <Timer className="w-3 h-3" />
-                                      <span>{dayGws.length} GWS ({dayGws.reduce((a, b) => a + b.actualMinutes, 0)}m)</span>
-                                    </div>
-                                  )}
-                                </div>
+
+                                  {/* GWork Sessions (GWS) indicator */}
+                                  <div className={`flex items-center space-x-1 text-[10px] font-mono ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
+                                    <Timer className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">
+                                      {dayGws.length > 0
+                                        ? `${dayGws.length} GWS (${dayGwsMinutes}m)${dayGws[0]?.taskName ? ` • ${dayGws[0].taskName}` : ''}`
+                                        : '0 GWS'}
+                                    </span>
+                                  </div>
+
+                                  {/* Automatic Tasks Done indicator */}
+                                  <div
+                                    className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                      autoDone
+                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                        : 'bg-slate-950 text-slate-500 border-slate-800'
+                                    }`}
+                                  >
+                                    <span>{autoDone ? '✓ Auto Tasks Done' : '○ Auto Tasks Pending'}</span>
+                                  </div>
+                                </>
                               ) : (
                                 <div className="text-center py-2 text-[11px] text-slate-600 italic">
                                   — No record —
@@ -227,12 +263,20 @@ export const SpreadsheetMatrixView: React.FC = () => {
                     })}
 
                     {/* Week Total Column */}
-                    <td className="py-4 px-4 text-right border-l border-slate-800 bg-slate-950/40">
+                    <td className="py-4 px-4 text-right border-l border-slate-800 bg-slate-950/40 space-y-1.5 align-top">
                       <div className="text-sm font-extrabold font-mono text-amber-400">
                         {achievedScore} <span className="text-slate-500 text-xs">/ {totalPoints} Pts</span>
                       </div>
-                      <div className="text-[10px] text-slate-500 mt-1">
+                      <div className="text-[10px] text-slate-500">
                         {Math.round((achievedScore / Math.max(1, totalPoints)) * 100)}% achieved
+                      </div>
+                      <div className="pt-1 border-t border-slate-800/80 space-y-1 text-[10px] font-mono">
+                        <div className={weekGwsSessions.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}>
+                          GWS: {weekGwsSessions.length} ({(weekGwsMinutes / 60).toFixed(1)}h)
+                        </div>
+                        <div className={weekAutoDaysDone > 0 ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
+                          Auto Tasks: {weekAutoDaysDone}/7d
+                        </div>
                       </div>
                     </td>
 

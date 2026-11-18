@@ -155,8 +155,8 @@ export interface ThreeYearPlan {
 export interface ReviewEntry {
   id: string;
   title: string;
-  periodType: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'custom';
-  periodKey?: string; // e.g. '2026-11' for monthly, '2026-Q4' for quarterly
+  periodType: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
+  periodKey?: string; // e.g. '2026-11' for monthly, '2026-Q4' for quarterly, '2026' for yearly
   startDate: string;
   endDate: string;
   score?: number; // 1-10 execution/discipline rating for the period

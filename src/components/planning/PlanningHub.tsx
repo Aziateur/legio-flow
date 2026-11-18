@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStorage, PlanningSubTab, getCurrentWeekRange } from '../../context/StorageContext';
 import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
+import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
 import { WeeklyPlan } from '../../types/schema';
 import { 
   Calendar, 
@@ -21,7 +22,8 @@ import {
   ChevronRight,
   X,
   FilePlus,
-  Bell
+  Bell,
+  Table
 } from 'lucide-react';
 
 export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
@@ -242,6 +244,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               <div className="text-sm font-extrabold text-slate-100">
                 {planningSubTab === 'daily' && 'Daily Mission & Priorities'}
                 {planningSubTab === 'weekly' && 'Weekly Goal Crusher (10 Pts)'}
+                {planningSubTab === 'matrix' && 'Weeks Matrix (GWS & Automatic Tasks)'}
                 {planningSubTab === 'three_year' && '3-Year Strategic Roadmap'}
               </div>
             </div>
@@ -251,10 +254,10 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
           <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
             
             {/* Segmented Switcher Controls filtered by systemLevel */}
-            <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
+            <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800/80 overflow-x-auto">
               <button
                 onClick={() => setPlanningSubTab('daily')}
-                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
                   planningSubTab === 'daily'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
@@ -267,7 +270,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               {systemLevel >= 3 && (
                 <button
                   onClick={() => setPlanningSubTab('weekly')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
                     planningSubTab === 'weekly'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
@@ -278,10 +281,24 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 </button>
               )}
 
-              {systemLevel >= 4 && (
+              {systemLevel >= 3 && (
+                <button
+                  onClick={() => setPlanningSubTab('matrix')}
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                    planningSubTab === 'matrix'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Table className="w-3.5 h-3.5" />
+                  <span>Weeks Matrix</span>
+                </button>
+              )}
+
+              {systemLevel >= 5 && (
                 <button
                   onClick={() => setPlanningSubTab('three_year')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
                     planningSubTab === 'three_year'
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
@@ -366,6 +383,13 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       {/* VIEW 2: WEEKLY PLANNING */}
       {planningSubTab === 'weekly' && (
         <WeeklyGoalCrusherView />
+      )}
+
+      {/* VIEW 2B: WEEKS MATRIX */}
+      {planningSubTab === 'matrix' && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+          <SpreadsheetMatrixView />
+        </div>
       )}
 
       {/* VIEW 3: 3-YEAR STRATEGIC PLAN */}

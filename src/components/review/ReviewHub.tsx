@@ -34,7 +34,8 @@ import {
   Layers, 
   Plus, 
   X, 
-  FilePlus 
+  FilePlus,
+  Compass
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -102,6 +103,29 @@ const shiftQuarterKey = (quarterKey: string, delta: number): string => {
   return `${nextYear}-Q${nextQ}`;
 };
 
+const getYearInfo = (yearKey: string) => {
+  const year = parseInt(yearKey) || 2026;
+  const quarters = [1, 2, 3, 4].map(q => `${year}-Q${q}`);
+  const months = Array.from({ length: 12 }, (_, idx) => `${year}-${String(idx + 1).padStart(2, '0')}`);
+  const rawIndex = year - 2026 + 1;
+  const planYearIndex: 1 | 2 | 3 = rawIndex <= 1 ? 1 : rawIndex === 2 ? 2 : 3;
+  return {
+    yearKey: String(year),
+    year,
+    startDate: `${year}-01-01`,
+    endDate: `${year}-12-31`,
+    quarters,
+    months,
+    planYearIndex,
+    label: `Year ${planYearIndex} (${year})`
+  };
+};
+
+const shiftYearKey = (yearKey: string, delta: number): string => {
+  const year = parseInt(yearKey) || 2026;
+  return String(year + delta);
+};
+
 export const ReviewHub: React.FC = () => {
   const { 
     reviewSubTab, 
@@ -120,6 +144,8 @@ export const ReviewHub: React.FC = () => {
     selectedWeekId,
     setSelectedWeekId,
     saveWeeklyPlan,
+    threeYearPlan,
+    saveThreeYearPlan,
     reviews,
     systemLevel,
     saveReview,
@@ -133,19 +159,21 @@ export const ReviewHub: React.FC = () => {
 
   // Create Review Modal state
   const [showCreateReviewModal, setShowCreateReviewModal] = useState(false);
-  const [createReviewType, setCreateReviewType] = useState<'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('weekly');
+  const [createReviewType, setCreateReviewType] = useState<'yearly' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('weekly');
 
   // Vault states
-  const [vaultFilter, setVaultFilter] = useState<'all' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
+  const [vaultFilter, setVaultFilter] = useState<'all' | 'yearly' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
   const [vaultSearch, setVaultSearch] = useState('');
   const [copiedReviewId, setCopiedReviewId] = useState<string | null>(null);
 
-  // Monthly & Quarterly active period selection
+  // Monthly, Quarterly & Yearly active period selection
   const [selectedMonth, setSelectedMonth] = useState<string>(() => selectedDate.slice(0, 7));
   const [selectedQuarter, setSelectedQuarter] = useState<string>(() => getMonthInfo(selectedDate.slice(0, 7)).quarterKey);
+  const [selectedYear, setSelectedYear] = useState<string>(() => selectedDate.slice(0, 4));
   const [monthlyScaleFilter, setMonthlyScaleFilter] = useState<'all' | 'weekly' | 'daily' | 'gws'>('all');
   const [quarterlyScaleFilter, setQuarterlyScaleFilter] = useState<'all' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
-  const [copiedMacroType, setCopiedMacroType] = useState<'monthly' | 'quarterly' | null>(null);
+  const [yearlyScaleFilter, setYearlyScaleFilter] = useState<'all' | 'three_year' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
+  const [copiedMacroType, setCopiedMacroType] = useState<'monthly' | 'quarterly' | 'yearly' | null>(null);
 
   // GWS filter states
   const [gwsSearchQuery, setGwsSearchQuery] = useState('');
@@ -241,6 +269,12 @@ export const ReviewHub: React.FC = () => {
     );
   };
 
+  const getSavedYearlyReview = (yearKey: string): ReviewEntry | undefined => {
+    return reviews.find(
+      r => (r.periodType === 'yearly' && r.periodKey === yearKey) || r.id === `rev_yearly_${yearKey}`
+    );
+  };
+
   const upsertMonthlyReview = (monthKey: string, updates: Partial<ReviewEntry>) => {
     const info = getMonthInfo(monthKey);
     const existing = getSavedMonthlyReview(monthKey);
@@ -270,6 +304,27 @@ export const ReviewHub: React.FC = () => {
       title: updates.title ?? existing?.title ?? `${info.label} — Quarterly Strategic Review`,
       periodType: 'quarterly',
       periodKey: quarterKey,
+      startDate: info.startDate,
+      endDate: info.endDate,
+      score: updates.score ?? existing?.score ?? 0,
+      wins: updates.wins ?? existing?.wins ?? '',
+      blockers: updates.blockers ?? existing?.blockers ?? '',
+      courseCorrections: updates.courseCorrections ?? existing?.courseCorrections ?? '',
+      ratings: updates.ratings ?? existing?.ratings ?? { clarity: 4, consistency: 4, overall: 4 },
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    saveReview(entry);
+  };
+
+  const upsertYearlyReview = (yearKey: string, updates: Partial<ReviewEntry>) => {
+    const info = getYearInfo(yearKey);
+    const existing = getSavedYearlyReview(yearKey);
+    const entry: ReviewEntry = {
+      id: existing?.id || `rev_yearly_${info.yearKey}`,
+      title: updates.title ?? existing?.title ?? `${info.label} — Yearly 3-Year Framework Review`,
+      periodType: 'yearly',
+      periodKey: info.yearKey,
       startDate: info.startDate,
       endDate: info.endDate,
       score: updates.score ?? existing?.score ?? 0,
@@ -556,10 +611,186 @@ export const ReviewHub: React.FC = () => {
     ])
   ).sort();
 
+  const compileYearData = (yearKey: string) => {
+    const info = getYearInfo(yearKey);
+    const saved = getSavedYearlyReview(info.yearKey);
+
+    // 1. All 4 Quarters in this Year
+    const quartersData = info.quarters.map(qKey => compileQuarterData(qKey));
+
+    // 2. All active Months in this Year
+    const monthsData = info.months
+      .map(mKey => compileMonthData(mKey))
+      .filter(m => !!m.saved || m.weeks.length > 0 || m.days.length > 0 || m.gws.length > 0);
+
+    // 3. All Weekly Plans & Reviews in this Year
+    const weeks = Object.values(weeklyPlans)
+      .filter(
+        w =>
+          w.startDate <= info.endDate &&
+          w.endDate >= info.startDate &&
+          (w.tasks.length > 0 ||
+            w.focusTheme.trim().length > 0 ||
+            (w.winsNotes && w.winsNotes.trim().length > 0) ||
+            (w.problemsEncountered && w.problemsEncountered.trim().length > 0) ||
+            (w.courseCorrectionNotes && w.courseCorrectionNotes.trim().length > 0) ||
+            (w.reviewNotes && w.reviewNotes.trim().length > 0))
+      )
+      .sort((a, b) => a.weekNumber - b.weekNumber);
+
+    const weeklyPointsAchieved = weeks.reduce((acc, w) => acc + (w.achievedScore || 0), 0);
+    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
+    const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
+
+    // 4. All Daily Entries & Reviews in this Year
+    const days = Object.values(dailyEntries)
+      .filter(
+        d =>
+          d.date >= info.startDate &&
+          d.date <= info.endDate &&
+          (d.executionScore > 0 ||
+            (d.planNotes && d.planNotes.trim().length > 0) ||
+            (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
+            (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
+            d.automaticTasksCompleted)
+      )
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const scoredDays = days.filter(d => d.executionScore > 0);
+    const avgDailyScore =
+      scoredDays.length > 0
+        ? (scoredDays.reduce((acc, d) => acc + d.executionScore, 0) / scoredDays.length).toFixed(1)
+        : '0.0';
+    const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
+    const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
+    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
+    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+
+    // 5. All GWS Sprints in this Year
+    const gws = gwsSessions
+      .filter(s => s.date >= info.startDate && s.date <= info.endDate)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const gwsMinutes = gws.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+    const gwsHours = (gwsMinutes / 60).toFixed(1);
+    const avgGwsTotal =
+      gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
+
+    // 6. 3-Year Strategic Framework Milestones for this Year (Year 1/2/3)
+    const milestoneKey: 'year1Milestones' | 'year2Milestones' | 'year3Milestones' =
+      info.planYearIndex === 1
+        ? 'year1Milestones'
+        : info.planYearIndex === 2
+        ? 'year2Milestones'
+        : 'year3Milestones';
+
+    const pillarRollups = threeYearPlan.pillars.map(p => {
+      const yearMilestones = p[milestoneKey] || [];
+      return {
+        pillar: p,
+        milestones: yearMilestones,
+        completedCount: yearMilestones.filter(m => m.completed).length,
+        totalCount: yearMilestones.length
+      };
+    });
+
+    const completedMilestones = pillarRollups.reduce((acc, p) => acc + p.completedCount, 0);
+    const totalMilestones = pillarRollups.reduce((acc, p) => acc + p.totalCount, 0);
+
+    // Extracted smaller-scale Wins, Problems & Course Corrections across the Year
+    const rolledUpWins = [
+      ...pillarRollups.flatMap(pr =>
+        pr.milestones
+          .filter(m => m.completed)
+          .map(m => `• [3-Year Pillar: ${pr.pillar.title} — Y${info.planYearIndex}] ${m.text}`)
+      ),
+      ...quartersData
+        .filter(q => q.saved?.wins && q.saved.wins.trim())
+        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.wins.trim()}`),
+      ...monthsData
+        .filter(m => m.saved?.wins && m.saved.wins.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.wins.trim()}`),
+      ...weeks
+        .filter(w => w.winsNotes && w.winsNotes.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`)
+    ];
+
+    const rolledUpProblems = [
+      ...quartersData
+        .filter(q => q.saved?.blockers && q.saved.blockers.trim())
+        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.blockers.trim()}`),
+      ...monthsData
+        .filter(m => m.saved?.blockers && m.saved.blockers.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.blockers.trim()}`),
+      ...weeks
+        .filter(w => w.problemsEncountered && w.problemsEncountered.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${w.problemsEncountered!.trim()}`),
+      ...days
+        .filter(d => d.problemsEncountered && d.problemsEncountered.trim())
+        .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`)
+    ];
+
+    const rolledUpCorrections = [
+      ...quartersData
+        .filter(q => q.saved?.courseCorrections && q.saved.courseCorrections.trim())
+        .map(q => `• [${q.info.quarterKey} Quarterly] ${q.saved!.courseCorrections.trim()}`),
+      ...monthsData
+        .filter(m => m.saved?.courseCorrections && m.saved.courseCorrections.trim())
+        .map(m => `• [${m.info.label} Monthly] ${m.saved!.courseCorrections.trim()}`),
+      ...weeks
+        .filter(w => (w.courseCorrectionNotes || w.reviewNotes)?.trim())
+        .map(w => `• [Week ${w.weekNumber}] ${(w.courseCorrectionNotes || w.reviewNotes)!.trim()}`)
+    ];
+
+    return {
+      info,
+      saved,
+      milestoneKey,
+      pillarRollups,
+      completedMilestones,
+      totalMilestones,
+      quartersData,
+      monthsData,
+      weeks,
+      weeklyPointsAchieved,
+      weeklyPointsPossible,
+      avgWeeklyScore,
+      weeklyTasksDone,
+      weeklyTasksTotal,
+      days,
+      avgDailyScore,
+      dailyTasksDone,
+      dailyTasksTotal,
+      habitDaysLocked,
+      habitRatePct,
+      gws,
+      gwsMinutes,
+      gwsHours,
+      avgGwsTotal,
+      rolledUpWins,
+      rolledUpProblems,
+      rolledUpCorrections
+    };
+  };
+
+  const allKnownYears = Array.from(
+    new Set([
+      '2026',
+      '2027',
+      '2028',
+      selectedDate.slice(0, 4),
+      selectedYear,
+      ...allKnownQuarters.map(q => q.slice(0, 4)),
+      ...reviews.filter(r => r.periodType === 'yearly' && r.periodKey).map(r => r.periodKey!)
+    ])
+  ).sort();
+
   // --- UNIFIED VAULT ITEMS AGGREGATION ---
   interface VaultItem {
     id: string;
-    type: 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws';
+    type: 'yearly' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws';
     dateOrPeriod: string;
     title: string;
     scoreBadge?: string;
@@ -803,8 +1034,64 @@ export const ReviewHub: React.FC = () => {
     })
     .filter(Boolean) as VaultItem[];
 
+  // 6. Gather all Yearly reviews (from saved yearly reviews OR active years in the 3-Year Plan)
+  const yearlyVaultItems: VaultItem[] = allKnownYears
+    .map(yKey => {
+      const yData = compileYearData(yKey);
+      const hasActivity =
+        !!yData.saved ||
+        yData.weeks.length > 0 ||
+        yData.days.length > 0 ||
+        yData.gws.length > 0 ||
+        yData.totalMilestones > 0;
+      if (!hasActivity) return null;
+
+      const structuredYearlyReview = [
+        yData.saved?.wins?.trim() ? `1. Yearly Wins & 3-Year Milestones:\n${yData.saved.wins.trim()}` : '',
+        yData.saved?.blockers?.trim() ? `2. Structural Problems & Strategic Drift:\n${yData.saved.blockers.trim()}` : '',
+        yData.saved?.courseCorrections?.trim()
+          ? `3. Next Year Thesis & 3-Year Realignment:\n${yData.saved.courseCorrections.trim()}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      const autoRollupFallback = [
+        yData.rolledUpWins.length > 0 ? `Year Rolled-Up Wins (${yData.rolledUpWins.length}):\n${yData.rolledUpWins.slice(0, 6).join('\n')}` : '',
+        yData.rolledUpProblems.length > 0 ? `Year Rolled-Up Problems (${yData.rolledUpProblems.length}):\n${yData.rolledUpProblems.slice(0, 6).join('\n')}` : '',
+        yData.rolledUpCorrections.length > 0 ? `Year Rolled-Up Corrections (${yData.rolledUpCorrections.length}):\n${yData.rolledUpCorrections.slice(0, 6).join('\n')}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      return {
+        id: `vault_yearly_${yKey}`,
+        type: 'yearly' as const,
+        dateOrPeriod: `${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate})`,
+        title: yData.saved?.title || `${yData.info.label} — Yearly & 3-Year Strategic Review`,
+        scoreBadge:
+          yData.saved?.score && yData.saved.score > 0
+            ? `Year ${yData.saved.score}/10`
+            : `${yData.completedMilestones}/${yData.totalMilestones} 3Y milestones`,
+        scoreNumber: yData.saved?.score || yData.completedMilestones,
+        plannedOrContext: `3-Year Plan Horizon (${threeYearPlan.targetHorizon}):\n• Pillar Milestones (Year ${yData.info.planYearIndex}): ${yData.completedMilestones}/${yData.totalMilestones} done across ${threeYearPlan.pillars.length} pillars\n• Quarters: 4 (${yData.quartersData.filter(q => !!q.saved).length} reviewed) • Months: ${yData.monthsData.length} active\n• Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts (${yData.weeks.length} wks) • Daily Avg: ${yData.avgDailyScore}/10 (${yData.days.length}d)\n• GWS Deep Work: ${yData.gwsHours}h (${yData.gws.length} sprints)`,
+        reviewContent:
+          structuredYearlyReview ||
+          autoRollupFallback ||
+          'Click "Inspect / Edit" to synthesize your Yearly Review inside the 3-Year Plan framework.',
+        secondaryContent: `Contains: ${threeYearPlan.pillars.length} 3-Year Pillars • 4 Quarters • ${yData.monthsData.length} Months • ${yData.weeks.length} Weeks • ${yData.days.length} Days`,
+        rawDate: yData.info.endDate,
+        jumpTarget: () => {
+          setSelectedYear(yKey);
+          setReviewSubTab('yearly');
+        }
+      };
+    })
+    .filter(Boolean) as VaultItem[];
+
   // Combine and sort chronologically (most recent first)
   const allVaultItems: VaultItem[] = [
+    ...yearlyVaultItems,
     ...quarterlyVaultItems,
     ...monthlyVaultItems,
     ...weeklyVaultItems,
@@ -965,6 +1252,7 @@ export const ReviewHub: React.FC = () => {
                 {reviewSubTab === 'weekly' && 'Weekly Retrospective & Milestones'}
                 {reviewSubTab === 'monthly' && 'Monthly Review (Contains Weekly, Daily & GWS Data)'}
                 {reviewSubTab === 'quarterly' && 'Quarterly Review (Contains Monthly, Weekly, Daily & GWS Data)'}
+                {reviewSubTab === 'yearly' && 'Yearly Review & 3-Year Plan Framework'}
               </div>
             </div>
           </div>
@@ -1053,13 +1341,29 @@ export const ReviewHub: React.FC = () => {
                   <span>Quarterly</span>
                 </button>
               )}
+
+              {systemLevel >= 5 && (
+                <button
+                  onClick={() => setReviewSubTab('yearly')}
+                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    reviewSubTab === 'yearly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>Yearly</span>
+                </button>
+              )}
             </div>
 
             {/* Clear PROMINENT "Create Review" Button */}
             <button
               onClick={() => {
                 setCreateReviewType(
-                  reviewSubTab === 'quarterly'
+                  reviewSubTab === 'yearly'
+                    ? 'yearly'
+                    : reviewSubTab === 'quarterly'
                     ? 'quarterly'
                     : reviewSubTab === 'monthly'
                     ? 'monthly'
@@ -1123,6 +1427,10 @@ export const ReviewHub: React.FC = () => {
                     <strong className="text-base text-amber-400 font-extrabold">{allVaultItems.length}</strong>
                   </div>
                   <div className="px-3 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                    <span className="text-slate-500 block text-[9px]">YEARLY</span>
+                    <strong className="text-base text-rose-400 font-extrabold">{yearlyVaultItems.length}</strong>
+                  </div>
+                  <div className="px-3 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
                     <span className="text-slate-500 block text-[9px]">QUARTERLY</span>
                     <strong className="text-base text-cyan-400 font-extrabold">{quarterlyVaultItems.length}</strong>
                   </div>
@@ -1160,6 +1468,17 @@ export const ReviewHub: React.FC = () => {
                   }`}
                 >
                   All ({allVaultItems.length})
+                </button>
+
+                <button
+                  onClick={() => setVaultFilter('yearly')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                    vaultFilter === 'yearly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                  }`}
+                >
+                  Yearly ({yearlyVaultItems.length})
                 </button>
 
                 <button
@@ -1245,6 +1564,11 @@ export const ReviewHub: React.FC = () => {
                 const isCopied = copiedReviewId === item.id;
 
                 const getTypeStyle = () => {
+                  if (item.type === 'yearly') return {
+                    label: 'Yearly & 3-Year Review',
+                    color: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+                    icon: Compass
+                  };
                   if (item.type === 'quarterly') return {
                     label: 'Quarterly Strategic Review',
                     color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
@@ -3316,6 +3640,733 @@ export const ReviewHub: React.FC = () => {
       })()}
 
       {/* ========================================================================= */}
+      {/* SUB-TAB 6: YEARLY REVIEW WITH 3-YEAR PLAN FRAMEWORK                       */}
+      {/* ========================================================================= */}
+      {reviewSubTab === 'yearly' && (() => {
+        const yData = compileYearData(selectedYear);
+        const yearScore = yData.saved?.score || 0;
+        const yearWins = yData.saved?.wins || '';
+        const yearProblems = yData.saved?.blockers || '';
+        const yearCorrections = yData.saved?.courseCorrections || '';
+
+        const handleToggleYearPillarMilestone = (
+          pillarId: string,
+          milestoneKey: 'year1Milestones' | 'year2Milestones' | 'year3Milestones',
+          milestoneId: string
+        ) => {
+          const updatedPillars = threeYearPlan.pillars.map(p => {
+            if (p.id !== pillarId) return p;
+            return {
+              ...p,
+              [milestoneKey]: p[milestoneKey].map(m =>
+                m.id === milestoneId ? { ...m, completed: !m.completed } : m
+              )
+            };
+          });
+          saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
+        };
+
+        const handleCopyYearlyPlain = () => {
+          let text = `${yData.info.label} — Yearly Strategic Review\n\n`;
+          text += `3-Year Vision (${threeYearPlan.targetHorizon}): ${threeYearPlan.vision || 'Not set'}\n`;
+          text += `3-Year Strategy Core: ${threeYearPlan.strategyCore || 'Not set'}\n`;
+          text += `Yearly Score: ${yearScore > 0 ? `${yearScore}/10` : 'Unscored'}\n`;
+          text += `3-Year Pillar Milestones (Year ${yData.info.planYearIndex}): ${yData.completedMilestones}/${yData.totalMilestones} completed\n`;
+          text += `Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts across ${yData.weeks.length} weeks (Avg ${yData.avgWeeklyScore}/10)\n`;
+          text += `Daily Discipline: ${yData.days.length} days logged • Avg ${yData.avgDailyScore}/10 • Habits ${yData.habitRatePct}%\n`;
+          text += `GWS Deep Work: ${yData.gwsHours}h across ${yData.gws.length} sprints (Avg ${yData.avgGwsTotal}/15)\n`;
+
+          if (yearWins.trim()) {
+            text += `\n1. Yearly Wins & 3-Year Milestones Shipped:\n${yearWins.trim()}\n`;
+          }
+          if (yearProblems.trim()) {
+            text += `\n2. Major Problems, Systemic Bottlenecks & Strategic Drift:\n${yearProblems.trim()}\n`;
+          }
+          if (yearCorrections.trim()) {
+            text += `\n3. Next Year Strategic Thesis & 3-Year Roadmap Realignment:\n${yearCorrections.trim()}\n`;
+          }
+
+          navigator.clipboard.writeText(text.trim());
+          setCopiedMacroType('yearly');
+          setTimeout(() => setCopiedMacroType(null), 2500);
+        };
+
+        return (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+            {/* Year Navigation & Switcher Bar */}
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedYear(shiftYearKey(selectedYear, -1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Previous Year"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 block">
+                    Yearly 3-Year Framework Review ({yData.info.startDate} → {yData.info.endDate})
+                  </span>
+                  <div className="text-xl font-extrabold text-slate-100">
+                    {yData.info.label} — 3-Year Plan Strategic Review
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedYear(shiftYearKey(selectedYear, 1))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  title="Next Year"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 justify-end">
+                {allKnownYears.map(yKey => {
+                  const yMeta = getYearInfo(yKey);
+                  return (
+                    <button
+                      key={yKey}
+                      type="button"
+                      onClick={() => setSelectedYear(yKey)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all ${
+                        yKey === selectedYear
+                          ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {yMeta.yearKey} (Year {yMeta.planYearIndex})
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={handleCopyYearlyPlain}
+                  className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-sm transition-all"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiedMacroType === 'yearly' ? 'Copied Yearly Review!' : 'Copy Yearly Review'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Top 5 Macro Rollup KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400">
+                  3-Year Milestones (Year {yData.info.planYearIndex})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.completedMilestones} <span className="text-xs text-slate-500">/ {yData.totalMilestones} done</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Across {threeYearPlan.pillars.length} strategic pillars
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Year Weekly Points ({yData.weeks.length} wks)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.weeklyPointsAchieved} <span className="text-xs text-slate-500">/ {yData.weeklyPointsPossible} pts</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg {yData.avgWeeklyScore}/10 • {yData.weeklyTasksDone}/{yData.weeklyTasksTotal} goals
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
+                  Year Daily Execution ({yData.days.length}d)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.avgDailyScore} <span className="text-xs text-slate-500">/ 10 avg</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Habits: {yData.habitRatePct}% locked • Tasks: {yData.dailyTasksDone}/{yData.dailyTasksTotal}
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  Year GWS Deep Work ({yData.gws.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.gwsHours} <span className="text-xs text-slate-500">hours</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg Sprint Score: {yData.avgGwsTotal} / 15
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400">
+                    Yearly Score (1–10)
+                  </span>
+                  <span className="text-xs font-mono font-bold text-rose-300">
+                    {yearScore > 0 ? `${yearScore}/10` : 'Unscored'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => upsertYearlyReview(selectedYear, { score: sc })}
+                      className={`py-1 rounded-lg text-[11px] font-bold font-mono transition-all ${
+                        yearScore === sc
+                          ? 'bg-rose-500 text-slate-950 font-extrabold shadow'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 3-Year Strategic Framework & Interactive Pillar Alignment */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    3-Year Strategic Framework ({threeYearPlan.targetHorizon})
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Vision, Strategy Core & Year {yData.info.planYearIndex} Pillar Execution
+                  </h2>
+                </div>
+                <span className="text-xs font-mono text-amber-400 font-bold">
+                  Active Benchmark: Year {yData.info.planYearIndex} ({yData.info.yearKey})
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block">
+                    Core 3-Year Vision & Destination
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {threeYearPlan.vision || 'Define your 3-Year Vision in Planning Hub → 3-Year Plan.'}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
+                    Strategy Core & Operating Rules
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {threeYearPlan.strategyCore || 'Define your Strategy Core in Planning Hub → 3-Year Plan.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Pillar cards with Year 1 / Year 2 / Year 3 milestones */}
+              {threeYearPlan.pillars.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                  No Strategic Pillars defined yet in your 3-Year Plan.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {threeYearPlan.pillars.map(pillar => {
+                    const y1 = pillar.year1Milestones || [];
+                    const y2 = pillar.year2Milestones || [];
+                    const y3 = pillar.year3Milestones || [];
+                    const buckets: Array<{
+                      label: string;
+                      yearIdx: 1 | 2 | 3;
+                      key: 'year1Milestones' | 'year2Milestones' | 'year3Milestones';
+                      items: typeof y1;
+                    }> = [
+                      { label: 'Year 1 Milestones', yearIdx: 1, key: 'year1Milestones', items: y1 },
+                      { label: 'Year 2 Milestones', yearIdx: 2, key: 'year2Milestones', items: y2 },
+                      { label: 'Year 3 Milestones', yearIdx: 3, key: 'year3Milestones', items: y3 }
+                    ];
+
+                    return (
+                      <div key={pillar.id} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-100">{pillar.title}</div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">{pillar.subtitle}</div>
+                        </div>
+
+                        <div className="space-y-3">
+                          {buckets.map(b => {
+                            const isActiveYear = b.yearIdx === yData.info.planYearIndex;
+                            return (
+                              <div
+                                key={b.key}
+                                className={`p-3 rounded-xl border space-y-2 ${
+                                  isActiveYear
+                                    ? 'bg-rose-500/10 border-rose-500/30'
+                                    : 'bg-slate-900/60 border-slate-800/80'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between text-[11px] font-bold">
+                                  <span className={isActiveYear ? 'text-rose-400 uppercase tracking-wider' : 'text-slate-400'}>
+                                    {b.label} {isActiveYear ? '• ACTIVE YEAR' : ''}
+                                  </span>
+                                  <span className="font-mono text-slate-400">
+                                    {b.items.filter(m => m.completed).length}/{b.items.length}
+                                  </span>
+                                </div>
+
+                                {b.items.length === 0 ? (
+                                  <div className="text-[11px] text-slate-600 italic">No milestones logged.</div>
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    {b.items.map(m => (
+                                      <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => handleToggleYearPillarMilestone(pillar.id, b.key, m.id)}
+                                        className="w-full flex items-start space-x-2 text-left text-xs hover:text-amber-300 transition-colors"
+                                      >
+                                        {m.completed ? (
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                                        ) : (
+                                          <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
+                                        )}
+                                        <span className={m.completed ? 'line-through text-slate-500' : 'text-slate-200'}>
+                                          {m.text}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {pillar.boundariesAndCheckpoints.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800 space-y-1">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block">
+                              Boundaries & Checkpoints
+                            </span>
+                            {pillar.boundariesAndCheckpoints.map((bp, i) => (
+                              <div key={i} className="text-[11px] text-slate-400">
+                                • {bp}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Smaller Time-Scale Reviews Container (Quarterly + Monthly + Weekly + Daily + GWS) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400">
+                    All Contained Smaller-Scale Reviews ({yData.info.label})
+                  </span>
+                  <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                    Quarterly, Monthly, Weekly, Daily Reviews & GWS Sprints in {yData.info.yearKey}
+                  </h2>
+                </div>
+
+                <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
+                  {(
+                    [
+                      { id: 'all', label: 'All Scales' },
+                      { id: 'quarterly', label: 'Quarterly (4)' },
+                      { id: 'monthly', label: `Monthly (${yData.monthsData.length})` },
+                      { id: 'weekly', label: `Weekly (${yData.weeks.length})` },
+                      { id: 'daily', label: `Daily (${yData.days.length})` },
+                      { id: 'gws', label: `GWS (${yData.gws.length})` }
+                    ] as const
+                  ).map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setYearlyScaleFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                        yearlyScaleFilter === tab.id
+                          ? 'bg-rose-500 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 1. Quarterly Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'quarterly') && (
+                <div className="space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400 flex items-center space-x-1.5">
+                    <Award className="w-4 h-4" />
+                    <span>1. Quarterly Reviews in {yData.info.yearKey} (Q1 – Q4)</span>
+                  </span>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {yData.quartersData.map(q => (
+                      <div key={q.info.quarterKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-mono font-bold text-cyan-400">{q.info.quarterKey}</span>
+                            <div className="font-bold text-slate-100 text-[11px]">{q.info.label}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedQuarter(q.info.quarterKey);
+                              setReviewSubTab('quarterly');
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                            title="Inspect Quarter Review"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80 font-mono text-[11px] text-slate-400 space-y-0.5">
+                          <div>Score: {q.saved?.score ? `${q.saved.score}/10` : 'Unscored'}</div>
+                          <div>Weeks: {q.weeks.length} ({q.weeklyPointsAchieved}/{q.weeklyPointsPossible} pts)</div>
+                          <div>Days: {q.days.length} • GWS: {q.gwsHours}h</div>
+                        </div>
+
+                        {q.saved?.wins?.trim() ? (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-emerald-400">Wins:</strong> {q.saved.wins.trim()}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-600 italic">Quarterly wins pending.</div>
+                        )}
+                        {q.saved?.blockers?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-orange-400">Problems:</strong> {q.saved.blockers.trim()}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Monthly Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'monthly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center space-x-1.5">
+                    <Layers className="w-4 h-4" />
+                    <span>2. Active Monthly Reviews in {yData.info.yearKey} ({yData.monthsData.length})</span>
+                  </span>
+
+                  {yData.monthsData.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No active monthly reviews in {yData.info.yearKey} yet.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-h-80 overflow-y-auto pr-1">
+                      {yData.monthsData.map(m => (
+                        <div key={m.info.monthKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-mono text-[11px] font-bold text-purple-400">{m.info.monthKey}</span>
+                              <div className="font-bold text-slate-100">{m.info.label}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedMonth(m.info.monthKey);
+                                setReviewSubTab('monthly');
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-400">
+                            Weeks: {m.weeks.length} ({m.weeklyPointsAchieved}/{m.weeklyPointsPossible}pts) • Days: {m.days.length} • GWS: {m.gwsHours}h
+                          </div>
+                          {m.saved?.wins?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Wins:</strong> {m.saved.wins.trim()}
+                            </div>
+                          )}
+                          {m.saved?.blockers?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {m.saved.blockers.trim()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. Weekly Retrospectives in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'weekly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                    <Target className="w-4 h-4" />
+                    <span>3. Weekly Plans & Retrospectives in {yData.info.yearKey} ({yData.weeks.length})</span>
+                  </span>
+
+                  {yData.weeks.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No weekly plans or retrospectives logged in {yData.info.yearKey}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {yData.weeks.map(w => (
+                        <div key={w.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-amber-400">
+                              Week {w.weekNumber} ({w.startDate} → {w.endDate})
+                            </span>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono text-slate-300 font-bold">
+                                {w.achievedScore}/{w.totalPossibleScore} pts
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectWeekGlobal(w.id);
+                                  setReviewSubTab('weekly');
+                                }}
+                                className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                          {w.focusTheme && <div className="font-semibold text-slate-200">{w.focusTheme}</div>}
+                          {w.winsNotes?.trim() && (
+                            <p className="text-[11px] text-slate-400">
+                              <strong className="text-emerald-400">Wins:</strong> {w.winsNotes.trim()}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. Daily Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'daily') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 flex items-center space-x-1.5">
+                    <CalendarIcon className="w-4 h-4" />
+                    <span>4. Daily Reviews in {yData.info.yearKey} ({yData.days.length})</span>
+                  </span>
+
+                  {yData.days.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily reviews logged in {yData.info.yearKey}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
+                      {yData.days.map(d => (
+                        <div key={d.date} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-400">{d.date}</span>
+                            <span className="font-mono text-[11px] text-amber-400">
+                              Tasks {d.mainTasksCompleted}/{d.mainTasksTotal} • Score {d.executionScore}/10
+                            </span>
+                          </div>
+                          {d.problemsEncountered?.trim() && (
+                            <p className="text-[11px] text-slate-400 truncate">Problems: {d.problemsEncountered.trim()}</p>
+                          )}
+                          {d.reviewNotes?.trim() && (
+                            <p className="text-[11px] text-slate-300 truncate">Reflexion: {d.reviewNotes.trim()}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 5. GWS Sprints in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'gws') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                    <Timer className="w-4 h-4" />
+                    <span>5. GWS Deep Work Sprints in {yData.info.yearKey} ({yData.gws.length})</span>
+                  </span>
+
+                  {yData.gws.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS sprints logged in {yData.info.yearKey}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
+                      {yData.gws.map(s => (
+                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                            <span className="font-mono text-[11px] text-amber-400 shrink-0">
+                              {s.date} • {s.actualMinutes}m • {s.ratings.total}/15
+                            </span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-300 truncate">Done: {s.reflexions.accomplished}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Yearly Retrospective & 3-Year Course Correction Editor */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    Yearly Retrospective & 3-Year Roadmap Realignment
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Synthesize {yData.info.label}
+                  </h2>
+                </div>
+
+                {(yData.rolledUpWins.length > 0 || yData.rolledUpProblems.length > 0 || yData.rolledUpCorrections.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      upsertYearlyReview(selectedYear, {
+                        wins: yearWins.trim()
+                          ? `${yearWins.trim()}\n${yData.rolledUpWins.join('\n')}`
+                          : yData.rolledUpWins.join('\n'),
+                        blockers: yearProblems.trim()
+                          ? `${yearProblems.trim()}\n${yData.rolledUpProblems.join('\n')}`
+                          : yData.rolledUpProblems.join('\n'),
+                        courseCorrections: yearCorrections.trim()
+                          ? `${yearCorrections.trim()}\n${yData.rolledUpCorrections.join('\n')}`
+                          : yData.rolledUpCorrections.join('\n')
+                      });
+                    }}
+                    className="px-4 py-2 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold transition-all"
+                  >
+                    + Auto-Import All Smaller-Scale Reviews & 3-Year Milestones into Yearly Draft
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      1. Yearly Wins, 3-Year Milestones Shipped & Major Breakthroughs
+                    </label>
+                    {yData.rolledUpWins.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertYearlyReview(selectedYear, {
+                            wins: yearWins.trim()
+                              ? `${yearWins.trim()}\n${yData.rolledUpWins.join('\n')}`
+                              : yData.rolledUpWins.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
+                      >
+                        + Pull 3-Year, Quarterly & Monthly Wins ({yData.rolledUpWins.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={yearWins}
+                    onChange={e => upsertYearlyReview(selectedYear, { wins: e.target.value })}
+                    rows={4}
+                    placeholder="What major 3-Year milestones, capabilities, and systems did you accomplish this year?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
+                      2. Major Problems, Systemic Bottlenecks & Strategic Drift
+                    </label>
+                    {yData.rolledUpProblems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertYearlyReview(selectedYear, {
+                            blockers: yearProblems.trim()
+                              ? `${yearProblems.trim()}\n${yData.rolledUpProblems.join('\n')}`
+                              : yData.rolledUpProblems.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
+                      >
+                        + Pull Quarterly, Monthly & Weekly Problems ({yData.rolledUpProblems.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={yearProblems}
+                    onChange={e => upsertYearlyReview(selectedYear, { blockers: e.target.value })}
+                    rows={4}
+                    placeholder="Where did you drift from your 3-Year Vision? What structural bottlenecks persisted across quarters?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      3. Next Year Strategic Thesis & 3-Year Roadmap Realignment
+                    </label>
+                    {yData.rolledUpCorrections.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertYearlyReview(selectedYear, {
+                            courseCorrections: yearCorrections.trim()
+                              ? `${yearCorrections.trim()}\n${yData.rolledUpCorrections.join('\n')}`
+                              : yData.rolledUpCorrections.join('\n')
+                          })
+                        }
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
+                      >
+                        + Pull Quarterly, Monthly & Weekly Corrections ({yData.rolledUpCorrections.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={yearCorrections}
+                    onChange={e => upsertYearlyReview(selectedYear, { courseCorrections: e.target.value })}
+                    rows={4}
+                    placeholder="How does the 3-Year Plan evolve for next year? Define your core thesis, boundaries, and major shifts."
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
+                  <span>Autosaved to Review Vault & Cloud Sync</span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('vault')}
+                    className="text-amber-400 hover:text-amber-300 font-bold"
+                  >
+                    Open Review Vault →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
       {/* GLOBAL CREATE REVIEW MODAL (Unambiguous, Prominent Creation Center)        */}
       {/* ========================================================================= */}
       {showCreateReviewModal && (
@@ -3340,7 +4391,18 @@ export const ReviewHub: React.FC = () => {
             </div>
 
             {/* Type selector */}
-            <div className="grid grid-cols-5 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCreateReviewType('yearly')}
+                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
+                  createReviewType === 'yearly'
+                    ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Yearly
+              </button>
               <button
                 type="button"
                 onClick={() => setCreateReviewType('quarterly')}
@@ -3350,7 +4412,7 @@ export const ReviewHub: React.FC = () => {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                🏆 Quarterly
+                Quarterly
               </button>
               <button
                 type="button"
@@ -3361,7 +4423,7 @@ export const ReviewHub: React.FC = () => {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                📊 Monthly
+                Monthly
               </button>
               <button
                 type="button"
@@ -3372,7 +4434,7 @@ export const ReviewHub: React.FC = () => {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                🎯 Weekly
+                Weekly
               </button>
               <button
                 type="button"
@@ -3383,7 +4445,7 @@ export const ReviewHub: React.FC = () => {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                📅 Daily
+                Daily
               </button>
               <button
                 type="button"
@@ -3394,9 +4456,42 @@ export const ReviewHub: React.FC = () => {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                ⏱️ GWS
+                GWS
               </button>
             </div>
+
+            {/* FORM 00: YEARLY REVIEW CREATION */}
+            {createReviewType === 'yearly' && (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Year (3-Year Horizon)</label>
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none"
+                  >
+                    {allKnownYears.map(yKey => (
+                      <option key={yKey} value={yKey}>
+                        {getYearInfo(yKey).label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Opens the Yearly Review & 3-Year Strategic Framework containing all Pillar Milestones, Quarterly, Monthly, Weekly, Daily, and GWS data for {getYearInfo(selectedYear).label}.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateReviewModal(false);
+                    setReviewSubTab('yearly');
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-rose-500/20"
+                >
+                  Open {getYearInfo(selectedYear).label} Yearly Review & Rollup →
+                </button>
+              </div>
+            )}
 
             {/* FORM 0A: QUARTERLY REVIEW CREATION */}
             {createReviewType === 'quarterly' && (
