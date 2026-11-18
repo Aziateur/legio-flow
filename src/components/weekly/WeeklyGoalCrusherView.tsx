@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useStorage, getCurrentWeekRange } from '../../context/StorageContext';
+import { useStorage, getCurrentWeekRange, getWeekRangeForWeekNumber } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { 
   Target, 
@@ -171,13 +171,13 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     const maxNum = existingWeekNums.length > 0 ? Math.max(...existingWeekNums) : 1;
     const nextNum = maxNum + 1;
     const nextId = `week_${nextNum}`;
-    const currentRange = getCurrentWeekRange(selectedDate);
+    const nextRange = getWeekRangeForWeekNumber(nextNum);
 
     const newPlan: WeeklyPlan = {
       id: nextId,
       weekNumber: nextNum,
-      startDate: currentRange.startDate,
-      endDate: currentRange.endDate,
+      startDate: nextRange.startDate,
+      endDate: nextRange.endDate,
       focusTheme: '',
       notes: '',
       tasks: [],
@@ -238,30 +238,48 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         </div>
       )}
 
-      {/* Week Switcher Minimal Bar */}
-      <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-        <div className="flex items-center space-x-1.5 overflow-x-auto">
+      {/* Week Switcher Minimal Bar (Shows all weeks sequentially, including empty weeks) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
           {Object.values(weeklyPlans)
             .sort((a, b) => a.weekNumber - b.weekNumber)
             .map((p) => {
               const isSelected = p.id === plan.id;
+              const isEmptyWeek = p.tasks.length === 0 && !p.focusTheme.trim();
+              const isCurrentCalendarWeek = p.startDate <= todayDate && todayDate <= p.endDate;
               return (
                 <button
                   key={p.id}
                   onClick={() => setSelectedWeekId(p.id)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold font-mono transition-all ${
+                  title={`Week ${p.weekNumber}: ${p.startDate} → ${p.endDate}${isEmptyWeek ? ' (Empty - No Plan)' : ` (${p.achievedScore}/10 pts)`}`}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all flex items-center space-x-1.5 shrink-0 ${
                     isSelected
                       ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                      : isEmptyWeek
+                      ? 'bg-slate-950/70 text-slate-500 hover:text-slate-300 border border-dashed border-slate-800'
+                      : 'bg-slate-900 text-slate-300 hover:text-slate-100 border border-slate-800'
                   }`}
                 >
-                  Week {p.weekNumber}
+                  <span>Week {p.weekNumber}</span>
+                  {isCurrentCalendarWeek && !isSelected && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Current Calendar Week" />
+                  )}
+                  {!isEmptyWeek && !isSelected && (
+                    <span className="text-[10px] text-amber-400">
+                      {p.achievedScore}p
+                    </span>
+                  )}
+                  {isEmptyWeek && !isSelected && (
+                    <span className="text-[9px] uppercase text-slate-600 font-normal">
+                      Empty
+                    </span>
+                  )}
                 </button>
               );
             })}
           <button
             onClick={handleCreateNewWeek}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-200 hover:bg-slate-900 transition-colors"
+            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-200 hover:bg-slate-900 transition-colors shrink-0"
           >
             + New Week
           </button>

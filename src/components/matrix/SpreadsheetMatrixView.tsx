@@ -42,78 +42,24 @@ export const SpreadsheetMatrixView: React.FC = () => {
     return days;
   };
 
-  // Build dynamic weeks list combining stored weeklyPlans and ensuring current week is visible
+  // Build dynamic weeks list from all continuous weeklyPlans (including empty weeks)
   const buildWeeksList = () => {
-    const baseWeeks: Array<{
-      id: string;
-      title: string;
-      focus: string;
-      score: number;
-      startDate: string;
-      endDate: string;
-      days: string[];
-    }> = [
-      {
-        id: 'week_1',
-        title: 'Week 1',
-        focus: weeklyPlans['week_1']?.focusTheme || 'systems lauched',
-        score: weeklyPlans['week_1']?.achievedScore || 6,
-        startDate: '2026-10-12',
-        endDate: '2026-10-18',
-        days: getDaysFromStart('2026-10-12')
-      },
-      {
-        id: 'week_2',
-        title: 'Week 2',
-        focus: weeklyPlans['week_2']?.focusTheme || 'trading strategy & calibration',
-        score: weeklyPlans['week_2']?.achievedScore || 0,
-        startDate: '2026-10-19',
-        endDate: '2026-10-25',
-        days: getDaysFromStart('2026-10-19')
-      },
-      {
-        id: 'week_3',
-        title: 'Week 3',
-        focus: weeklyPlans['week_3']?.focusTheme || 'Discord cohort & Miro roadmap',
-        score: weeklyPlans['week_3']?.achievedScore || 0,
-        startDate: '2026-10-26',
-        endDate: '2026-11-01',
-        days: getDaysFromStart('2026-10-26')
-      }
-    ];
-
-    // Add any custom weeklyPlans beyond week_1..3
-    Object.values(weeklyPlans).forEach(wp => {
-      if (!baseWeeks.some(bw => bw.id === wp.id)) {
-        const range = getCurrentWeekRange(wp.startDate);
-        baseWeeks.push({
-          id: wp.id,
-          title: `Week ${wp.weekNumber}`,
-          focus: wp.focusTheme || 'Weekly Execution',
-          score: wp.achievedScore || 0,
-          startDate: range.startDate,
-          endDate: range.endDate,
-          days: range.days
-        });
-      }
+    const sortedPlans = Object.values(weeklyPlans).sort((a, b) => a.weekNumber - b.weekNumber);
+    return sortedPlans.map(wp => {
+      const range = getCurrentWeekRange(wp.startDate);
+      const isEmpty = wp.tasks.length === 0 && !wp.focusTheme.trim();
+      const isCurrentWeek = range.days.includes(todayDate);
+      return {
+        id: wp.id,
+        title: `Week ${wp.weekNumber}${isCurrentWeek ? ' (Current)' : ''}`,
+        focus: wp.focusTheme.trim() || (isEmpty ? '— Empty Week (No Plan) —' : 'Weekly Execution'),
+        isEmpty,
+        score: wp.achievedScore || 0,
+        startDate: range.startDate,
+        endDate: range.endDate,
+        days: range.days
+      };
     });
-
-    // Ensure the real current calendar week is always present in the matrix
-    const currentWeekRange = getCurrentWeekRange(todayDate);
-    const hasCurrentWeek = baseWeeks.some(w => w.days.includes(todayDate));
-    if (!hasCurrentWeek) {
-      baseWeeks.push({
-        id: `week_current_${currentWeekRange.startDate}`,
-        title: 'Current Week',
-        focus: 'Active Calendar Week',
-        score: 0,
-        startDate: currentWeekRange.startDate,
-        endDate: currentWeekRange.endDate,
-        days: currentWeekRange.days
-      });
-    }
-
-    return baseWeeks.sort((a, b) => a.startDate.localeCompare(b.startDate));
   };
 
   const weeksList = buildWeeksList();

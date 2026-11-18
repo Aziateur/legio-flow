@@ -1064,23 +1064,34 @@ export const ReviewHub: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 flex-wrap">
-              {Object.values(weeklyPlans).map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setSelectedWeekId(p.id);
-                    setReviewTargetWeekId(p.id);
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    p.id === targetPlanForReview.id
-                      ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 shadow-md shadow-amber-500/20'
-                      : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
-                  }`}
-                >
-                  Week {p.weekNumber}
-                </button>
-              ))}
+            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1.5">
+              {Object.values(weeklyPlans)
+                .sort((a, b) => a.weekNumber - b.weekNumber)
+                .map((p) => {
+                  const isEmpty = p.tasks.length === 0 && !p.focusTheme.trim();
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => {
+                        setSelectedWeekId(p.id);
+                        setReviewTargetWeekId(p.id);
+                      }}
+                      title={`Week ${p.weekNumber}: ${p.startDate} → ${p.endDate}`}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all flex items-center space-x-1 ${
+                        p.id === targetPlanForReview.id
+                          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-400 shadow-md shadow-amber-500/20'
+                          : isEmpty
+                          ? 'bg-slate-950/60 text-slate-500 border border-dashed border-slate-800 hover:text-slate-300'
+                          : 'bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span>Week {p.weekNumber}</span>
+                      {isEmpty && p.id !== targetPlanForReview.id && (
+                        <span className="text-[9px] uppercase text-slate-600 font-normal">Empty</span>
+                      )}
+                    </button>
+                  );
+                })}
 
               <button
                 onClick={() => setShowNewWeekForm(true)}

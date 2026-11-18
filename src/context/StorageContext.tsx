@@ -53,6 +53,48 @@ export const getWeekNumberForDate = (dateStr: string): number => {
   return Math.max(1, Math.floor(diffDays / 7) + 1);
 };
 
+// Get exact Monday–Sunday range for a given sequential week number (Week 1 = 2026-10-12 → 2026-10-18)
+export const getWeekRangeForWeekNumber = (weekNumber: number): { startDate: string; endDate: string; days: string[] } => {
+  const epochMonday = new Date('2026-10-12T12:00:00');
+  epochMonday.setDate(epochMonday.getDate() + (Math.max(1, weekNumber) - 1) * 7);
+  const yyyy = epochMonday.getFullYear();
+  const mm = String(epochMonday.getMonth() + 1).padStart(2, '0');
+  const dd = String(epochMonday.getDate()).padStart(2, '0');
+  return getCurrentWeekRange(`${yyyy}-${mm}-${dd}`);
+};
+
+// Ensure all weeks from Week 1 up to the highest week / target date exist without any gaps
+export const ensureContinuousWeeks = (
+  plans: Record<string, WeeklyPlan>,
+  targetDateStr: string = getTodayDateString()
+): Record<string, WeeklyPlan> => {
+  const next = { ...plans };
+  const targetWeekNum = getWeekNumberForDate(targetDateStr);
+  const existingNums = Object.values(next).map(p => p.weekNumber);
+  const maxWeekNum = Math.max(targetWeekNum, ...(existingNums.length > 0 ? existingNums : [1]));
+
+  for (let w = 1; w <= maxWeekNum; w++) {
+    const weekId = `week_${w}`;
+    if (!next[weekId]) {
+      const range = getWeekRangeForWeekNumber(w);
+      next[weekId] = {
+        id: weekId,
+        weekNumber: w,
+        startDate: range.startDate,
+        endDate: range.endDate,
+        focusTheme: '',
+        notes: '',
+        tasks: [],
+        totalPossibleScore: 10,
+        achievedScore: 0,
+        rewards: [],
+        updatedAt: new Date().toISOString()
+      };
+    }
+  }
+  return next;
+};
+
 interface StorageContextType {
   templates: Template[];
   dailyEntries: Record<string, DailyEntry>;
@@ -155,9 +197,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [weeklyPlans, setWeeklyPlans] = useState<Record<string, WeeklyPlan>>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.WEEKLY);
-      return saved ? JSON.parse(saved) : INITIAL_WEEKLY_PLANS;
+      const base = saved ? JSON.parse(saved) : INITIAL_WEEKLY_PLANS;
+      return ensureContinuousWeeks(base, getTodayDateString());
     } catch {
-      return INITIAL_WEEKLY_PLANS;
+      return ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, getTodayDateString());
     }
   });
 
@@ -225,15 +268,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return `week_${weekNum}`;
   });
 
-  // Ensure the week for selectedDate always exists in weeklyPlans and stays synced
+  // Ensure all weeks up to selectedDate exist continuously and selectedWeekId stays synced
   useEffect(() => {
     const { weekId, createdPlan } = resolveWeekForDate(selectedDate, weeklyPlans);
-    if (createdPlan) {
-      setWeeklyPlans(prev => ({
-        ...prev,
-        [weekId]: createdPlan
-      }));
-    }
+    setWeeklyPlans(prev => {
+      const withTarget = createdPlan ? { ...prev, [weekId]: createdPlan } : prev;
+      return ensureContinuousWeeks(withTarget, selectedDate);
+    });
     if (selectedWeekId !== weekId) {
       setSelectedWeekIdState(weekId);
       try {
@@ -653,11 +694,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setTemplates(DEFAULT_TEMPLATES);
     setDailyEntries(INITIAL_DAILY_ENTRIES);
     setGwsSessions(INITIAL_GWS_SESSIONS);
-    setWeeklyPlans(INITIAL_WEEKLY_PLANS);
+    setWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr));
     setThreeYearPlan(INITIAL_THREE_YEAR_PLAN);
     setReviews([]);
     setTodayDate(nowStr);
-    setSelectedDate(nowStr);
+    setSelectedDateState(nowStr);
   };
 
   return (
