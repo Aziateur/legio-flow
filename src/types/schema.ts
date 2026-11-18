@@ -107,6 +107,7 @@ export interface DailyEntry {
   planNotes: string; // e.g. Day priorities
   priorityItems?: DailyPriorityItem[];
   gwsSessionIds: string[];
+  problemsEncountered?: string;
   reviewNotes?: string;
   customFieldValues: Record<string, any>;
   updatedAt: string;
@@ -123,6 +124,9 @@ export interface WeeklyPlan {
   totalPossibleScore: number; // 10
   achievedScore: number;
   rewards: RewardTier[]; // 6+, 7+, 8+, 9+, 10
+  winsNotes?: string;
+  problemsEncountered?: string;
+  courseCorrectionNotes?: string;
   reviewNotes?: string;
   updatedAt: string;
 }

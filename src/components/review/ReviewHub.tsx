@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useStorage, ReviewSubTab, getCurrentWeekRange } from '../../context/StorageContext';
+import {
+  useStorage,
+  ReviewSubTab,
+  getCurrentWeekRange,
+  getPriorityItemsForEntry,
+  formatPriorityItemsToPlanNotes
+} from '../../context/StorageContext';
 import { WeeklyPlan, ReviewEntry } from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { 
@@ -8,7 +14,8 @@ import {
   Target, 
   TrendingUp, 
   Calendar as CalendarIcon, 
-  CheckCircle2, 
+  CheckCircle2,
+  Circle, 
   AlertTriangle, 
   Sparkles, 
   Flame, 
@@ -77,9 +84,11 @@ export const ReviewHub: React.FC = () => {
   const targetPlanForReview = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
 
   const [reviewTitle, setReviewTitle] = useState(`Week ${targetPlanForReview.weekNumber} Retrospective & Course Correction`);
-  const [winsText, setWinsText] = useState('');
-  const [blockersText, setBlockersText] = useState('');
-  const [courseCorrectionsText, setCourseCorrectionsText] = useState(targetPlanForReview.reviewNotes || '');
+  const [winsText, setWinsText] = useState(targetPlanForReview.winsNotes || '');
+  const [blockersText, setBlockersText] = useState(targetPlanForReview.problemsEncountered || '');
+  const [courseCorrectionsText, setCourseCorrectionsText] = useState(
+    targetPlanForReview.courseCorrectionNotes || targetPlanForReview.reviewNotes || ''
+  );
   const [clarityRating, setClarityRating] = useState(4);
   const [consistencyRating, setConsistencyRating] = useState(4);
   const [overallRating, setOverallRating] = useState(4);
@@ -94,6 +103,7 @@ export const ReviewHub: React.FC = () => {
   // Daily review modal states
   const [modalDailyDate, setModalDailyDate] = useState<string>(selectedDate);
   const [modalDailyScore, setModalDailyScore] = useState<number>(8);
+  const [modalDailyProblems, setModalDailyProblems] = useState<string>('');
   const [modalDailyNotes, setModalDailyNotes] = useState<string>('');
 
   // GWS quick review modal states
@@ -107,14 +117,19 @@ export const ReviewHub: React.FC = () => {
   const [modalGwsHeldBack, setModalGwsHeldBack] = useState<string>('');
   const [modalGwsImproveNext, setModalGwsImproveNext] = useState<string>('');
 
+  // Keep reviewTargetWeekId synchronized when global selectedWeekId changes
+  useEffect(() => {
+    setReviewTargetWeekId(selectedWeekId);
+  }, [selectedWeekId]);
+
   // Auto-sync weekly review form when target plan changes
   useEffect(() => {
     const plan = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
-    setReviewTitle(`Week ${plan.weekNumber} Retrospective: ${plan.focusTheme}`);
-    if (plan.reviewNotes) {
-      setCourseCorrectionsText(plan.reviewNotes);
-    }
-  }, [reviewTargetWeekId, currentWeeklyPlan]);
+    setReviewTitle(`Week ${plan.weekNumber} Retrospective${plan.focusTheme ? `: ${plan.focusTheme}` : ''}`);
+    setWinsText(plan.winsNotes || '');
+    setBlockersText(plan.problemsEncountered || '');
+    setCourseCorrectionsText(plan.courseCorrectionNotes || plan.reviewNotes || '');
+  }, [reviewTargetWeekId, currentWeeklyPlan.id]);
 
   // Computed GWS metrics
   const totalGwsHours = (gwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0) / 60).toFixed(1);
@@ -158,41 +173,110 @@ export const ReviewHub: React.FC = () => {
 
   // 1. Gather all Daily reviews
   const dailyVaultItems: VaultItem[] = Object.values(dailyEntries)
-    .filter(d => (d.reviewNotes && d.reviewNotes.trim().length > 0) || d.executionScore > 0 || (d.planNotes && d.planNotes.trim().length > 0))
-    .map(d => ({
-      id: `vault_daily_${d.date}`,
-      type: 'daily',
-      dateOrPeriod: d.date,
-      title: `Daily Review: ${d.date}`,
-      scoreBadge: d.executionScore > 0 ? `Execution ${d.executionScore}/10` : undefined,
-      scoreNumber: d.executionScore,
-      plannedOrContext: d.planNotes ? `Mission Plan:\n${d.planNotes}` : undefined,
-      reviewContent: d.reviewNotes || 'No specific course correction note logged.',
-      secondaryContent: `Tasks Completed: ${d.mainTasksCompleted}/${d.mainTasksTotal} • Automatic Habits: ${d.automaticTasksCompleted ? 'Yes (Locked In)' : 'Pending'} • GWS Sessions: ${d.gwsSessionIds.length}`,
-      rawDate: d.date,
-      jumpTarget: () => {
-        selectDateGlobal(d.date);
-        setReviewSubTab('daily');
-      }
-    }));
+    .filter(
+      d =>
+        (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
+        (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
+        d.executionScore > 0 ||
+        (d.planNotes && d.planNotes.trim().length > 0)
+    )
+    .map(d => {
+      const dayGws = gwsSessions.filter(s => s.date === d.date);
+      const gwsSummary =
+        dayGws.length > 0
+          ? `\n\nGWS Sprints (${dayGws.length}):\n` +
+            dayGws.map(s => `• ${s.taskName} (${s.actualMinutes}m, ${s.ratings.total}/15)`).join('\n')
+          : '';
+      const problemsPart =
+        d.problemsEncountered && d.problemsEncountered.trim()
+          ? `⚠️ Problems Encountered:\n${d.problemsEncountered.trim()}\n\n`
+          : '';
+      const reflexionPart =
+        d.reviewNotes && d.reviewNotes.trim()
+          ? `⚡ Reflexion & Course Correction:\n${d.reviewNotes.trim()}`
+          : 'No specific course correction note logged.';
 
-  // 2. Gather all Weekly reviews
-  const weeklyVaultItems: VaultItem[] = Object.values(weeklyPlans).map(w => ({
-    id: `vault_weekly_${w.id}`,
-    type: 'weekly',
-    dateOrPeriod: `Week ${w.weekNumber} (${w.startDate} → ${w.endDate})`,
-    title: `Week ${w.weekNumber} Retrospective: "${w.focusTheme}"`,
-    scoreBadge: `${w.achievedScore}/${w.totalPossibleScore} pts`,
-    scoreNumber: w.achievedScore,
-    plannedOrContext: `Focus: ${w.focusTheme}\nTasks: ${w.tasks.map(t => `${t.completed ? '[x]' : '[ ]'} ${t.text} (${t.score}pts)`).join('\n')}`,
-    reviewContent: w.reviewNotes || (w.achievedScore >= 6 ? `Achieved ${w.achievedScore}/10 points. Unlocked rewards: ${w.rewards.filter(r => w.achievedScore >= r.minScore).map(r => r.reward).join(', ')}` : 'Weekly retrospective pending.'),
-    secondaryContent: `Unlocked Tiers: ${w.rewards.filter(r => w.achievedScore >= r.minScore).map(r => `${r.minScore}+ (${r.reward})`).join(' • ') || 'None yet'}`,
-    rawDate: w.endDate,
-    jumpTarget: () => {
-      selectWeekGlobal(w.id);
-      setReviewSubTab('weekly');
-    }
-  }));
+      return {
+        id: `vault_daily_${d.date}`,
+        type: 'daily',
+        dateOrPeriod: d.date,
+        title: `Daily Review: ${d.date}`,
+        scoreBadge: d.executionScore > 0 ? `Execution ${d.executionScore}/10` : undefined,
+        scoreNumber: d.executionScore,
+        plannedOrContext: (d.planNotes ? `Mission Plan:\n${d.planNotes}` : 'No written plan') + gwsSummary,
+        reviewContent: `${problemsPart}${reflexionPart}`,
+        secondaryContent: `Tasks Completed: ${d.mainTasksCompleted}/${d.mainTasksTotal} • Automatic Habits: ${d.automaticTasksCompleted ? 'Yes (Locked In)' : 'Pending'} • GWS Sessions: ${dayGws.length}`,
+        rawDate: d.date,
+        jumpTarget: () => {
+          selectDateGlobal(d.date);
+          setReviewSubTab('daily');
+        }
+      };
+    });
+
+  // 2. Gather all Weekly reviews (excluding completely blank auto-generated weeks)
+  const weeklyVaultItems: VaultItem[] = Object.values(weeklyPlans)
+    .filter(
+      w =>
+        w.tasks.length > 0 ||
+        w.focusTheme.trim().length > 0 ||
+        (w.reviewNotes && w.reviewNotes.trim().length > 0) ||
+        (w.problemsEncountered && w.problemsEncountered.trim().length > 0) ||
+        (w.winsNotes && w.winsNotes.trim().length > 0) ||
+        (w.courseCorrectionNotes && w.courseCorrectionNotes.trim().length > 0)
+    )
+    .map(w => {
+      const structuredReview = [
+        w.winsNotes?.trim() ? `1. Wins & Shipped:\n${w.winsNotes.trim()}` : '',
+        w.problemsEncountered?.trim() ? `2. Problems Encountered:\n${w.problemsEncountered.trim()}` : '',
+        w.courseCorrectionNotes?.trim() ? `3. Course Corrections:\n${w.courseCorrectionNotes.trim()}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      return {
+        id: `vault_weekly_${w.id}`,
+        type: 'weekly',
+        dateOrPeriod: `Week ${w.weekNumber} (${w.startDate} → ${w.endDate})`,
+        title: `Week ${w.weekNumber} Retrospective${w.focusTheme ? `: "${w.focusTheme}"` : ''}`,
+        scoreBadge: `${w.achievedScore}/${w.totalPossibleScore} pts`,
+        scoreNumber: w.achievedScore,
+        plannedOrContext: `Focus: ${w.focusTheme || '—'}\nTasks:\n${
+          w.tasks.length > 0
+            ? w.tasks
+                .map(
+                  t =>
+                    `${t.completed ? '[x]' : '[ ]'} ${t.text} (${t.score}pts)${
+                      t.subTasks && t.subTasks.length > 0
+                        ? '\n' + t.subTasks.map(s => `   └ ${s.completed ? '[x]' : '[ ]'} ${s.text}`).join('\n')
+                        : ''
+                    }`
+                )
+                .join('\n')
+            : 'No deliverables logged'
+        }`,
+        reviewContent:
+          structuredReview ||
+          w.reviewNotes ||
+          (w.achievedScore >= 6
+            ? `Achieved ${w.achievedScore}/10 points. Unlocked rewards: ${w.rewards
+                .filter(r => w.achievedScore >= r.minScore)
+                .map(r => r.reward)
+                .join(', ')}`
+            : 'Weekly retrospective pending.'),
+        secondaryContent: `Unlocked Tiers: ${
+          w.rewards
+            .filter(r => w.achievedScore >= r.minScore)
+            .map(r => `${r.minScore}+ (${r.reward})`)
+            .join(' • ') || 'None yet'
+        }`,
+        rawDate: w.endDate,
+        jumpTarget: () => {
+          selectWeekGlobal(w.id);
+          setReviewSubTab('weekly');
+        }
+      };
+    });
 
   // 3. Gather all GWS reflexions
   const gwsVaultItems: VaultItem[] = gwsSessions.map(s => ({
@@ -266,7 +350,13 @@ export const ReviewHub: React.FC = () => {
     e.preventDefault();
     const targetPlan = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
 
-    const fullReviewNotes = `${winsText ? `Wins & Shipped:\n${winsText}\n\n` : ''}${blockersText ? `Divergence & Blockers:\n${blockersText}\n\n` : ''}${courseCorrectionsText ? `Course Corrections:\n${courseCorrectionsText}` : ''}`;
+    const fullReviewNotes = [
+      winsText.trim() ? `1. Wins & Shipped:\n${winsText.trim()}` : '',
+      blockersText.trim() ? `2. Problems Encountered:\n${blockersText.trim()}` : '',
+      courseCorrectionsText.trim() ? `3. Course Corrections:\n${courseCorrectionsText.trim()}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n');
 
     saveReview({
       id: `rev_${Date.now()}`,
@@ -287,6 +377,9 @@ export const ReviewHub: React.FC = () => {
 
     saveWeeklyPlan({
       ...targetPlan,
+      winsNotes: winsText.trim(),
+      problemsEncountered: blockersText.trim(),
+      courseCorrectionNotes: courseCorrectionsText.trim(),
       reviewNotes: fullReviewNotes.trim()
     });
 
@@ -300,6 +393,7 @@ export const ReviewHub: React.FC = () => {
     e.preventDefault();
     saveDailyEntry(modalDailyDate, {
       executionScore: modalDailyScore,
+      problemsEncountered: modalDailyProblems.trim(),
       reviewNotes: modalDailyNotes.trim()
     });
     alert(`Daily review for ${modalDailyDate} saved to the Review Vault!`);
@@ -795,44 +889,186 @@ export const ReviewHub: React.FC = () => {
                 </button>
               </div>
 
-              {/* Day Plan Recap */}
+              {/* Interactive Day Plan Recap */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                  What Was Planned for {selectedDate}
-                </span>
-                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-mono text-slate-300 whitespace-pre-wrap leading-relaxed">
-                  {currentDailyEntry.planNotes || 'No specific mission plan logged for this date.'}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                    What Was Planned for {selectedDate}
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-300">
+                    {currentDailyEntry.mainTasksCompleted} / {currentDailyEntry.mainTasksTotal} Done
+                  </span>
                 </div>
 
-                <div className="pt-2 flex items-center justify-between text-xs text-slate-400">
-                  <span>GWS Sprints: <strong className="text-slate-200">{currentDailyEntry.gwsSessionIds.length}</strong></span>
-                  <span>Autosaved</span>
-                </div>
+                {getPriorityItemsForEntry(currentDailyEntry).length > 0 ? (
+                  <div className="space-y-2">
+                    {getPriorityItemsForEntry(currentDailyEntry).map((prio, idx) => (
+                      <button
+                        key={prio.id || idx}
+                        type="button"
+                        onClick={() => {
+                          const updatedItems = getPriorityItemsForEntry(currentDailyEntry).map((item, i) =>
+                            i === idx ? { ...item, completed: !item.completed } : item
+                          );
+                          saveDailyEntry(selectedDate, {
+                            planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+                            priorityItems: updatedItems,
+                            mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+                            mainTasksTotal: Math.max(3, updatedItems.length)
+                          });
+                        }}
+                        className={`w-full flex items-center space-x-2.5 p-2.5 rounded-xl border text-left text-xs transition-all ${
+                          prio.completed
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                            : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        {prio.completed ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Circle className="w-4 h-4 text-slate-500 shrink-0" />
+                        )}
+                        <span className="font-mono font-bold text-amber-400 shrink-0">#{idx + 1}</span>
+                        <span className={prio.completed ? 'line-through text-slate-400' : ''}>{prio.text}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-mono text-slate-500">
+                    No specific mission priorities logged for this date.
+                  </div>
+                )}
               </div>
+
+              {/* GWS Sprints Logged Today (Data to Reflect On) */}
+              {(() => {
+                const todayGwsList = gwsSessions.filter(s => s.date === selectedDate);
+                const todayGwsMinutes = todayGwsList.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+                return (
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Timer className="w-4 h-4 text-emerald-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                          GWS Sprints Data to Reflect On ({todayGwsList.length})
+                        </span>
+                      </div>
+                      {todayGwsList.length > 0 && (
+                        <span className="text-xs font-mono font-bold text-amber-400">
+                          {todayGwsMinutes}m total
+                        </span>
+                      )}
+                    </div>
+
+                    {todayGwsList.length === 0 ? (
+                      <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                        No GWS sessions logged on {selectedDate}.
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                        {todayGwsList.map((s) => (
+                          <div key={s.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                              <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold shrink-0">
+                                {s.actualMinutes}m • {s.ratings.total}/15
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-3 text-[11px] font-mono text-slate-400">
+                              <span>Focus: <strong className="text-slate-200">{s.ratings.focus}/5</strong></span>
+                              <span>Exec: <strong className="text-slate-200">{s.ratings.execution}/5</strong></span>
+                              <span>Output: <strong className="text-slate-200">{s.ratings.output}/5</strong></span>
+                            </div>
+                            {s.reflexions.accomplished && (
+                              <div className="text-[11px] text-slate-300">
+                                <strong className="text-emerald-400">Done:</strong> {s.reflexions.accomplished}
+                              </div>
+                            )}
+                            {s.reflexions.heldBack && (
+                              <div className="text-[11px] text-slate-300">
+                                <strong className="text-orange-400">Problem / Held Back:</strong> {s.reflexions.heldBack}
+                              </div>
+                            )}
+                            {s.reflexions.improveNext && (
+                              <div className="text-[11px] text-slate-300">
+                                <strong className="text-amber-400">Improve Next:</strong> {s.reflexions.improveNext}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
             </div>
 
-            {/* Right 7 cols: Write Course Correction */}
+            {/* Right 7 cols: Problems Encountered + Daily Reflexion & Course Correction */}
             <div className="lg:col-span-7 space-y-6">
+              {/* Section 1: Problems Encountered & Bottlenecks */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>1. Problems Encountered & Bottlenecks</span>
+                  </div>
+                  {(() => {
+                    const dayBlockers = gwsSessions
+                      .filter(s => s.date === selectedDate && s.reflexions.heldBack && s.reflexions.heldBack.trim().length > 0)
+                      .map(s => `• [${s.taskName}] ${s.reflexions.heldBack.trim()}`);
+                    if (dayBlockers.length === 0) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const existing = currentDailyEntry.problemsEncountered?.trim()
+                            ? `${currentDailyEntry.problemsEncountered.trim()}\n`
+                            : '';
+                          saveDailyEntry(selectedDate, {
+                            problemsEncountered: `${existing}${dayBlockers.join('\n')}`
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border border-orange-500/30 text-[11px] font-bold transition-colors"
+                      >
+                        + Import Today's GWS Blockers ({dayBlockers.length})
+                      </button>
+                    );
+                  })()}
+                </div>
+                <p className="text-xs text-slate-400">
+                  Document any problems, friction, distractions, or obstacles encountered during {selectedDate}:
+                </p>
+
+                <textarea
+                  value={currentDailyEntry.problemsEncountered || ''}
+                  onChange={(e) => saveDailyEntry(selectedDate, { problemsEncountered: e.target.value })}
+                  rows={4}
+                  placeholder="What problems or friction did you encounter today? Where did execution stall or diverge from the plan?"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-sm text-slate-200 placeholder-slate-600 focus:outline-none transition-colors resize-y leading-relaxed"
+                />
+              </div>
+
+              {/* Section 2: Daily Reflexion & Course Correction */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
                 <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
                   <Sparkles className="w-4 h-4" />
-                  <span>Daily Reflexion & Course Correction Note</span>
+                  <span>2. Daily Reflexion & Course Correction Note</span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Write what held you back today and specify adjustments for tomorrow's work blocks:
+                  Specify concrete solutions and adjustments for tomorrow's work blocks (automatically surfaced on tomorrow's Daily Plan):
                 </p>
 
                 <textarea
                   value={currentDailyEntry.reviewNotes || ''}
                   onChange={(e) => saveDailyEntry(selectedDate, { reviewNotes: e.target.value })}
-                  rows={6}
-                  placeholder="Reflect on today's execution: What moved the needle? What caused friction or distraction? What specific adjustment will you execute tomorrow?"
+                  rows={5}
+                  placeholder="Reflect on today's execution: What moved the needle? How will you solve today's problems tomorrow?"
                   className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-sm text-slate-200 placeholder-slate-600 focus:outline-none transition-colors resize-y leading-relaxed"
                 />
 
                 <div className="flex justify-between items-center text-xs text-slate-500 pt-2 border-t border-slate-800">
-                  <span>Saved in Review Vault</span>
+                  <span>Autosaved to Review Vault & Tomorrow's Plan Carry-Over</span>
                   <span className="text-amber-400 font-mono">Updated</span>
                 </div>
               </div>
@@ -1197,13 +1433,31 @@ export const ReviewHub: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-1.5 pt-2">
-                {targetPlanForReview.tasks.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between text-xs text-slate-300">
-                    <span className={t.completed ? 'line-through text-slate-500' : ''}>• {t.text}</span>
-                    <span className="font-mono text-amber-400">{t.score} pts</span>
-                  </div>
-                ))}
+              <div className="space-y-2 pt-2">
+                {targetPlanForReview.tasks.length === 0 ? (
+                  <p className="text-xs text-slate-500">No weekly deliverables logged for this week.</p>
+                ) : (
+                  targetPlanForReview.tasks.map((t) => (
+                    <div key={t.id} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs text-slate-300">
+                        <span className={t.completed ? 'line-through text-slate-500' : 'font-medium'}>
+                          {t.completed ? '✓' : '•'} {t.text}
+                        </span>
+                        <span className="font-mono text-amber-400 shrink-0">{t.score} pts</span>
+                      </div>
+                      {t.subTasks && t.subTasks.length > 0 && (
+                        <div className="pl-4 space-y-0.5">
+                          {t.subTasks.map((sub) => (
+                            <div key={sub.id} className="text-[11px] text-slate-400 flex items-center space-x-1.5">
+                              <span>{sub.completed ? '☑' : '☐'}</span>
+                              <span className={sub.completed ? 'line-through text-slate-500' : ''}>{sub.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
@@ -1246,6 +1500,99 @@ export const ReviewHub: React.FC = () => {
 
           </div>
 
+          {/* Week GWS Sprints & Daily Problems (Data to Reflect On) */}
+          {(() => {
+            const weekGwsList = gwsSessions.filter(
+              s => s.date >= targetPlanForReview.startDate && s.date <= targetPlanForReview.endDate
+            );
+            const weekGwsMinutes = weekGwsList.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+            const weekDailyEntries = Object.values(dailyEntries).filter(
+              d => d.date >= targetPlanForReview.startDate && d.date <= targetPlanForReview.endDate
+            );
+            const weekProblemsList = [
+              ...weekDailyEntries
+                .filter(d => d.problemsEncountered && d.problemsEncountered.trim().length > 0)
+                .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
+              ...weekGwsList
+                .filter(s => s.reflexions.heldBack && s.reflexions.heldBack.trim().length > 0)
+                .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
+            ];
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Week GWS Sprints */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
+                      <Timer className="w-4 h-4" />
+                      <span>Week GWS Sprints ({weekGwsList.length})</span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-amber-400">
+                      {(weekGwsMinutes / 60).toFixed(1)}h deep work
+                    </span>
+                  </div>
+                  {weekGwsList.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS sprints logged between {targetPlanForReview.startDate} and {targetPlanForReview.endDate}.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {weekGwsList.map((s) => (
+                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-200 truncate">{s.taskName}</span>
+                            <span className="font-mono text-amber-400 shrink-0">{s.date.slice(5)} • {s.actualMinutes}m • {s.ratings.total}/15</span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-400 truncate">Done: {s.reflexions.accomplished}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Week Logged Problems & Blockers */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Logged Daily & GWS Problems ({weekProblemsList.length})</span>
+                    </div>
+                    {weekProblemsList.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = blockersText.trim()
+                            ? `${blockersText.trim()}\n${weekProblemsList.join('\n')}`
+                            : weekProblemsList.join('\n');
+                          setBlockersText(next);
+                          saveWeeklyPlan({ ...targetPlanForReview, problemsEncountered: next });
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border border-orange-500/30 text-[11px] font-bold"
+                      >
+                        + Import to Weekly Problems
+                      </button>
+                    )}
+                  </div>
+                  {weekProblemsList.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily problems or GWS blockers recorded during this week yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-xs text-slate-300">
+                      {weekProblemsList.map((prob, idx) => (
+                        <div key={idx} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px]">
+                          {prob}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Write Weekly Course Correction Form */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
             <div>
@@ -1253,7 +1600,7 @@ export const ReviewHub: React.FC = () => {
                 Weekly Retrospective & Course Correction
               </span>
               <h2 className="text-xl font-extrabold text-slate-100 mt-2">
-                Review Week {targetPlanForReview.weekNumber}: {targetPlanForReview.focusTheme}
+                Review Week {targetPlanForReview.weekNumber}{targetPlanForReview.focusTheme ? `: ${targetPlanForReview.focusTheme}` : ''}
               </h2>
             </div>
 
@@ -1262,7 +1609,10 @@ export const ReviewHub: React.FC = () => {
                 <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">1. What went well & what shipped?</label>
                 <textarea
                   value={winsText}
-                  onChange={(e) => setWinsText(e.target.value)}
+                  onChange={(e) => {
+                    setWinsText(e.target.value);
+                    saveWeeklyPlan({ ...targetPlanForReview, winsNotes: e.target.value });
+                  }}
                   placeholder="Completed milestones, systems built, breakthrough insights..."
                   rows={2}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
@@ -1270,12 +1620,15 @@ export const ReviewHub: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Where did divergence or friction occur?</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Problems Encountered & Bottlenecks</label>
                 <textarea
                   value={blockersText}
-                  onChange={(e) => setBlockersText(e.target.value)}
-                  placeholder="Missed targets, unaddressed trading rules, delayed onboarding..."
-                  rows={2}
+                  onChange={(e) => {
+                    setBlockersText(e.target.value);
+                    saveWeeklyPlan({ ...targetPlanForReview, problemsEncountered: e.target.value });
+                  }}
+                  placeholder="What problems, friction, or missed rules occurred this week?"
+                  rows={3}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
                 />
               </div>
@@ -1284,7 +1637,10 @@ export const ReviewHub: React.FC = () => {
                 <label className="text-xs font-bold uppercase tracking-wider text-amber-400">3. Course corrections for next week</label>
                 <textarea
                   value={courseCorrectionsText}
-                  onChange={(e) => setCourseCorrectionsText(e.target.value)}
+                  onChange={(e) => {
+                    setCourseCorrectionsText(e.target.value);
+                    saveWeeklyPlan({ ...targetPlanForReview, courseCorrectionNotes: e.target.value });
+                  }}
                   placeholder="What needs to happen? What needs to be learned? What systems now and what to buy?"
                   rows={3}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-100 focus:outline-none resize-none leading-relaxed"
@@ -1414,11 +1770,11 @@ export const ReviewHub: React.FC = () => {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Where did divergence or friction occur?</label>
+                  <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Problems Encountered & Bottlenecks</label>
                   <textarea
                     value={blockersText}
                     onChange={(e) => setBlockersText(e.target.value)}
-                    placeholder="Missed targets, unaddressed rules, delays..."
+                    placeholder="What problems, friction, or missed targets occurred?"
                     rows={2}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
                   />
@@ -1473,12 +1829,23 @@ export const ReviewHub: React.FC = () => {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Daily Reflexions & Course Correction</label>
+                  <label className="text-xs font-bold uppercase tracking-wider text-orange-400">1. Problems Encountered & Bottlenecks</label>
+                  <textarea
+                    value={modalDailyProblems}
+                    onChange={(e) => setModalDailyProblems(e.target.value)}
+                    placeholder="What problems, friction, or distractions occurred today?"
+                    rows={3}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">2. Daily Reflexions & Course Correction</label>
                   <textarea
                     value={modalDailyNotes}
                     onChange={(e) => setModalDailyNotes(e.target.value)}
-                    placeholder="Reflect on how today unfolded. What held you back? What will you adjust tomorrow?"
-                    rows={4}
+                    placeholder="Reflect on how today unfolded. What will you adjust tomorrow?"
+                    rows={3}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
                     required
                   />

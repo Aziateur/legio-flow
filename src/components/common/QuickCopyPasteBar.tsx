@@ -51,6 +51,10 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
       });
     }
 
+    if (currentEntry.problemsEncountered && currentEntry.problemsEncountered.trim()) {
+      text += `\n⚠️ **Problems Encountered:**\n${currentEntry.problemsEncountered.trim()}\n`;
+    }
+
     if (currentEntry.reviewNotes && currentEntry.reviewNotes.trim()) {
       text += `\n📝 **Daily Reflexion & Course Correction:**\n${currentEntry.reviewNotes.trim()}\n`;
     }
