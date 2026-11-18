@@ -738,40 +738,54 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSelectedDateState(nowStr);
   };
 
-  // Start a clean blank workspace (used for new friend accounts or fresh start)
-  const startFreshWorkspace = () => {
+  const buildFreshPayload = () => {
     const nowStr = getTodayDateString();
     const currentRange = getCurrentWeekRange(nowStr);
     const currentWeekNum = getWeekNumberForDate(nowStr);
     const freshWeekId = `week_${currentWeekNum}`;
-    const blankWeeks: Record<string, WeeklyPlan> = {
-      [freshWeekId]: {
-        id: freshWeekId,
-        weekNumber: currentWeekNum,
-        startDate: currentRange.startDate,
-        endDate: currentRange.endDate,
-        focusTheme: '',
-        notes: '',
-        tasks: [],
-        totalPossibleScore: 10,
-        achievedScore: 0,
-        rewards: [],
+    return {
+      templates: DEFAULT_TEMPLATES,
+      dailyEntries: {} as Record<string, DailyEntry>,
+      gwsSessions: [] as GWSSession[],
+      weeklyPlans: {
+        [freshWeekId]: {
+          id: freshWeekId,
+          weekNumber: currentWeekNum,
+          startDate: currentRange.startDate,
+          endDate: currentRange.endDate,
+          focusTheme: '',
+          notes: '',
+          tasks: [],
+          totalPossibleScore: 10,
+          achievedScore: 0,
+          rewards: [],
+          updatedAt: new Date().toISOString()
+        }
+      } as Record<string, WeeklyPlan>,
+      threeYearPlan: {
+        id: 'plan_3yr_core',
+        vision: '',
+        targetHorizon: '2026 — 2029',
+        strategyCore: '',
+        pillars: [],
         updatedAt: new Date().toISOString()
-      }
+      } as ThreeYearPlan,
+      reviews: [] as ReviewEntry[],
+      systemLevel: 3 as SystemLevel
     };
-    setTemplates(DEFAULT_TEMPLATES);
-    setDailyEntries({});
-    setGwsSessions([]);
-    setWeeklyPlans(blankWeeks);
-    setThreeYearPlan({
-      id: 'plan_3yr_core',
-      vision: '',
-      targetHorizon: '2026 — 2029',
-      strategyCore: '',
-      pillars: [],
-      updatedAt: new Date().toISOString()
-    });
-    setReviews([]);
+  };
+
+  // Start a clean blank workspace (used for new friend accounts or fresh start)
+  const startFreshWorkspace = () => {
+    const nowStr = getTodayDateString();
+    const fresh = buildFreshPayload();
+    const freshWeekId = Object.keys(fresh.weeklyPlans)[0];
+    setTemplates(fresh.templates);
+    setDailyEntries(fresh.dailyEntries);
+    setGwsSessions(fresh.gwsSessions);
+    setWeeklyPlans(fresh.weeklyPlans);
+    setThreeYearPlan(fresh.threeYearPlan);
+    setReviews(fresh.reviews);
     setTodayDate(nowStr);
     setSelectedDateState(nowStr);
     setSelectedWeekIdState(freshWeekId);
@@ -887,7 +901,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }, 300);
   };
 
-  const loadUserCloudState = async (userId: string) => {
+  const loadUserCloudState = async (userId: string, initialPayloadOverride?: any) => {
     const supabase = getSupabaseClient();
     if (!supabase) return;
     setSyncStatus('syncing');
@@ -909,12 +923,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         applyCloudPayload(data.state);
         setSyncStatus('synced');
       } else {
-        // First time this user has no cloud row yet -> push current workspace
+        // First time this user has no cloud row yet -> push initial workspace (fresh or local)
+        const payloadToPush = initialPayloadOverride || buildCloudPayload();
+        if (initialPayloadOverride) {
+          applyCloudPayload(initialPayloadOverride);
+        }
         const { error: upsertErr } = await supabase
           .from('legio_user_state')
           .upsert({
             user_id: userId,
-            state: buildCloudPayload(),
+            state: payloadToPush,
             updated_at: new Date().toISOString()
           });
         if (upsertErr) {
@@ -1044,8 +1062,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       });
       if (error) return { ok: false, error: formatSupabaseError(error.message) };
-      if (!keepLocalData) {
-        startFreshWorkspace();
+      const freshOverride = !keepLocalData ? buildFreshPayload() : undefined;
+      if (freshOverride) {
+        applyCloudPayload(freshOverride);
       }
       if (data.user && data.session) {
         setAuthUser({
@@ -1053,7 +1072,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           email: data.user.email || email,
           displayName: displayName?.trim() || email.split('@')[0]
         });
-        await loadUserCloudState(data.user.id);
+        await loadUserCloudState(data.user.id, freshOverride);
         return { ok: true };
       }
       return { ok: true, needsEmailConfirm: true };
@@ -1070,6 +1089,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAuthUser(null);
     setSyncStatus('idle');
     setSyncError(null);
+    startFreshWorkspace();
   };
 
   const syncNow = async () => {
