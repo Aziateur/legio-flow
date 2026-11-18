@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { TemplateField } from '../../types/schema';
 import { 
   CheckCircle2, 
+  Circle,
   Flame, 
   Sparkles, 
   Timer, 
@@ -22,6 +23,8 @@ interface ModularCardProps {
 }
 
 export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange, onAction }) => {
+  const [extraEmptySlots, setExtraEmptySlots] = useState(0);
+
   // Shape container styling
   const getShapeClasses = () => {
     switch (field.shape) {
@@ -216,74 +219,152 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         );
       }
 
-      // 5b. Numbered List (1, 2, 3 discrete priority items)
+      // 5b. Numbered List (1, 2, 3 discrete priority items with completion checkboxes)
       case 'numbered_list': {
-        // Parse text with "1 ... 2 ... 3 ..." or newline items or array
-        let items: string[] = [];
-        if (Array.isArray(value)) {
-          items = value;
-        } else if (typeof value === 'string') {
-          // Check if string contains numbered items like "1 abc\n2 def\n3 ghi" or "1 abc 2 def"
-          const lines = value.split('\n').filter(l => l.trim().length > 0);
-          if (lines.length > 0) {
-            items = lines.map(line => line.replace(/^[0-9]+[\.\)\s]+/, '').trim());
-          }
-        }
-        
-        // Ensure at least 3 numbered items are available by default
-        while (items.length < 3) {
-          items.push('');
+        interface PriorityRow {
+          text: string;
+          completed: boolean;
         }
 
-        const handleItemChange = (index: number, text: string) => {
-          const next = [...items];
-          next[index] = text;
-          // Format as numbered string for full backward-compatibility with planNotes string
-          const formatted = next
-            .map((txt, idx) => txt.trim() ? `${idx + 1} ${txt.trim()}` : '')
-            .filter(Boolean)
+        const parseValueToRows = (rawVal: any): PriorityRow[] => {
+          const parsed: PriorityRow[] = [];
+          if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+            const lines = rawVal.split('\n');
+            lines.forEach(line => {
+              let cleaned = line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
+              let completed = false;
+              if (cleaned.startsWith('[x] ') || cleaned.startsWith('[X] ')) {
+                completed = true;
+                cleaned = cleaned.slice(4).trim();
+              } else if (cleaned.startsWith('[ ] ')) {
+                cleaned = cleaned.slice(4).trim();
+              }
+              parsed.push({ text: cleaned, completed });
+            });
+          }
+          while (parsed.length < 3) {
+            parsed.push({ text: '', completed: false });
+          }
+          return parsed;
+        };
+
+        const rows = parseValueToRows(value);
+
+        // Reset extra empty slots if value has grown to fill them
+        const displayRows = [...rows];
+        for (let i = 0; i < extraEmptySlots; i++) {
+          displayRows.push({ text: '', completed: false });
+        }
+
+        const serializeAndSync = (nextRows: PriorityRow[], toggledRow?: PriorityRow) => {
+          // Keep trailing non-empty rows, preserving internal empty rows
+          let lastNonEmptyIdx = -1;
+          nextRows.forEach((r, i) => {
+            if (r.text.trim().length > 0) lastNonEmptyIdx = i;
+          });
+          const effectiveRows = lastNonEmptyIdx >= 0 ? nextRows.slice(0, Math.max(3, lastNonEmptyIdx + 1)) : nextRows.slice(0, 3);
+
+          const formatted = effectiveRows
+            .map((r, idx) => {
+              const txt = r.text.trim();
+              if (!txt) return '';
+              return `${idx + 1} ${r.completed ? '[x] ' : ''}${txt}`;
+            })
             .join('\n');
+
           onChange(formatted);
+
+          // Automatically sync completed & total counts with Main Tasks Completed + Weekly Goals
+          if (onAction) {
+            const filledRows = nextRows.filter(r => r.text.trim().length > 0);
+            const completedCount = filledRows.filter(r => r.completed).length;
+            const totalCount = Math.max(3, filledRows.length);
+            onAction('sync_daily_priorities', {
+              completedCount,
+              totalCount,
+              toggledText: toggledRow?.text?.trim(),
+              isCompleted: toggledRow?.completed
+            });
+          }
+        };
+
+        const handleItemChange = (index: number, text: string) => {
+          const next = displayRows.map((r, i) => i === index ? { ...r, text } : r);
+          if (index >= rows.length && text.trim().length > 0) {
+            setExtraEmptySlots(prev => Math.max(0, prev - 1));
+          }
+          serializeAndSync(next);
+        };
+
+        const handleToggleItem = (index: number) => {
+          const target = displayRows[index];
+          if (!target || !target.text.trim()) return;
+          const updatedRow = { ...target, completed: !target.completed };
+          const next = displayRows.map((r, i) => i === index ? updatedRow : r);
+          serializeAndSync(next, updatedRow);
         };
 
         const handleAddItem = () => {
-          const next = [...items, ''];
-          const formatted = next
-            .map((txt, idx) => txt.trim() ? `${idx + 1} ${txt.trim()}` : '')
-            .filter(Boolean)
-            .join('\n');
-          onChange(formatted);
+          setExtraEmptySlots(prev => prev + 1);
         };
 
         const handleRemoveItem = (index: number) => {
-          const next = items.filter((_, i) => i !== index);
-          const formatted = next
-            .map((txt, idx) => txt.trim() ? `${idx + 1} ${txt.trim()}` : '')
-            .filter(Boolean)
-            .join('\n');
-          onChange(formatted);
+          if (index >= rows.length) {
+            setExtraEmptySlots(prev => Math.max(0, prev - 1));
+            return;
+          }
+          const next = displayRows.filter((_, i) => i !== index);
+          serializeAndSync(next);
         };
 
         return (
           <div className="space-y-2.5">
-            {items.map((itemText, idx) => (
+            {displayRows.map((row, idx) => (
               <div key={idx} className="flex items-center space-x-2.5 group">
-                {/* Visual Number Badge */}
-                <div className="w-7 h-7 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 font-extrabold font-mono text-xs flex items-center justify-center shrink-0 shadow-sm shadow-amber-500/10">
-                  {idx + 1}
-                </div>
+                {/* Checkable Priority Number Badge */}
+                <button
+                  type="button"
+                  onClick={() => handleToggleItem(idx)}
+                  title={row.text.trim() ? (row.completed ? 'Mark incomplete' : 'Mark completed (syncs with Daily & Weekly score)') : `Priority ${idx + 1}`}
+                  className={`w-8 h-8 rounded-xl font-extrabold font-mono text-xs flex items-center justify-center shrink-0 transition-all ${
+                    row.completed
+                      ? 'bg-emerald-500 text-slate-950 border border-emerald-400 shadow-sm shadow-emerald-500/20'
+                      : 'bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 shadow-sm shadow-amber-500/10'
+                  }`}
+                >
+                  {row.completed ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
+                </button>
 
                 {/* Direct Text Input for that specific item */}
                 <input
                   type="text"
-                  value={itemText}
+                  value={row.text}
                   onChange={(e) => handleItemChange(idx, e.target.value)}
                   placeholder={`Priority ${idx + 1}...`}
-                  className="flex-1 bg-slate-950/90 border border-slate-800 focus:border-amber-500/60 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                  className={`flex-1 bg-slate-950/90 border rounded-xl px-3.5 py-2.5 text-xs sm:text-sm placeholder-slate-600 focus:outline-none transition-colors ${
+                    row.completed
+                      ? 'border-emerald-500/30 text-slate-400 line-through'
+                      : 'border-slate-800 focus:border-amber-500/60 text-slate-100'
+                  }`}
                 />
 
+                {/* Quick check button on right side when filled */}
+                {row.text.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleItem(idx)}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all shrink-0 ${
+                      row.completed
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border-slate-800'
+                    }`}
+                  >
+                    {row.completed ? 'Done ✓' : 'Mark Done'}
+                  </button>
+                )}
+
                 {/* Remove button if more than 3 */}
-                {items.length > 3 && (
+                {displayRows.length > 3 && (
                   <button
                     type="button"
                     onClick={() => handleRemoveItem(idx)}
@@ -296,14 +377,15 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
               </div>
             ))}
 
-            <div className="pt-1 flex justify-end">
+            <div className="pt-1 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Tip: Click a number badge or "Mark Done" to auto-update your Daily & Weekly score.</span>
               <button
                 type="button"
                 onClick={handleAddItem}
                 className="flex items-center space-x-1 text-[11px] font-bold text-amber-400 hover:text-amber-300 transition-colors"
               >
                 <Plus className="w-3 h-3" />
-                <span>+ Add Priority #{items.length + 1}</span>
+                <span>+ Add Priority #{displayRows.length + 1}</span>
               </button>
             </div>
           </div>

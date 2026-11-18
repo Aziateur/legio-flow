@@ -44,6 +44,15 @@ export const getCurrentWeekRange = (baseDateStr?: string): { startDate: string; 
   };
 };
 
+// Calculate sequential week number anchored at Week 1 Monday (2026-10-12)
+export const getWeekNumberForDate = (dateStr: string): number => {
+  const range = getCurrentWeekRange(dateStr);
+  const epochMonday = new Date('2026-10-12T12:00:00');
+  const targetMonday = new Date(`${range.startDate}T12:00:00`);
+  const diffDays = Math.round((targetMonday.getTime() - epochMonday.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.max(1, Math.floor(diffDays / 7) + 1);
+};
+
 interface StorageContextType {
   templates: Template[];
   dailyEntries: Record<string, DailyEntry>;
@@ -173,7 +182,92 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [todayDate, setTodayDate] = useState<string>(() => getTodayDateString());
 
   // Always start on the real current date when opening the app, and follow calendar rollover
-  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
+  const [selectedDate, setSelectedDateState] = useState<string>(() => getTodayDateString());
+
+  // Resolve or auto-create a WeeklyPlan matching any given date
+  const resolveWeekForDate = (dateStr: string, currentPlans: Record<string, WeeklyPlan>): { weekId: string; createdPlan?: WeeklyPlan } => {
+    const range = getCurrentWeekRange(dateStr);
+    // 1. Check if any existing plan covers this date range
+    const existingByRange = Object.values(currentPlans).find(
+      p => p.startDate <= dateStr && dateStr <= p.endDate
+    );
+    if (existingByRange) {
+      return { weekId: existingByRange.id };
+    }
+
+    // 2. Otherwise compute sequential week number & ID
+    const weekNum = getWeekNumberForDate(dateStr);
+    const weekId = `week_${weekNum}`;
+    if (currentPlans[weekId]) {
+      return { weekId };
+    }
+
+    // 3. Create a clean blank WeeklyPlan for this calendar week
+    const newPlan: WeeklyPlan = {
+      id: weekId,
+      weekNumber: weekNum,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      focusTheme: '',
+      notes: '',
+      tasks: [],
+      totalPossibleScore: 10,
+      achievedScore: 0,
+      rewards: [],
+      updatedAt: new Date().toISOString()
+    };
+    return { weekId, createdPlan: newPlan };
+  };
+
+  const [selectedWeekId, setSelectedWeekIdState] = useState<string>(() => {
+    const initialDate = getTodayDateString();
+    const weekNum = getWeekNumberForDate(initialDate);
+    return `week_${weekNum}`;
+  });
+
+  // Ensure the week for selectedDate always exists in weeklyPlans and stays synced
+  useEffect(() => {
+    const { weekId, createdPlan } = resolveWeekForDate(selectedDate, weeklyPlans);
+    if (createdPlan) {
+      setWeeklyPlans(prev => ({
+        ...prev,
+        [weekId]: createdPlan
+      }));
+    }
+    if (selectedWeekId !== weekId) {
+      setSelectedWeekIdState(weekId);
+      try {
+        localStorage.setItem('legio_selected_week_id', weekId);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, [selectedDate]);
+
+  // Setting selectedDate automatically syncs selectedWeekId via the effect above
+  const setSelectedDate = (date: string) => {
+    setSelectedDateState(date);
+  };
+
+  // Setting selectedWeekId also aligns selectedDate into that week if outside its Mon-Sun range
+  const setSelectedWeekId = (weekId: string) => {
+    setSelectedWeekIdState(weekId);
+    try {
+      localStorage.setItem('legio_selected_week_id', weekId);
+    } catch (e) {
+      console.error(e);
+    }
+    const targetPlan = weeklyPlans[weekId];
+    if (targetPlan && targetPlan.startDate && targetPlan.endDate) {
+      if (selectedDate < targetPlan.startDate || selectedDate > targetPlan.endDate) {
+        if (todayDate >= targetPlan.startDate && todayDate <= targetPlan.endDate) {
+          setSelectedDateState(todayDate);
+        } else {
+          setSelectedDateState(targetPlan.startDate);
+        }
+      }
+    }
+  };
 
   useEffect(() => {
     const syncCurrentDate = () => {
@@ -181,7 +275,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setTodayDate(prevToday => {
         if (prevToday !== currentRealDate) {
           // If the user was viewing "today" and the clock rolled past midnight, advance selectedDate automatically
-          setSelectedDate(prevSelected => (prevSelected === prevToday ? currentRealDate : prevSelected));
+          setSelectedDateState(prevSelected => (prevSelected === prevToday ? currentRealDate : prevSelected));
           return currentRealDate;
         }
         return prevToday;
@@ -197,24 +291,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       document.removeEventListener('visibilitychange', syncCurrentDate);
     };
   }, []);
-
-  const [selectedWeekId, setSelectedWeekIdState] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('legio_selected_week_id');
-      return saved || 'week_3';
-    } catch {
-      return 'week_3';
-    }
-  });
-
-  const setSelectedWeekId = (weekId: string) => {
-    setSelectedWeekIdState(weekId);
-    try {
-      localStorage.setItem('legio_selected_week_id', weekId);
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   // Progressive System Level (1 to 4)
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
