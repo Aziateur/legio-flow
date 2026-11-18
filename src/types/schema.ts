@@ -46,12 +46,19 @@ export interface Template {
   updatedAt: string;
 }
 
+export interface SubTaskItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
 export interface TaskItem {
   id: string;
   text: string;
   completed: boolean;
   score?: number; // Weight in points (for weekly goal crusher)
   notes?: string;
+  subTasks?: SubTaskItem[];
 }
 
 export interface RewardTier {

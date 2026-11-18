@@ -163,16 +163,27 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         mainTasksTotal: payload.totalCount
       });
 
-      // 2. Two-way sync: if the toggled daily priority matches a Weekly Goal in the active week, sync its completion!
+      // 2. Two-way sync: if the toggled daily priority matches a Weekly Goal OR Sub-Goal in the active week, sync its completion!
       if (payload.toggledText && activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0) {
         const normalizedToggled = payload.toggledText.toLowerCase().trim();
         let matched = false;
         const updatedTasks = activeWeeklyPlan.tasks.map(t => {
+          let nextTask = t;
           if (t.text.toLowerCase().trim() === normalizedToggled) {
             matched = true;
-            return { ...t, completed: !!payload.isCompleted };
+            nextTask = { ...nextTask, completed: !!payload.isCompleted };
           }
-          return t;
+          if (t.subTasks && t.subTasks.length > 0) {
+            const updatedSubs = t.subTasks.map(sub => {
+              if (sub.text.toLowerCase().trim() === normalizedToggled) {
+                matched = true;
+                return { ...sub, completed: !!payload.isCompleted };
+              }
+              return sub;
+            });
+            nextTask = { ...nextTask, subTasks: updatedSubs };
+          }
+          return nextTask;
         });
 
         if (matched) {
@@ -247,6 +258,44 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       const updatedLines = lines.map(line => {
         const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
         if (stripped.toLowerCase() === targetTask.text.toLowerCase().trim()) {
+          return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+        }
+        return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
+      }).filter(Boolean);
+
+      const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
+      const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+      saveDailyEntry(selectedDate, {
+        planNotes: formatted,
+        mainTasksCompleted: completedCount,
+        mainTasksTotal: Math.max(3, updatedLines.length)
+      });
+    }
+  };
+
+  const handleToggleSubGoalDirect = (goalId: string, subId: string) => {
+    const parent = activeWeeklyPlan.tasks.find(t => t.id === goalId);
+    const targetSub = parent?.subTasks?.find(s => s.id === subId);
+    if (!targetSub) return;
+    const nextCompleted = !targetSub.completed;
+
+    const updatedTasks = activeWeeklyPlan.tasks.map(t =>
+      t.id === goalId
+        ? {
+            ...t,
+            subTasks: (t.subTasks || []).map(s =>
+              s.id === subId ? { ...s, completed: nextCompleted } : s
+            )
+          }
+        : t
+    );
+    saveWeeklyPlan({ ...activeWeeklyPlan, tasks: updatedTasks });
+
+    if (currentEntry.planNotes && isGoalInTodayPlan(targetSub.text)) {
+      const lines = currentEntry.planNotes.split('\n');
+      const updatedLines = lines.map(line => {
+        const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
+        if (stripped.toLowerCase() === targetSub.text.toLowerCase().trim()) {
           return `${nextCompleted ? '[x] ' : ''}${stripped}`;
         }
         return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
@@ -423,13 +472,14 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
           </div>
 
           {activeWeeklyPlan.tasks.length > 0 ? (
-            <div className="flex items-center gap-2 flex-wrap pt-1">
+            <div className="space-y-2.5 pt-1">
               {activeWeeklyPlan.tasks.map((task) => {
                 const inToday = isGoalInTodayPlan(task.text);
+                const subTasks = task.subTasks || [];
                 return (
                   <div
                     key={task.id}
-                    className={`text-xs px-3 py-1.5 rounded-xl border transition-all flex items-center space-x-2 ${
+                    className={`rounded-2xl border p-2.5 space-y-2 transition-all ${
                       task.completed
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                         : inToday
@@ -437,43 +487,93 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                         : 'bg-slate-950 border-slate-800 text-slate-200'
                     }`}
                   >
-                    {/* Direct Weekly Goal Checkbox */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleWeeklyGoalDirect(task.id)}
-                      title={task.completed ? 'Mark weekly goal incomplete' : 'Mark weekly goal completed'}
-                      className="shrink-0"
-                    >
-                      {task.completed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleWeeklyGoalDirect(task.id)}
+                          title={task.completed ? 'Mark weekly goal incomplete' : 'Mark weekly goal completed'}
+                          className="shrink-0"
+                        >
+                          {task.completed ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <Circle className="w-4 h-4 text-slate-500 hover:text-amber-400" />
+                          )}
+                        </button>
+
+                        <span className={`font-medium truncate ${task.completed ? 'line-through text-slate-400' : ''}`}>
+                          {task.text}
+                        </span>
+
+                        <span className="text-[10px] text-amber-400 font-mono font-bold shrink-0">
+                          +{task.score}p
+                        </span>
+                      </div>
+
+                      {inToday ? (
+                        <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30 shrink-0">
+                          ✓ In Day
+                        </span>
                       ) : (
-                        <Circle className="w-4 h-4 text-slate-500 hover:text-amber-400" />
+                        <button
+                          type="button"
+                          onClick={() => handlePullGoalToDay(task.text, task.completed)}
+                          className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 px-2 py-0.5 rounded border border-amber-500/30 flex items-center space-x-0.5 transition-colors shrink-0"
+                          title={`Pull into ${selectedDate}'s priorities`}
+                        >
+                          <ArrowDownToLine className="w-2.5 h-2.5" />
+                          <span>Pull Goal</span>
+                        </button>
                       )}
-                    </button>
+                    </div>
 
-                    <span className={task.completed ? 'line-through text-slate-400' : ''}>
-                      {task.text}
-                    </span>
-
-                    <span className="text-[10px] text-amber-400 font-mono font-bold">
-                      +{task.score}p
-                    </span>
-
-                    {/* Pull to Today or In Today badge */}
-                    {inToday ? (
-                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                        ✓ In Day
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handlePullGoalToDay(task.text, task.completed)}
-                        className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 px-1.5 py-0.5 rounded border border-amber-500/30 flex items-center space-x-0.5 transition-colors"
-                        title={`Pull into ${selectedDate}'s priorities`}
-                      >
-                        <ArrowDownToLine className="w-2.5 h-2.5" />
-                        <span>Pull</span>
-                      </button>
+                    {/* Sub-goals pills under this weekly goal */}
+                    {subTasks.length > 0 && (
+                      <div className="pl-6 flex items-center gap-1.5 flex-wrap">
+                        {subTasks.map((sub) => {
+                          const subInToday = isGoalInTodayPlan(sub.text);
+                          return (
+                            <div
+                              key={sub.id}
+                              className={`text-[11px] px-2.5 py-1 rounded-xl border flex items-center space-x-1.5 ${
+                                sub.completed
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                                  : subInToday
+                                  ? 'bg-amber-500/10 border-amber-500/40 text-slate-100'
+                                  : 'bg-slate-900 border-slate-800 text-slate-300'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleSubGoalDirect(task.id, sub.id)}
+                                className="shrink-0"
+                              >
+                                {sub.completed ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Circle className="w-3.5 h-3.5 text-slate-500 hover:text-amber-400" />
+                                )}
+                              </button>
+                              <span className={sub.completed ? 'line-through text-slate-400' : ''}>
+                                {sub.text}
+                              </span>
+                              {subInToday ? (
+                                <span className="text-[9px] font-bold text-emerald-400">✓ In Day</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handlePullGoalToDay(sub.text, sub.completed)}
+                                  className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded flex items-center space-x-0.5"
+                                >
+                                  <ArrowDownToLine className="w-2.5 h-2.5" />
+                                  <span>Pull</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 );

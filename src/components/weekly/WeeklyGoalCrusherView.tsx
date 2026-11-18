@@ -35,6 +35,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const weekDaysRange = getCurrentWeekRange(plan.startDate || selectedDate);
 
   const [newGoalInput, setNewGoalInput] = useState('');
+  const [newSubGoalInputs, setNewSubGoalInputs] = useState<Record<string, string>>({});
   const [showRewardLadder, setShowRewardLadder] = useState(false);
   const [pulledNotice, setPulledNotice] = useState<string | null>(null);
 
@@ -117,6 +118,85 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       tasks: nextTasks,
       achievedScore: nextTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
     });
+  };
+
+  // Sub-goals CRUD + two-way daily sync
+  const handleAddSubGoal = (goalId: string) => {
+    const raw = (newSubGoalInputs[goalId] || '').trim();
+    if (!raw) return;
+    const newSub = {
+      id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: raw,
+      completed: false
+    };
+    const nextTasks = plan.tasks.map(t =>
+      t.id === goalId ? { ...t, subTasks: [...(t.subTasks || []), newSub] } : t
+    );
+    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+    setNewSubGoalInputs(prev => ({ ...prev, [goalId]: '' }));
+  };
+
+  const handleToggleSubGoal = (goalId: string, subId: string) => {
+    const parent = plan.tasks.find(t => t.id === goalId);
+    const targetSub = parent?.subTasks?.find(s => s.id === subId);
+    if (!targetSub) return;
+    const nextCompleted = !targetSub.completed;
+
+    const nextTasks = plan.tasks.map(t =>
+      t.id === goalId
+        ? {
+            ...t,
+            subTasks: (t.subTasks || []).map(s =>
+              s.id === subId ? { ...s, completed: nextCompleted } : s
+            )
+          }
+        : t
+    );
+    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+
+    // Sync sub-goal completion with any day in this week where it was pulled
+    weekDaysRange.days.forEach(dStr => {
+      const entry = dailyEntries[dStr];
+      if (entry && entry.planNotes && isGoalInDay(dStr, targetSub.text)) {
+        const lines = entry.planNotes.split('\n');
+        const updatedLines = lines.map(line => {
+          const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
+          if (stripped.toLowerCase() === targetSub.text.toLowerCase().trim()) {
+            return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+          }
+          return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
+        }).filter(Boolean);
+
+        const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
+        const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+        saveDailyEntry(dStr, {
+          planNotes: formatted,
+          mainTasksCompleted: completedCount,
+          mainTasksTotal: Math.max(3, updatedLines.length)
+        });
+      }
+    });
+  };
+
+  const handleEditSubGoal = (goalId: string, subId: string, text: string) => {
+    const nextTasks = plan.tasks.map(t =>
+      t.id === goalId
+        ? {
+            ...t,
+            subTasks: (t.subTasks || []).map(s => (s.id === subId ? { ...s, text } : s))
+          }
+        : t
+    );
+    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+  };
+
+  const handleDeleteSubGoal = (goalId: string, subId: string) => {
+    const nextTasks = plan.tasks.map(t =>
+      t.id === goalId
+        ? { ...t, subTasks: (t.subTasks || []).filter(s => s.id !== subId) }
+        : t
+    );
+    saveWeeklyPlan({ ...plan, tasks: nextTasks });
   };
 
   // Effortless Enter-key goal addition (Notion / Linear style)
@@ -483,77 +563,160 @@ export const WeeklyGoalCrusherView: React.FC = () => {
 
           {plan.tasks.map((task) => {
             const inSelectedDay = isGoalInDay(selectedDate, task.text);
+            const subTasks = task.subTasks || [];
             return (
               <div
                 key={task.id}
-                className={`group flex items-center justify-between p-3.5 rounded-2xl border transition-all ${
+                className={`rounded-2xl border transition-all overflow-hidden ${
                   task.completed
                     ? 'bg-emerald-500/5 border-emerald-500/25'
                     : 'bg-slate-950 border-slate-800/90 hover:border-slate-700'
                 }`}
               >
-                {/* Checkbox & Text */}
-                <div className="flex items-center space-x-3 flex-1 min-w-0 pr-3">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleGoal(task.id)}
-                    className="transition-transform active:scale-90 shrink-0"
-                  >
-                    {task.completed ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-slate-600 hover:text-slate-400" />
-                    )}
-                  </button>
-
-                  <input
-                    type="text"
-                    value={task.text}
-                    onChange={(e) => handleEditGoal(task.id, e.target.value)}
-                    className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
-                      task.completed ? 'line-through text-slate-500' : 'text-slate-100'
-                    }`}
-                  />
-                </div>
-
-                {/* Actions & Point Weight */}
-                <div className="flex items-center space-x-2 shrink-0">
-                  {/* Bridge button: "Pull to Selected Day" */}
-                  {inSelectedDay ? (
-                    <span className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-bold border border-emerald-500/30">
-                      <span>✓ In {selectedDate.slice(5)}</span>
-                    </span>
-                  ) : (
+                {/* Parent Weekly Goal Row */}
+                <div className="group flex items-center justify-between p-3.5">
+                  {/* Checkbox & Text */}
+                  <div className="flex items-center space-x-3 flex-1 min-w-0 pr-3">
                     <button
                       type="button"
-                      onClick={() => handlePullToToday(task.text, task.completed)}
-                      className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[11px] font-semibold border border-slate-800 transition-colors"
-                      title={`Pull this goal into ${selectedDate}'s daily plan`}
+                      onClick={() => handleToggleGoal(task.id)}
+                      className="transition-transform active:scale-90 shrink-0"
                     >
-                      <ArrowDownToLine className="w-3 h-3 text-amber-400" />
-                      <span>Pull to {selectedDate.slice(5)}</span>
+                      {task.completed ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      ) : (
+                        <Circle className="w-5 h-5 text-slate-600 hover:text-slate-400" />
+                      )}
                     </button>
-                  )}
 
-                  {/* Score weight badge */}
-                  <select
-                    value={task.score || 2}
-                    onChange={(e) => handleChangeScore(task.id, parseInt(e.target.value))}
-                    className="bg-slate-900 text-amber-400 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold focus:outline-none cursor-pointer"
-                  >
-                    {[1, 2, 3, 4, 5].map((pts) => (
-                      <option key={pts} value={pts}>{pts} pt{pts > 1 ? 's' : ''}</option>
-                    ))}
-                  </select>
+                    <input
+                      type="text"
+                      value={task.text}
+                      onChange={(e) => handleEditGoal(task.id, e.target.value)}
+                      className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
+                        task.completed ? 'line-through text-slate-500' : 'text-slate-100'
+                      }`}
+                    />
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteGoal(task.id)}
-                    className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Actions & Point Weight */}
+                  <div className="flex items-center space-x-2 shrink-0">
+                    {/* Bridge button: "Pull to Selected Day" */}
+                    {inSelectedDay ? (
+                      <span className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-bold border border-emerald-500/30">
+                        <span>✓ In {selectedDate.slice(5)}</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handlePullToToday(task.text, task.completed)}
+                        className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[11px] font-semibold border border-slate-800 transition-colors"
+                        title={`Pull this goal into ${selectedDate}'s daily plan`}
+                      >
+                        <ArrowDownToLine className="w-3 h-3 text-amber-400" />
+                        <span>Pull to {selectedDate.slice(5)}</span>
+                      </button>
+                    )}
+
+                    {/* Score weight badge */}
+                    <select
+                      value={task.score || 2}
+                      onChange={(e) => handleChangeScore(task.id, parseInt(e.target.value))}
+                      className="bg-slate-900 text-amber-400 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold focus:outline-none cursor-pointer"
+                    >
+                      {[1, 2, 3, 4, 5].map((pts) => (
+                        <option key={pts} value={pts}>{pts} pt{pts > 1 ? 's' : ''}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteGoal(task.id)}
+                      className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-Goals List + Inline Sub-Goal Adder */}
+                <div className="pl-10 pr-3.5 pb-3 pt-1 border-t border-slate-900/80 space-y-1.5">
+                  {subTasks.map((sub) => {
+                    const subInDay = isGoalInDay(selectedDate, sub.text);
+                    return (
+                      <div
+                        key={sub.id}
+                        className="group/sub flex items-center justify-between py-1 px-2 rounded-xl bg-slate-900/50 border border-slate-800/60"
+                      >
+                        <div className="flex items-center space-x-2 flex-1 min-w-0 pr-2">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSubGoal(task.id, sub.id)}
+                            className="shrink-0"
+                          >
+                            {sub.completed ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Circle className="w-3.5 h-3.5 text-slate-600 hover:text-amber-400" />
+                            )}
+                          </button>
+                          <input
+                            type="text"
+                            value={sub.text}
+                            onChange={(e) => handleEditSubGoal(task.id, sub.id, e.target.value)}
+                            className={`w-full bg-transparent text-xs focus:outline-none ${
+                              sub.completed ? 'line-through text-slate-500' : 'text-slate-300'
+                            }`}
+                          />
+                        </div>
+
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          {subInDay ? (
+                            <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">
+                              ✓ In {selectedDate.slice(5)}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handlePullToToday(sub.text, sub.completed)}
+                              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[10px] font-semibold border border-slate-800 transition-colors"
+                              title={`Pull sub-goal into ${selectedDate}'s daily plan`}
+                            >
+                              <ArrowDownToLine className="w-2.5 h-2.5 text-amber-400" />
+                              <span>Pull to {selectedDate.slice(5)}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSubGoal(task.id, sub.id)}
+                            className="p-0.5 text-slate-600 hover:text-rose-400 opacity-0 group-hover/sub:opacity-100 transition-opacity"
+                            title="Delete sub-goal"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Add sub-goal inline */}
+                  <div className="flex items-center space-x-2 px-2 py-1">
+                    <Plus className="w-3 h-3 text-slate-600 shrink-0" />
+                    <input
+                      type="text"
+                      value={newSubGoalInputs[task.id] || ''}
+                      onChange={(e) => setNewSubGoalInputs(prev => ({ ...prev, [task.id]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddSubGoal(task.id);
+                        }
+                      }}
+                      placeholder="Add sub-goal (Enter to save)..."
+                      className="w-full bg-transparent text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             );
