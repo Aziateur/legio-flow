@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStorage, ReviewSubTab, getCurrentWeekRange } from '../../context/StorageContext';
 import { WeeklyPlan, ReviewEntry } from '../../types/schema';
+import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { 
   FileText, 
   Timer, 
@@ -716,6 +717,16 @@ export const ReviewHub: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Fast Data I/O Bar (Copy Plan / Copy Review separately) */}
+          <QuickCopyPasteBar
+            currentEntry={currentDailyEntry}
+            gwsSessions={gwsSessions}
+            onApplyParsedPlan={(tasksText) => {
+              const existing = currentDailyEntry.planNotes ? `${currentDailyEntry.planNotes}\n` : '';
+              saveDailyEntry(selectedDate, { planNotes: `${existing}${tasksText}` });
+            }}
+          />
 
           {/* Daily Review & Course Correction Editor */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

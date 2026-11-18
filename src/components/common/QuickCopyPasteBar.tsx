@@ -17,36 +17,46 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
   const [pasteInputOpen, setPasteInputOpen] = useState(false);
   const [pastedRawText, setPastedRawText] = useState('');
 
-  // 1. Copy Day as Markdown for Discord / Notion / Telegram
-  const handleCopyMarkdown = () => {
-    const todaySessions = gwsSessions.filter(s => s.date === currentEntry.date);
-    
-    let text = `📅 **Legio Flow Daily Log — ${currentEntry.date}**\n\n`;
-    text += `🎯 **Main Tasks Completed:** ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
-    text += `⚡ **Execution Score:** ${currentEntry.executionScore}/10\n`;
-    text += `🔁 **Automatic Habits:** ${currentEntry.automaticTasksCompleted ? '✅ Complete' : '❌ Pending'}\n\n`;
-    
-    if (currentEntry.planNotes) {
-      text += `📋 **Plan & Priorities:**\n${currentEntry.planNotes}\n\n`;
+  // 1a. Copy ONLY the Daily Plan & Priorities for Discord / Notion
+  const handleCopyPlanOnly = () => {
+    let text = `📋 **Legio Flow — Daily Plan (${currentEntry.date})**\n\n`;
+    if (currentEntry.planNotes && currentEntry.planNotes.trim()) {
+      text += `${currentEntry.planNotes.trim()}\n`;
+    } else {
+      text += `_No priorities logged yet for ${currentEntry.date}._\n`;
     }
+    text += `\n🎯 **Target Tasks:** ${currentEntry.mainTasksTotal}`;
+
+    navigator.clipboard.writeText(text);
+    setCopiedType('plan');
+    setTimeout(() => setCopiedType(null), 2500);
+  };
+
+  // 1b. Copy ONLY the Daily Review & Telemetry for Discord / Notion
+  const handleCopyReviewOnly = () => {
+    const todaySessions = gwsSessions.filter(s => s.date === currentEntry.date);
+
+    let text = `🔍 **Legio Flow — Daily Review (${currentEntry.date})**\n\n`;
+    text += `🎯 **Main Tasks Completed:** ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
+    text += `⚡ **Execution Score:** ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
+    text += `🔁 **Automatic Habits:** ${currentEntry.automaticTasksCompleted ? '✅ Complete (Locked In)' : '❌ Pending'}\n`;
 
     if (todaySessions.length > 0) {
-      text += `⏱️ **GWS Deep Work (${todaySessions.length} sessions):**\n`;
-      todaySessions.forEach((s, idx) => {
+      text += `\n⏱️ **GWS Deep Work (${todaySessions.length} session${todaySessions.length > 1 ? 's' : ''}):**\n`;
+      todaySessions.forEach((s) => {
         text += `• ${s.taskName} (${s.actualMinutes}m) — Score: ${s.ratings.total}/15\n`;
         if (s.reflexions.accomplished) text += `  └ Done: ${s.reflexions.accomplished}\n`;
         if (s.reflexions.heldBack) text += `  └ Blockers: ${s.reflexions.heldBack}\n`;
         if (s.reflexions.improveNext) text += `  └ Next Calibration: ${s.reflexions.improveNext}\n`;
       });
-      text += `\n`;
     }
 
-    if (currentEntry.reviewNotes) {
-      text += `🔍 **Daily Review & Reflexion:**\n${currentEntry.reviewNotes}\n`;
+    if (currentEntry.reviewNotes && currentEntry.reviewNotes.trim()) {
+      text += `\n📝 **Daily Reflexion & Course Correction:**\n${currentEntry.reviewNotes.trim()}\n`;
     }
 
     navigator.clipboard.writeText(text);
-    setCopiedType('markdown');
+    setCopiedType('review');
     setTimeout(() => setCopiedType(null), 2500);
   };
 
@@ -74,7 +84,7 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
         <span className="text-slate-400 hidden md:inline">Instantly copy/paste to and from Discord, Notion or notes</span>
       </div>
 
-      <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
+      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
         {/* Quick Paste into Plan */}
         <button
           onClick={() => setPasteInputOpen(!pasteInputOpen)}
@@ -84,20 +94,40 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
           <span>Quick Paste to Plan</span>
         </button>
 
-        {/* Copy Markdown */}
+        {/* Copy Plan Only */}
         <button
-          onClick={handleCopyMarkdown}
+          onClick={handleCopyPlanOnly}
           className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-all shadow-sm shadow-amber-500/20 active:scale-95"
+          title="Copy only today's Mission Plan & Priorities for Discord/Notes"
         >
-          {copiedType === 'markdown' ? (
+          {copiedType === 'plan' ? (
             <>
               <Check className="w-3.5 h-3.5 text-slate-950" />
-              <span>Copied Markdown!</span>
+              <span>Copied Plan!</span>
             </>
           ) : (
             <>
               <Copy className="w-3.5 h-3.5" />
-              <span>Copy Day for Discord/Notes</span>
+              <span>Copy Plan</span>
+            </>
+          )}
+        </button>
+
+        {/* Copy Review Only */}
+        <button
+          onClick={handleCopyReviewOnly}
+          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all active:scale-95"
+          title="Copy only today's Execution Review, Score & Reflexion for Discord/Notes"
+        >
+          {copiedType === 'review' ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Copied Review!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" />
+              <span>Copy Review</span>
             </>
           )}
         </button>
@@ -106,7 +136,7 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
         <button
           onClick={handleCopyJSON}
           className="p-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 text-xs transition-colors"
-          title="Copy Day JSON"
+          title="Copy Raw Day JSON"
         >
           {copiedType === 'json' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </button>
