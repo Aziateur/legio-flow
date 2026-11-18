@@ -12,6 +12,38 @@ export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'three_year';
 export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly';
 
+export const getTodayDateString = (): string => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+export const getCurrentWeekRange = (baseDateStr?: string): { startDate: string; endDate: string; days: string[] } => {
+  const base = baseDateStr ? new Date(`${baseDateStr}T12:00:00`) : new Date();
+  const dayOfWeek = base.getDay(); // 0 (Sun) to 6 (Sat)
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + diffToMonday);
+
+  const days: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    days.push(`${yyyy}-${mm}-${dd}`);
+  }
+
+  return {
+    startDate: days[0],
+    endDate: days[6],
+    days
+  };
+};
+
 interface StorageContextType {
   templates: Template[];
   dailyEntries: Record<string, DailyEntry>;
@@ -19,6 +51,7 @@ interface StorageContextType {
   weeklyPlans: Record<string, WeeklyPlan>;
   threeYearPlan: ThreeYearPlan;
   reviews: ReviewEntry[];
+  todayDate: string;
   selectedDate: string;
   selectedWeekId: string;
   activeTab: MainTab;
@@ -137,14 +170,33 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   });
 
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SELECTED_DATE);
-      return saved || '2026-10-28';
-    } catch {
-      return '2026-10-28';
-    }
-  });
+  const [todayDate, setTodayDate] = useState<string>(() => getTodayDateString());
+
+  // Always start on the real current date when opening the app, and follow calendar rollover
+  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
+
+  useEffect(() => {
+    const syncCurrentDate = () => {
+      const currentRealDate = getTodayDateString();
+      setTodayDate(prevToday => {
+        if (prevToday !== currentRealDate) {
+          // If the user was viewing "today" and the clock rolled past midnight, advance selectedDate automatically
+          setSelectedDate(prevSelected => (prevSelected === prevToday ? currentRealDate : prevSelected));
+          return currentRealDate;
+        }
+        return prevToday;
+      });
+    };
+
+    const interval = setInterval(syncCurrentDate, 30000);
+    window.addEventListener('focus', syncCurrentDate);
+    document.addEventListener('visibilitychange', syncCurrentDate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', syncCurrentDate);
+      document.removeEventListener('visibilitychange', syncCurrentDate);
+    };
+  }, []);
 
   const [selectedWeekId, setSelectedWeekIdState] = useState<string>(() => {
     try {
@@ -315,9 +367,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [selectedDate]);
 
-  // Helper date calculations
+  // Helper date calculations (using noon local time to avoid DST/UTC offset bugs)
   const shiftDate = (days: number) => {
-    const current = new Date(selectedDate);
+    const current = new Date(`${selectedDate}T12:00:00`);
     current.setDate(current.getDate() + days);
     const yyyy = current.getFullYear();
     const mm = String(current.getMonth() + 1).padStart(2, '0');
@@ -328,7 +380,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const goToPreviousDay = () => shiftDate(-1);
   const goToNextDay = () => shiftDate(1);
   const goToToday = () => {
-    setSelectedDate('2026-10-28');
+    const nowStr = getTodayDateString();
+    setTodayDate(nowStr);
+    setSelectedDate(nowStr);
   };
 
   const getEntryForDate = (date: string): DailyEntry => {
@@ -519,13 +573,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const resetAllData = () => {
+    const nowStr = getTodayDateString();
     setTemplates(DEFAULT_TEMPLATES);
     setDailyEntries(INITIAL_DAILY_ENTRIES);
     setGwsSessions(INITIAL_GWS_SESSIONS);
     setWeeklyPlans(INITIAL_WEEKLY_PLANS);
     setThreeYearPlan(INITIAL_THREE_YEAR_PLAN);
     setReviews([]);
-    setSelectedDate('2026-10-28');
+    setTodayDate(nowStr);
+    setSelectedDate(nowStr);
   };
 
   return (
@@ -537,6 +593,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         weeklyPlans,
         threeYearPlan,
         reviews,
+        todayDate,
         selectedDate,
         selectedWeekId,
         activeTab,

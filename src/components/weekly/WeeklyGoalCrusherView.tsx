@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useStorage } from '../../context/StorageContext';
+import { useStorage, getCurrentWeekRange } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { 
   Target, 
@@ -115,12 +115,13 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     const maxNum = existingWeekNums.length > 0 ? Math.max(...existingWeekNums) : 1;
     const nextNum = maxNum + 1;
     const nextId = `week_${nextNum}`;
+    const currentRange = getCurrentWeekRange(selectedDate);
 
     const newPlan: WeeklyPlan = {
       id: nextId,
       weekNumber: nextNum,
-      startDate: '2026-11-02',
-      endDate: '2026-11-08',
+      startDate: currentRange.startDate,
+      endDate: currentRange.endDate,
       focusTheme: '',
       notes: '',
       tasks: [],

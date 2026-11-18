@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useStorage } from '../../context/StorageContext';
+import { useStorage, getCurrentWeekRange } from '../../context/StorageContext';
 import { 
   Table, 
   Calendar, 
@@ -15,72 +15,108 @@ import {
 
 export const SpreadsheetMatrixView: React.FC = () => {
   const { 
+    todayDate,
     dailyEntries, 
     weeklyPlans, 
     gwsSessions, 
     setSelectedDate, 
     setActiveTab, 
-    setPlanningSubTab,
-    saveDailyEntry
+    setPlanningSubTab
   } = useStorage();
-
-  const [filterMode, setFilterMode] = useState<'all' | 'oct_nov'>('all');
 
   // Days of week standard
   const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  // Helper to get all dates for a given ISO week range or week object
-  // Let's generate weeks dynamically starting from week 1 (Oct 12, 2026) to current
-  const weeksList = [
-    {
-      id: 'week_1',
-      title: 'Week 1',
-      focus: weeklyPlans['week_1']?.focusTheme || 'systems lauched',
-      score: weeklyPlans['week_1']?.achievedScore || 6,
-      startDate: '2026-10-12',
-      endDate: '2026-10-18',
-      days: [
-        '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', 
-        '2026-10-16', '2026-10-17', '2026-10-18'
-      ]
-    },
-    {
-      id: 'week_2',
-      title: 'Week 2',
-      focus: weeklyPlans['week_2']?.focusTheme || 'trading strategy & calibration',
-      score: weeklyPlans['week_2']?.achievedScore || 0,
-      startDate: '2026-10-19',
-      endDate: '2026-10-25',
-      days: [
-        '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', 
-        '2026-10-23', '2026-10-24', '2026-10-25'
-      ]
-    },
-    {
-      id: 'week_3',
-      title: 'Week 3 (Active)',
-      focus: weeklyPlans['week_3']?.focusTheme || 'Discord cohort & Miro roadmap',
-      score: weeklyPlans['week_3']?.achievedScore || 0,
-      startDate: '2026-10-26',
-      endDate: '2026-11-01',
-      days: [
-        '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', 
-        '2026-10-30', '2026-10-31', '2026-11-01'
-      ]
-    },
-    {
-      id: 'week_4',
-      title: 'Week 4',
-      focus: weeklyPlans['week_4']?.focusTheme || 'Cohort onboarding & trading test run',
-      score: weeklyPlans['week_4']?.achievedScore || 0,
-      startDate: '2026-11-02',
-      endDate: '2026-11-08',
-      days: [
-        '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', 
-        '2026-11-06', '2026-11-07', '2026-11-08'
-      ]
+  // Helper to generate 7 days from a Monday startDate
+  const getDaysFromStart = (startDateStr: string): string[] => {
+    const start = new Date(`${startDateStr}T12:00:00`);
+    const days: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      days.push(`${yyyy}-${mm}-${dd}`);
     }
-  ];
+    return days;
+  };
+
+  // Build dynamic weeks list combining stored weeklyPlans and ensuring current week is visible
+  const buildWeeksList = () => {
+    const baseWeeks: Array<{
+      id: string;
+      title: string;
+      focus: string;
+      score: number;
+      startDate: string;
+      endDate: string;
+      days: string[];
+    }> = [
+      {
+        id: 'week_1',
+        title: 'Week 1',
+        focus: weeklyPlans['week_1']?.focusTheme || 'systems lauched',
+        score: weeklyPlans['week_1']?.achievedScore || 6,
+        startDate: '2026-10-12',
+        endDate: '2026-10-18',
+        days: getDaysFromStart('2026-10-12')
+      },
+      {
+        id: 'week_2',
+        title: 'Week 2',
+        focus: weeklyPlans['week_2']?.focusTheme || 'trading strategy & calibration',
+        score: weeklyPlans['week_2']?.achievedScore || 0,
+        startDate: '2026-10-19',
+        endDate: '2026-10-25',
+        days: getDaysFromStart('2026-10-19')
+      },
+      {
+        id: 'week_3',
+        title: 'Week 3',
+        focus: weeklyPlans['week_3']?.focusTheme || 'Discord cohort & Miro roadmap',
+        score: weeklyPlans['week_3']?.achievedScore || 0,
+        startDate: '2026-10-26',
+        endDate: '2026-11-01',
+        days: getDaysFromStart('2026-10-26')
+      }
+    ];
+
+    // Add any custom weeklyPlans beyond week_1..3
+    Object.values(weeklyPlans).forEach(wp => {
+      if (!baseWeeks.some(bw => bw.id === wp.id)) {
+        const range = getCurrentWeekRange(wp.startDate);
+        baseWeeks.push({
+          id: wp.id,
+          title: `Week ${wp.weekNumber}`,
+          focus: wp.focusTheme || 'Weekly Execution',
+          score: wp.achievedScore || 0,
+          startDate: range.startDate,
+          endDate: range.endDate,
+          days: range.days
+        });
+      }
+    });
+
+    // Ensure the real current calendar week is always present in the matrix
+    const currentWeekRange = getCurrentWeekRange(todayDate);
+    const hasCurrentWeek = baseWeeks.some(w => w.days.includes(todayDate));
+    if (!hasCurrentWeek) {
+      baseWeeks.push({
+        id: `week_current_${currentWeekRange.startDate}`,
+        title: 'Current Week',
+        focus: 'Active Calendar Week',
+        score: 0,
+        startDate: currentWeekRange.startDate,
+        endDate: currentWeekRange.endDate,
+        days: currentWeekRange.days
+      });
+    }
+
+    return baseWeeks.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  };
+
+  const weeksList = buildWeeksList();
 
   const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
@@ -174,22 +210,26 @@ export const SpreadsheetMatrixView: React.FC = () => {
                       const dayGws = gwsSessions.filter(s => s.date === dateStr);
                       const hasData = entry && (entry.executionScore > 0 || (entry.planNotes && entry.planNotes.trim().length > 0) || dayGws.length > 0 || (entry.reviewNotes && entry.reviewNotes.trim().length > 0));
 
-                      const dayNumber = dateStr.split('-')[2];
+                      const isTodayCell = dateStr === todayDate;
 
                       return (
                         <td 
                           key={dateStr}
                           onClick={() => handleDayClick(dateStr)}
                           className={`py-3 px-2 border-l border-slate-800/80 cursor-pointer transition-all hover:bg-slate-800/60 ${
-                            !hasData ? 'bg-slate-950/20' : 'bg-slate-900/50'
+                            isTodayCell
+                              ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-500/40'
+                              : !hasData
+                              ? 'bg-slate-950/20'
+                              : 'bg-slate-900/50'
                           }`}
                         >
                           <div className="flex flex-col h-full min-h-[90px] justify-between p-2 rounded-2xl border border-transparent hover:border-amber-500/30">
                             
                             {/* Date + Status */}
                             <div className="flex items-center justify-between text-[11px]">
-                              <span className="font-mono font-bold text-slate-300">
-                                {dateStr.slice(5)}
+                              <span className={`font-mono font-bold ${isTodayCell ? 'text-amber-400' : 'text-slate-300'}`}>
+                                {dateStr.slice(5)} {isTodayCell ? '• TODAY' : ''}
                               </span>
                               {hasData ? (
                                 <span className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${getScoreColor(entry?.executionScore || 0)}`}>

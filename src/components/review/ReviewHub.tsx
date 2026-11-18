@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useStorage, ReviewSubTab } from '../../context/StorageContext';
+import { useStorage, ReviewSubTab, getCurrentWeekRange } from '../../context/StorageContext';
 import { WeeklyPlan, ReviewEntry } from '../../types/schema';
 import { 
   FileText, 
@@ -238,11 +238,12 @@ export const ReviewHub: React.FC = () => {
   const handleCreateNewWeekDirect = (e: React.FormEvent) => {
     e.preventDefault();
     const newId = `week_${modalNewWeekNum}`;
+    const currentRange = getCurrentWeekRange(selectedDate);
     const newPlan: WeeklyPlan = {
       id: newId,
       weekNumber: modalNewWeekNum,
-      startDate: '2026-11-02',
-      endDate: '2026-11-08',
+      startDate: currentRange.startDate,
+      endDate: currentRange.endDate,
       focusTheme: modalNewWeekFocus.trim(),
       notes: '',
       tasks: [],

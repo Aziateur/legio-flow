@@ -19,6 +19,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   onCustomizeTemplate
 }) => {
   const { 
+    todayDate,
     selectedDate, 
     setSelectedDate, 
     goToPreviousDay, 
@@ -45,7 +46,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   // Helper date ribbons
   const getDatesRibbon = () => {
     const list = [];
-    const base = new Date(selectedDate);
+    const base = new Date(`${selectedDate}T12:00:00`);
     for (let i = -3; i <= 3; i++) {
       const d = new Date(base);
       d.setDate(base.getDate() + i);
@@ -57,7 +58,8 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         dateStr,
         dayNum: d.getDate(),
         dayName: d.toLocaleDateString('en-US', { weekday: 'short' }),
-        isCurrent: dateStr === selectedDate
+        isCurrent: dateStr === selectedDate,
+        isToday: dateStr === todayDate
       });
     }
     return list;
@@ -139,7 +141,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     });
   };
 
-  const isSelectedToday = selectedDate === '2026-10-28';
+  const isSelectedToday = selectedDate === todayDate;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -166,6 +168,11 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                 onChange={(e) => setSelectedDate(e.target.value)}
                 className="bg-transparent text-slate-100 font-bold font-mono text-sm sm:text-base focus:outline-none cursor-pointer"
               />
+              {isSelectedToday && (
+                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  Today
+                </span>
+              )}
             </div>
 
             <button
@@ -206,13 +213,17 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
             <button
               key={item.dateStr}
               onClick={() => setSelectedDate(item.dateStr)}
-              className={`flex-1 min-w-[58px] py-2 px-1 rounded-2xl flex flex-col items-center justify-center transition-all ${
+              className={`flex-1 min-w-[58px] py-2 px-1 rounded-2xl flex flex-col items-center justify-center transition-all relative ${
                 item.isCurrent
                   ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md shadow-amber-500/20 ring-2 ring-amber-400'
+                  : item.isToday
+                  ? 'bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-emerald-500/40'
                   : 'bg-slate-950/60 hover:bg-slate-800 text-slate-400 border border-slate-800/80'
               }`}
             >
-              <span className="text-[10px] uppercase font-bold tracking-wider">{item.dayName}</span>
+              <span className="text-[10px] uppercase font-bold tracking-wider">
+                {item.isToday ? 'TODAY' : item.dayName}
+              </span>
               <span className="text-sm sm:text-base font-extrabold font-mono mt-0.5">{item.dayNum}</span>
             </button>
           ))}

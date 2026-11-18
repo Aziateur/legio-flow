@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useStorage, PlanningSubTab } from '../../context/StorageContext';
+import { useStorage, PlanningSubTab, getCurrentWeekRange } from '../../context/StorageContext';
 import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
 import { WeeklyPlan } from '../../types/schema';
@@ -47,10 +47,11 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   // New Week form state
   const existingWeekNums = Object.values(weeklyPlans).map(p => p.weekNumber);
   const maxWeekNum = existingWeekNums.length > 0 ? Math.max(...existingWeekNums) : 1;
+  const defaultWeekRange = getCurrentWeekRange(selectedDate);
   const [newWeekNum, setNewWeekNum] = useState<number>(maxWeekNum + 1);
   const [newWeekFocus, setNewWeekFocus] = useState<string>('');
-  const [newWeekStart, setNewWeekStart] = useState<string>('2026-11-02');
-  const [newWeekEnd, setNewWeekEnd] = useState<string>('2026-11-08');
+  const [newWeekStart, setNewWeekStart] = useState<string>(defaultWeekRange.startDate);
+  const [newWeekEnd, setNewWeekEnd] = useState<string>(defaultWeekRange.endDate);
 
   // New Daily Plan form state
   const [newPlanDate, setNewPlanDate] = useState<string>(selectedDate);
