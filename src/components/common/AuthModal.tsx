@@ -234,7 +234,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 </div>
                 {errorMsg.toLowerCase().includes('paused') && (
                   <a
-                    href="https://supabase.com/dashboard/project/qrksglxemydjzvpnyzzs"
+                    href="https://supabase.com/dashboard/project/hdpqwpkktxzrcrprtyxq"
                     target="_blank"
                     rel="noreferrer"
                     className="inline-block ml-6 text-amber-400 hover:text-amber-300 underline font-semibold"

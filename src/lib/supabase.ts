@@ -4,9 +4,9 @@ const SUPABASE_URL_KEY = 'legio_supabase_url';
 const SUPABASE_ANON_KEY = 'legio_supabase_anon_key';
 
 // Default Supabase project config (safe public URL + publishable key; data is protected by Auth + RLS)
-export const DEFAULT_PROJECT_REF = 'qrksglxemydjzvpnyzzs';
+export const DEFAULT_PROJECT_REF = 'hdpqwpkktxzrcrprtyxq';
 export const DEFAULT_SUPABASE_URL = `https://${DEFAULT_PROJECT_REF}.supabase.co`;
-export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_-CyGd2MmblUGpYXcBJMwdg_swPXM9ax';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_C4L4o3f-YXqoqrYhiIi7VA_wdJN1Bya';
 
 export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const metaEnv = (import.meta as any).env || {};

@@ -1007,7 +1007,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const formatSupabaseError = (msg?: string): string => {
     if (!msg) return 'Could not reach Supabase.';
     if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('networkerror')) {
-      return 'Cannot reach Supabase server (Failed to fetch). Your Supabase project (qrksglxemydjzvpnyzzs) is likely PAUSED — open your Supabase Dashboard and click "Restore project" first.';
+      return 'Cannot reach Supabase server (Failed to fetch). Your Supabase project (hdpqwpkktxzrcrprtyxq) may be paused — open your Supabase Dashboard and click "Restore project".';
     }
     return msg;
   };
