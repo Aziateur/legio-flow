@@ -287,32 +287,32 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   const isSelectedToday = selectedDate === todayDate;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-5">
       
-      {/* Top Navigation & Date Bar */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+      {/* Compact Top Date & Monday–Sunday Week Strip */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-lg space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           
           {/* Date Selector with previous/today/next */}
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5">
             <button
               onClick={goToPreviousDay}
-              className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
+              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
               title="Previous Day"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="w-4 h-4" />
             </button>
 
-            <div className="flex items-center space-x-3 px-4 py-2 rounded-2xl bg-slate-950 border border-slate-800">
-              <CalendarIcon className="w-5 h-5 text-amber-400" />
+            <div className="flex items-center space-x-2 px-3 py-1 rounded-xl bg-slate-950 border border-slate-800">
+              <CalendarIcon className="w-4 h-4 text-amber-400" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-slate-100 font-bold font-mono text-sm sm:text-base focus:outline-none cursor-pointer"
+                className="bg-transparent text-slate-100 font-bold font-mono text-xs sm:text-sm focus:outline-none cursor-pointer"
               />
               {isSelectedToday && (
-                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                   Today
                 </span>
               )}
@@ -320,82 +320,78 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
 
             <button
               onClick={goToNextDay}
-              className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
+              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
               title="Next Day"
             >
-              <ChevronRight className="w-5 h-5" />
+              <ChevronRight className="w-4 h-4" />
             </button>
 
             {!isSelectedToday && (
               <button
                 onClick={goToToday}
-                className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all"
+                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all"
               >
                 Jump to Today
               </button>
             )}
           </div>
 
-          {/* Action buttons on header */}
-          <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
-            <button
-              onClick={onCustomizeTemplate}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors"
-              title="Change cards, order, size and shape"
-            >
-              <Sliders className="w-4 h-4 text-amber-400" />
-              <span>Customize Cards & Shapes</span>
-            </button>
-          </div>
-
-        </div>
-
-        {/* 7-Day Monday–Sunday Week Ribbon */}
-        <div className="pt-2 border-t border-slate-800/80 space-y-2">
-          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-            <span className="font-mono font-bold text-amber-400">
+          <div className="flex items-center space-x-3">
+            <span className="hidden md:inline text-[11px] font-mono font-bold text-amber-400">
               Week {activeWeeklyPlan.weekNumber} ({activeWeeklyPlan.startDate.slice(5)} → {activeWeeklyPlan.endDate.slice(5)})
             </span>
-            <span>Monday – Sunday Week View</span>
+            <button
+              onClick={onCustomizeTemplate}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors"
+              title="Change cards, order, size and shape"
+            >
+              <Sliders className="w-3.5 h-3.5 text-amber-400" />
+              <span>Customize Cards</span>
+            </button>
           </div>
-          <div className="flex items-center justify-between gap-1 sm:gap-2 overflow-x-auto pb-1">
-            {getDatesRibbon().map((item) => (
-              <button
-                key={item.dateStr}
-                onClick={() => setSelectedDate(item.dateStr)}
-                className={`flex-1 min-w-[58px] py-2 px-1 rounded-2xl flex flex-col items-center justify-center transition-all relative ${
-                  item.isCurrent
-                    ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md shadow-amber-500/20 ring-2 ring-amber-400'
-                    : item.isToday
-                    ? 'bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-emerald-500/40'
-                    : 'bg-slate-950/60 hover:bg-slate-800 text-slate-400 border border-slate-800/80'
-                }`}
-              >
-                <span className="text-[10px] uppercase font-bold tracking-wider">
-                  {item.isToday ? 'TODAY' : item.dayName}
-                </span>
-                <span className="text-sm sm:text-base font-extrabold font-mono mt-0.5">{item.dayNum}</span>
-                {item.hasPlan && (
-                  <span
-                    className={`mt-1 w-1.5 h-1.5 rounded-full ${
-                      item.isCurrent ? 'bg-slate-950' : item.completedTasks > 0 ? 'bg-emerald-400' : 'bg-amber-400'
-                    }`}
-                  />
-                )}
-              </button>
-            ))}
-          </div>
+        </div>
+
+        {/* Slim 7-Day Monday–Sunday Strip */}
+        <div className="flex items-center justify-between gap-1 sm:gap-1.5 overflow-x-auto">
+          {getDatesRibbon().map((item) => (
+            <button
+              key={item.dateStr}
+              onClick={() => setSelectedDate(item.dateStr)}
+              className={`flex-1 min-w-[52px] py-1.5 px-1 rounded-xl flex items-center justify-center space-x-1.5 transition-all ${
+                item.isCurrent
+                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-sm ring-1 ring-amber-400'
+                  : item.isToday
+                  ? 'bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-emerald-500/40'
+                  : 'bg-slate-950/60 hover:bg-slate-800 text-slate-400 border border-slate-800/80'
+              }`}
+            >
+              <span className="text-[10px] uppercase font-bold tracking-wider">
+                {item.isToday ? 'TODAY' : item.dayName}
+              </span>
+              <span className="text-xs font-extrabold font-mono">{item.dayNum}</span>
+              {item.hasPlan && (
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    item.isCurrent ? 'bg-slate-950' : item.completedTasks > 0 ? 'bg-emerald-400' : 'bg-amber-400'
+                  }`}
+                />
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Quick Copy / Paste Bar */}
-      <QuickCopyPasteBar
-        currentEntry={currentEntry}
-        gwsSessions={gwsSessions}
-        onApplyParsedPlan={handleApplyParsedPlan}
-      />
+      {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
+      {dailyTemplate && (
+        <ModularCardGrid
+          template={dailyTemplate}
+          values={dynamicValues}
+          onChange={handleFieldChange}
+          onAction={handleAction}
+        />
+      )}
 
-      {/* Synchronized Week Goals Bridge (Two-Way Sync with Weekly Plan) */}
+      {/* 2. Synchronized Week Goals Bridge (Two-Way Sync with Weekly Plan) */}
       {systemLevel >= 3 && activeWeeklyPlan && (
         <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-4 sm:p-5 space-y-3 shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
@@ -504,36 +500,12 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       )}
 
-      {/* DYNAMIC TEMPLATE-DRIVEN CARDS GRID */}
-      {dailyTemplate && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono">
-                Active Template:
-              </span>
-              <span className="text-xs font-extrabold text-slate-200 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg">
-                {dailyTemplate.name} ({dailyTemplate.fields.length} modular blocks)
-              </span>
-            </div>
-
-            <button
-              onClick={onCustomizeTemplate}
-              className="text-[11px] font-semibold text-slate-400 hover:text-amber-400 transition-colors flex items-center space-x-1"
-            >
-              <span>Edit this layout</span>
-              <span>→</span>
-            </button>
-          </div>
-
-          <ModularCardGrid
-            template={dailyTemplate}
-            values={dynamicValues}
-            onChange={handleFieldChange}
-            onAction={handleAction}
-          />
-        </div>
-      )}
+      {/* 3. Quick Copy / Paste Bar (Discord / Notion export) */}
+      <QuickCopyPasteBar
+        currentEntry={currentEntry}
+        gwsSessions={gwsSessions}
+        onApplyParsedPlan={handleApplyParsedPlan}
+      />
 
     </div>
   );
