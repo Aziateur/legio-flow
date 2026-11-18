@@ -227,9 +227,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             </div>
 
             {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-start space-x-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{errorMsg}</span>
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs space-y-1.5">
+                <div className="flex items-start space-x-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                  <span>{errorMsg}</span>
+                </div>
+                {errorMsg.toLowerCase().includes('paused') && (
+                  <a
+                    href="https://supabase.com/dashboard/project/qrksglxemydjzvpnyzzs"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block ml-6 text-amber-400 hover:text-amber-300 underline font-semibold"
+                  >
+                    Open Supabase Dashboard (Restore Project) →
+                  </a>
+                )}
               </div>
             )}
 

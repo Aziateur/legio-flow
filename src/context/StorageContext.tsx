@@ -1004,12 +1004,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => clearTimeout(timer);
   }, [authUser, templates, dailyEntries, gwsSessions, weeklyPlans, threeYearPlan, reviews, systemLevel]);
 
+  const formatSupabaseError = (msg?: string): string => {
+    if (!msg) return 'Could not reach Supabase.';
+    if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('networkerror')) {
+      return 'Cannot reach Supabase server (Failed to fetch). Your Supabase project (qrksglxemydjzvpnyzzs) is likely PAUSED — open your Supabase Dashboard and click "Restore project" first.';
+    }
+    return msg;
+  };
+
   const signIn = async (email: string, password: string) => {
     const supabase = getSupabaseClient();
     if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) return { ok: false, error: error.message };
+      if (error) return { ok: false, error: formatSupabaseError(error.message) };
       if (data.user) {
         setAuthUser({
           id: data.user.id,
@@ -1020,7 +1028,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       return { ok: true };
     } catch (err: any) {
-      return { ok: false, error: err?.message || 'Network error reaching Supabase.' };
+      return { ok: false, error: formatSupabaseError(err?.message) };
     }
   };
 
@@ -1028,9 +1036,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const supabase = getSupabaseClient();
     if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
     try {
-      if (!keepLocalData) {
-        startFreshWorkspace();
-      }
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
@@ -1038,7 +1043,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           data: { display_name: displayName?.trim() || email.split('@')[0] }
         }
       });
-      if (error) return { ok: false, error: error.message };
+      if (error) return { ok: false, error: formatSupabaseError(error.message) };
+      if (!keepLocalData) {
+        startFreshWorkspace();
+      }
       if (data.user && data.session) {
         setAuthUser({
           id: data.user.id,
@@ -1050,7 +1058,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       return { ok: true, needsEmailConfirm: true };
     } catch (err: any) {
-      return { ok: false, error: err?.message || 'Network error reaching Supabase.' };
+      return { ok: false, error: formatSupabaseError(err?.message) };
     }
   };
 
