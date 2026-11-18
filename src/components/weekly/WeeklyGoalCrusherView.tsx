@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { useStorage, getCurrentWeekRange, getWeekRangeForWeekNumber } from '../../context/StorageContext';
+import {
+  useStorage,
+  getCurrentWeekRange,
+  getWeekRangeForWeekNumber,
+  getPriorityItemsForEntry,
+  formatPriorityItemsToPlanNotes
+} from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { 
   Target, 
@@ -45,10 +51,14 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     .filter(t => t.completed)
     .reduce((acc, t) => acc + (t.score || 0), 0);
 
-  // Check if a goal is already in a given day's plan
-  const isGoalInDay = (dateStr: string, goalText: string): boolean => {
+  // Check if a goal or sub-goal is already in a given day's plan (by ID first, then text)
+  const isGoalInDay = (dateStr: string, goalText: string, weeklyTaskId?: string, subTaskId?: string): boolean => {
     const entry = dailyEntries[dateStr];
-    if (!entry || !entry.planNotes) return false;
+    if (!entry) return false;
+    const items = getPriorityItemsForEntry(entry);
+    if (subTaskId && items.some(p => p.subTaskId === subTaskId)) return true;
+    if (weeklyTaskId && !subTaskId && items.some(p => p.weeklyTaskId === weeklyTaskId && !p.subTaskId)) return true;
+    if (!entry.planNotes) return false;
     return entry.planNotes.toLowerCase().includes(goalText.toLowerCase().trim());
   };
 
@@ -70,22 +80,21 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     // Sync completion state across any day in this week where the goal was pulled
     weekDaysRange.days.forEach(dStr => {
       const entry = dailyEntries[dStr];
-      if (entry && entry.planNotes && isGoalInDay(dStr, targetGoal.text)) {
-        const lines = entry.planNotes.split('\n');
-        const updatedLines = lines.map(line => {
-          const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
-          if (stripped.toLowerCase() === targetGoal.text.toLowerCase().trim()) {
-            return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+      if (entry && isGoalInDay(dStr, targetGoal.text, id)) {
+        const items = getPriorityItemsForEntry(entry).map(item => {
+          if (
+            (item.weeklyTaskId === id && !item.subTaskId) ||
+            item.text.toLowerCase().trim() === targetGoal.text.toLowerCase().trim()
+          ) {
+            return { ...item, completed: nextCompleted };
           }
-          return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
-        }).filter(Boolean);
-
-        const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
-        const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+          return item;
+        });
         saveDailyEntry(dStr, {
-          planNotes: formatted,
-          mainTasksCompleted: completedCount,
-          mainTasksTotal: Math.max(3, updatedLines.length)
+          planNotes: formatPriorityItemsToPlanNotes(items),
+          priorityItems: items,
+          mainTasksCompleted: items.filter(i => i.completed).length,
+          mainTasksTotal: Math.max(3, items.length)
         });
       }
     });
@@ -142,37 +151,45 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     if (!targetSub) return;
     const nextCompleted = !targetSub.completed;
 
-    const nextTasks = plan.tasks.map(t =>
-      t.id === goalId
-        ? {
-            ...t,
-            subTasks: (t.subTasks || []).map(s =>
-              s.id === subId ? { ...s, completed: nextCompleted } : s
-            )
-          }
-        : t
-    );
-    saveWeeklyPlan({ ...plan, tasks: nextTasks });
+    const nextTasks = plan.tasks.map(t => {
+      if (t.id !== goalId) return t;
+      const updatedSubs = (t.subTasks || []).map(s =>
+        s.id === subId ? { ...s, completed: nextCompleted } : s
+      );
+      const allSubsDone = updatedSubs.length > 0 && updatedSubs.every(s => s.completed);
+      return {
+        ...t,
+        subTasks: updatedSubs,
+        completed: allSubsDone
+      };
+    });
+    const nextScore = nextTasks
+      .filter(t => t.completed)
+      .reduce((acc, t) => acc + (t.score || 0), 0);
+    saveWeeklyPlan({
+      ...plan,
+      tasks: nextTasks,
+      achievedScore: nextScore
+    });
 
     // Sync sub-goal completion with any day in this week where it was pulled
     weekDaysRange.days.forEach(dStr => {
       const entry = dailyEntries[dStr];
-      if (entry && entry.planNotes && isGoalInDay(dStr, targetSub.text)) {
-        const lines = entry.planNotes.split('\n');
-        const updatedLines = lines.map(line => {
-          const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
-          if (stripped.toLowerCase() === targetSub.text.toLowerCase().trim()) {
-            return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+      if (entry && isGoalInDay(dStr, targetSub.text, goalId, subId)) {
+        const items = getPriorityItemsForEntry(entry).map(item => {
+          if (
+            item.subTaskId === subId ||
+            item.text.toLowerCase().trim() === targetSub.text.toLowerCase().trim()
+          ) {
+            return { ...item, completed: nextCompleted };
           }
-          return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
-        }).filter(Boolean);
-
-        const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
-        const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+          return item;
+        });
         saveDailyEntry(dStr, {
-          planNotes: formatted,
-          mainTasksCompleted: completedCount,
-          mainTasksTotal: Math.max(3, updatedLines.length)
+          planNotes: formatPriorityItemsToPlanNotes(items),
+          priorityItems: items,
+          mainTasksCompleted: items.filter(i => i.completed).length,
+          mainTasksTotal: Math.max(3, items.length)
         });
       }
     });
@@ -217,30 +234,39 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     }
   };
 
-  // Bridge: "Pull this Goal into Selected Day's Plan" (numbered & deduplicated)
-  const handlePullToToday = (goalText: string, isCompleted = false) => {
+  // Bridge: "Pull this Goal / Sub-Goal into Selected Day's Plan" with persistent ID linkage
+  const handlePullToToday = (
+    goalText: string,
+    isCompleted = false,
+    weeklyTaskId?: string,
+    subTaskId?: string
+  ) => {
     const cleanGoal = goalText.trim();
     if (!cleanGoal) return;
-    if (isGoalInDay(selectedDate, cleanGoal)) {
+    if (isGoalInDay(selectedDate, cleanGoal, weeklyTaskId, subTaskId)) {
       setPulledNotice(`Already in ${selectedDate}'s priorities!`);
       setTimeout(() => setPulledNotice(null), 2000);
       return;
     }
 
     const currentDaily = getEntryForDate(selectedDate);
-    const rawLines = (currentDaily.planNotes || '')
-      .split('\n')
-      .map(l => l.replace(/^[0-9]+[\.\)\s]+/, '').trim())
-      .filter(Boolean);
-
-    const updatedLines = [...rawLines, `${isCompleted ? '[x] ' : ''}${cleanGoal}`];
-    const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
-    const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+    const existingItems = getPriorityItemsForEntry(currentDaily);
+    const newItem = {
+      id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: cleanGoal,
+      completed: isCompleted,
+      weeklyTaskId,
+      subTaskId
+    };
+    const updatedItems = [...existingItems, newItem];
+    const formatted = formatPriorityItemsToPlanNotes(updatedItems);
+    const completedCount = updatedItems.filter(i => i.completed).length;
 
     saveDailyEntry(selectedDate, {
       planNotes: formatted,
+      priorityItems: updatedItems,
       mainTasksCompleted: completedCount,
-      mainTasksTotal: Math.max(3, updatedLines.length)
+      mainTasksTotal: Math.max(3, updatedItems.length)
     });
     setPulledNotice(`Pulled "${cleanGoal.slice(0, 32)}..." into ${selectedDate}`);
     setTimeout(() => setPulledNotice(null), 2500);
@@ -554,15 +580,34 @@ export const WeeklyGoalCrusherView: React.FC = () => {
 
         {/* Clean Goals Checklist */}
         <div className="space-y-2 pt-2 border-t border-slate-800/80">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-400 pb-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-400 pb-1">
             <span>Weekly Deliverables ({plan.tasks.length})</span>
-            <span className="font-mono text-slate-500 text-[11px]">
-              Allocated: <strong className="text-amber-400">{totalPossible}</strong> / 10 Pts
-            </span>
+            <div className="flex items-center space-x-2">
+              <span className="font-mono text-slate-500 text-[11px]">
+                Allocated: <strong className="text-amber-400">{totalPossible}</strong> / 10 Pts
+              </span>
+              {plan.tasks.length > 0 && (
+                <span
+                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                    totalPossible === 10
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                      : totalPossible < 10
+                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                      : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                  }`}
+                >
+                  {totalPossible === 10
+                    ? '10/10 Balanced ✓'
+                    : totalPossible < 10
+                    ? `${10 - totalPossible} pts left to allocate`
+                    : `${totalPossible - 10} pts over 10-pt budget`}
+                </span>
+              )}
+            </div>
           </div>
 
           {plan.tasks.map((task) => {
-            const inSelectedDay = isGoalInDay(selectedDate, task.text);
+            const inSelectedDay = isGoalInDay(selectedDate, task.text, task.id);
             const subTasks = task.subTasks || [];
             return (
               <div
@@ -609,7 +654,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handlePullToToday(task.text, task.completed)}
+                        onClick={() => handlePullToToday(task.text, task.completed, task.id)}
                         className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[11px] font-semibold border border-slate-800 transition-colors"
                         title={`Pull this goal into ${selectedDate}'s daily plan`}
                       >
@@ -643,7 +688,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                 {/* Sub-Goals List + Inline Sub-Goal Adder */}
                 <div className="pl-10 pr-3.5 pb-3 pt-1 border-t border-slate-900/80 space-y-1.5">
                   {subTasks.map((sub) => {
-                    const subInDay = isGoalInDay(selectedDate, sub.text);
+                    const subInDay = isGoalInDay(selectedDate, sub.text, task.id, sub.id);
                     return (
                       <div
                         key={sub.id}
@@ -679,7 +724,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handlePullToToday(sub.text, sub.completed)}
+                              onClick={() => handlePullToToday(sub.text, sub.completed, task.id, sub.id)}
                               className="flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-amber-400 text-[10px] font-semibold border border-slate-800 transition-colors"
                               title={`Pull sub-goal into ${selectedDate}'s daily plan`}
                             >

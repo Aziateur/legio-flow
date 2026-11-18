@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useStorage } from '../../context/StorageContext';
+import {
+  useStorage,
+  getPriorityItemsForEntry,
+  formatPriorityItemsToPlanNotes
+} from '../../context/StorageContext';
 import { GWSSession } from '../../types/schema';
 import { 
   Play, 
@@ -28,11 +32,24 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     selectedDate, 
     gwsSessions, 
     addGWSSession, 
-    deleteGWSSession 
+    deleteGWSSession,
+    getEntryForDate,
+    saveDailyEntry,
+    weeklyPlans,
+    selectedWeekId,
+    saveWeeklyPlan
   } = useStorage();
+
+  const currentDailyEntry = getEntryForDate(selectedDate);
+  const todayPriorities = getPriorityItemsForEntry(currentDailyEntry).filter(p => p.text.trim().length > 0);
+  const activeWeeklyPlan =
+    Object.values(weeklyPlans).find(p => p.startDate <= selectedDate && selectedDate <= p.endDate) ||
+    weeklyPlans[selectedWeekId];
 
   // Active session state
   const [taskName, setTaskName] = useState('');
+  const [linkedPriorityId, setLinkedPriorityId] = useState<string | null>(null);
+  const [completePriorityOnSave, setCompletePriorityOnSave] = useState(true);
   const [plannedMinutes, setPlannedMinutes] = useState(50);
   const [actualMinutes, setActualMinutes] = useState(0);
 
@@ -130,8 +147,68 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       }
     });
 
+    // If linked to a Daily Priority and user checked "Mark priority completed", mark it Done & sync weekly goals!
+    if (linkedPriorityId && completePriorityOnSave) {
+      const targetPrio = todayPriorities.find(p => p.id === linkedPriorityId);
+      const updatedItems = getPriorityItemsForEntry(currentDailyEntry).map(item =>
+        item.id === linkedPriorityId ? { ...item, completed: true } : item
+      );
+      saveDailyEntry(selectedDate, {
+        planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+        priorityItems: updatedItems,
+        mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+        mainTasksTotal: Math.max(3, updatedItems.length)
+      });
+
+      if (targetPrio && activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0) {
+        let matched = false;
+        const normalizedText = targetPrio.text.toLowerCase().trim();
+        const updatedTasks = activeWeeklyPlan.tasks.map(t => {
+          let nextTask = t;
+          if (
+            (targetPrio.weeklyTaskId && !targetPrio.subTaskId && t.id === targetPrio.weeklyTaskId) ||
+            (!targetPrio.weeklyTaskId && t.text.toLowerCase().trim() === normalizedText)
+          ) {
+            matched = true;
+            nextTask = { ...nextTask, completed: true };
+          }
+          if (t.subTasks && t.subTasks.length > 0) {
+            let subMatched = false;
+            const updatedSubs = t.subTasks.map(sub => {
+              if (
+                (targetPrio.subTaskId && sub.id === targetPrio.subTaskId) ||
+                (!targetPrio.subTaskId && sub.text.toLowerCase().trim() === normalizedText)
+              ) {
+                matched = true;
+                subMatched = true;
+                return { ...sub, completed: true };
+              }
+              return sub;
+            });
+            if (subMatched) {
+              nextTask = {
+                ...nextTask,
+                subTasks: updatedSubs,
+                completed: updatedSubs.every(s => s.completed)
+              };
+            }
+          }
+          return nextTask;
+        });
+
+        if (matched) {
+          saveWeeklyPlan({
+            ...activeWeeklyPlan,
+            tasks: updatedTasks,
+            achievedScore: updatedTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
+          });
+        }
+      }
+    }
+
     // Reset form
     setTaskName('');
+    setLinkedPriorityId(null);
     handleResetTimer();
     setAccomplished('');
     setHeldBack('');
@@ -201,11 +278,47 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
               </div>
             </div>
 
-            {/* Task input */}
-            <div className="space-y-2 mb-6">
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
-                Task Description:
-              </label>
+            {/* Task input + Quick Link to Today's Daily Priorities */}
+            <div className="space-y-2.5 mb-6">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Task Description:
+                </label>
+                {todayPriorities.length > 0 && (
+                  <span className="text-[11px] text-amber-400 font-semibold">
+                    Click a priority below to lock in sprint target:
+                  </span>
+                )}
+              </div>
+
+              {todayPriorities.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {todayPriorities.map((prio, idx) => {
+                    const isSelectedPrio = linkedPriorityId === prio.id;
+                    return (
+                      <button
+                        key={prio.id}
+                        type="button"
+                        onClick={() => {
+                          setTaskName(prio.text);
+                          setLinkedPriorityId(isSelectedPrio ? null : prio.id);
+                        }}
+                        className={`text-xs px-2.5 py-1.5 rounded-xl border transition-all flex items-center space-x-1.5 ${
+                          isSelectedPrio
+                            ? 'bg-amber-500 text-slate-950 font-bold border-amber-400 shadow-sm'
+                            : prio.completed
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 line-through'
+                            : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        <span className="font-mono font-extrabold">#{idx + 1}</span>
+                        <span className="truncate max-w-[220px]">{prio.text}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <input
                 type="text"
                 value={taskName}
@@ -214,6 +327,18 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                 className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
                 required
               />
+
+              {linkedPriorityId && (
+                <label className="flex items-center space-x-2 text-xs text-emerald-400 pt-0.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={completePriorityOnSave}
+                    onChange={(e) => setCompletePriorityOnSave(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span>Mark linked Daily Priority as Completed when saving this GWS sprint</span>
+                </label>
+              )}
             </div>
 
             {/* Time: Planned vs Actual + Live Stopwatch */}

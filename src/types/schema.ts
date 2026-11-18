@@ -88,6 +88,14 @@ export interface GWSSession {
   createdAt: string;
 }
 
+export interface DailyPriorityItem {
+  id: string;
+  text: string;
+  completed: boolean;
+  weeklyTaskId?: string;
+  subTaskId?: string;
+}
+
 export interface DailyEntry {
   date: string; // YYYY-MM-DD
   templateId: string;
@@ -97,6 +105,7 @@ export interface DailyEntry {
   automaticTasksCompleted: boolean;
   automaticTaskList?: TaskItem[];
   planNotes: string; // e.g. Day priorities
+  priorityItems?: DailyPriorityItem[];
   gwsSessionIds: string[];
   reviewNotes?: string;
   customFieldValues: Record<string, any>;

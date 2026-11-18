@@ -10,8 +10,19 @@ export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_C4L4o3f-YXqoqrYhiIi7VA_
 
 export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const metaEnv = (import.meta as any).env || {};
-  const url = localStorage.getItem(SUPABASE_URL_KEY) || metaEnv.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-  const anonKey = localStorage.getItem(SUPABASE_ANON_KEY) || metaEnv.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+  let savedUrl = localStorage.getItem(SUPABASE_URL_KEY) || '';
+  let savedKey = localStorage.getItem(SUPABASE_ANON_KEY) || '';
+
+  // Auto-clean stale paused project reference if previously cached in browser localStorage
+  if (savedUrl.includes('qrksglxemydjzvpnyzzs')) {
+    localStorage.removeItem(SUPABASE_URL_KEY);
+    localStorage.removeItem(SUPABASE_ANON_KEY);
+    savedUrl = '';
+    savedKey = '';
+  }
+
+  const url = savedUrl || metaEnv.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const anonKey = savedKey || metaEnv.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
   return { url, anonKey };
 }
 

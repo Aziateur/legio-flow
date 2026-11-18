@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
+import { Template, DailyEntry, DailyPriorityItem, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
 import { 
   DEFAULT_TEMPLATES, 
   INITIAL_DAILY_ENTRIES, 
@@ -45,18 +45,35 @@ export const getCurrentWeekRange = (baseDateStr?: string): { startDate: string; 
   };
 };
 
-// Calculate sequential week number anchored at Week 1 Monday (2026-10-12)
-export const getWeekNumberForDate = (dateStr: string): number => {
+const ONBOARDING_EPOCH_KEY = 'legio_onboarding_start_v1';
+
+export const getEffectiveEpochMonday = (plans?: Record<string, WeeklyPlan>): string => {
+  if (plans && plans['week_1']?.startDate) {
+    return plans['week_1'].startDate;
+  }
+  try {
+    const saved = localStorage.getItem(ONBOARDING_EPOCH_KEY);
+    if (saved) return saved;
+  } catch {
+    // ignore
+  }
+  return '2026-10-12';
+};
+
+// Calculate sequential week number anchored at the user's Week 1 Monday
+export const getWeekNumberForDate = (dateStr: string, epochStartStr?: string): number => {
   const range = getCurrentWeekRange(dateStr);
-  const epochMonday = new Date('2026-10-12T12:00:00');
+  const baseEpoch = epochStartStr || getEffectiveEpochMonday();
+  const epochMonday = new Date(`${baseEpoch}T12:00:00`);
   const targetMonday = new Date(`${range.startDate}T12:00:00`);
   const diffDays = Math.round((targetMonday.getTime() - epochMonday.getTime()) / (1000 * 60 * 60 * 24));
   return Math.max(1, Math.floor(diffDays / 7) + 1);
 };
 
-// Get exact Monday–Sunday range for a given sequential week number (Week 1 = 2026-10-12 → 2026-10-18)
-export const getWeekRangeForWeekNumber = (weekNumber: number): { startDate: string; endDate: string; days: string[] } => {
-  const epochMonday = new Date('2026-10-12T12:00:00');
+// Get exact Monday–Sunday range for a given sequential week number
+export const getWeekRangeForWeekNumber = (weekNumber: number, epochStartStr?: string): { startDate: string; endDate: string; days: string[] } => {
+  const baseEpoch = epochStartStr || getEffectiveEpochMonday();
+  const epochMonday = new Date(`${baseEpoch}T12:00:00`);
   epochMonday.setDate(epochMonday.getDate() + (Math.max(1, weekNumber) - 1) * 7);
   const yyyy = epochMonday.getFullYear();
   const mm = String(epochMonday.getMonth() + 1).padStart(2, '0');
@@ -64,20 +81,58 @@ export const getWeekRangeForWeekNumber = (weekNumber: number): { startDate: stri
   return getCurrentWeekRange(`${yyyy}-${mm}-${dd}`);
 };
 
+// Structured Daily Priority helpers (ID-based sync + full planNotes compatibility)
+export const getPriorityItemsForEntry = (entry?: DailyEntry): DailyPriorityItem[] => {
+  if (!entry) return [];
+  if (Array.isArray(entry.priorityItems) && entry.priorityItems.length > 0) {
+    return entry.priorityItems;
+  }
+  if (!entry.planNotes || !entry.planNotes.trim()) {
+    return [];
+  }
+  return entry.planNotes
+    .split('\n')
+    .map((line, idx) => {
+      let cleaned = line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
+      let completed = false;
+      if (cleaned.startsWith('[x] ') || cleaned.startsWith('[X] ')) {
+        completed = true;
+        cleaned = cleaned.slice(4).trim();
+      } else if (cleaned.startsWith('[ ] ')) {
+        cleaned = cleaned.slice(4).trim();
+      }
+      return {
+        id: `prio_${entry.date}_${idx}`,
+        text: cleaned,
+        completed
+      };
+    })
+    .filter(item => item.text.length > 0);
+};
+
+export const formatPriorityItemsToPlanNotes = (items: DailyPriorityItem[]): string => {
+  return items
+    .filter(item => item.text.trim().length > 0)
+    .map((item, idx) => `${idx + 1} ${item.completed ? '[x] ' : ''}${item.text.trim()}`)
+    .join('\n');
+};
+
 // Ensure all weeks from Week 1 up to the highest week / target date exist without any gaps
 export const ensureContinuousWeeks = (
   plans: Record<string, WeeklyPlan>,
-  targetDateStr: string = getTodayDateString()
+  targetDateStr: string = getTodayDateString(),
+  epochOverride?: string
 ): Record<string, WeeklyPlan> => {
   const next = { ...plans };
-  const targetWeekNum = getWeekNumberForDate(targetDateStr);
+  const epochMonday = epochOverride || getEffectiveEpochMonday(next);
+  const targetWeekNum = getWeekNumberForDate(targetDateStr, epochMonday);
   const existingNums = Object.values(next).map(p => p.weekNumber);
   const maxWeekNum = Math.max(targetWeekNum, ...(existingNums.length > 0 ? existingNums : [1]));
 
   for (let w = 1; w <= maxWeekNum; w++) {
     const weekId = `week_${w}`;
     if (!next[weekId]) {
-      const range = getWeekRangeForWeekNumber(w);
+      const range = getWeekRangeForWeekNumber(w, epochMonday);
       next[weekId] = {
         id: weekId,
         weekNumber: w,
@@ -728,10 +783,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const resetAllData = () => {
     const nowStr = getTodayDateString();
+    try {
+      localStorage.setItem(ONBOARDING_EPOCH_KEY, '2026-10-12');
+    } catch {
+      // ignore
+    }
     setTemplates(DEFAULT_TEMPLATES);
     setDailyEntries(INITIAL_DAILY_ENTRIES);
     setGwsSessions(INITIAL_GWS_SESSIONS);
-    setWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr));
+    setWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr, '2026-10-12'));
     setThreeYearPlan(INITIAL_THREE_YEAR_PLAN);
     setReviews([]);
     setTodayDate(nowStr);
@@ -741,16 +801,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const buildFreshPayload = () => {
     const nowStr = getTodayDateString();
     const currentRange = getCurrentWeekRange(nowStr);
-    const currentWeekNum = getWeekNumberForDate(nowStr);
-    const freshWeekId = `week_${currentWeekNum}`;
+    // New accounts start at THEIR own Week 1 on the current calendar week!
+    const freshWeekId = 'week_1';
+    try {
+      localStorage.setItem(ONBOARDING_EPOCH_KEY, currentRange.startDate);
+    } catch {
+      // ignore
+    }
     return {
+      onboardingStartDate: currentRange.startDate,
       templates: DEFAULT_TEMPLATES,
       dailyEntries: {} as Record<string, DailyEntry>,
       gwsSessions: [] as GWSSession[],
       weeklyPlans: {
         [freshWeekId]: {
           id: freshWeekId,
-          weekNumber: currentWeekNum,
+          weekNumber: 1,
           startDate: currentRange.startDate,
           endDate: currentRange.endDate,
           focusTheme: '',
@@ -877,6 +943,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const isHydratingFromCloudRef = useRef(false);
 
   const buildCloudPayload = () => ({
+    onboardingStartDate: getEffectiveEpochMonday(weeklyPlans),
     templates,
     dailyEntries,
     gwsSessions,
@@ -889,10 +956,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const applyCloudPayload = (state: any) => {
     if (!state || typeof state !== 'object') return;
     isHydratingFromCloudRef.current = true;
+    const cloudEpoch = state.onboardingStartDate || state.weeklyPlans?.['week_1']?.startDate || '2026-10-12';
+    try {
+      localStorage.setItem(ONBOARDING_EPOCH_KEY, cloudEpoch);
+    } catch {
+      // ignore
+    }
     if (Array.isArray(state.templates)) setTemplates(state.templates);
     if (state.dailyEntries) setDailyEntries(state.dailyEntries);
     if (Array.isArray(state.gwsSessions)) setGwsSessions(state.gwsSessions);
-    if (state.weeklyPlans) setWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString()));
+    if (state.weeklyPlans) setWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch));
     if (state.threeYearPlan) setThreeYearPlan(state.threeYearPlan);
     if (Array.isArray(state.reviews)) setReviews(state.reviews);
     if (state.systemLevel >= 1 && state.systemLevel <= 4) setSystemLevelState(state.systemLevel);

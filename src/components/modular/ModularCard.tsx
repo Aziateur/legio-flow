@@ -219,18 +219,35 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         );
       }
 
-      // 5b. Numbered List (1, 2, 3 discrete priority items with completion checkboxes)
+      // 5b. Numbered List (1, 2, 3 discrete priority items with ID-linked weekly sync & completion checkboxes)
       case 'numbered_list': {
         interface PriorityRow {
+          id: string;
           text: string;
           completed: boolean;
+          weeklyTaskId?: string;
+          subTaskId?: string;
         }
 
         const parseValueToRows = (rawVal: any): PriorityRow[] => {
           const parsed: PriorityRow[] = [];
-          if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+          if (Array.isArray(rawVal)) {
+            rawVal.forEach((item, idx) => {
+              if (typeof item === 'string') {
+                parsed.push({ id: `prio_${idx}`, text: item, completed: false });
+              } else if (item && typeof item === 'object') {
+                parsed.push({
+                  id: item.id || `prio_${idx}`,
+                  text: item.text || '',
+                  completed: !!item.completed,
+                  weeklyTaskId: item.weeklyTaskId,
+                  subTaskId: item.subTaskId
+                });
+              }
+            });
+          } else if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
             const lines = rawVal.split('\n');
-            lines.forEach(line => {
+            lines.forEach((line, idx) => {
               let cleaned = line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
               let completed = false;
               if (cleaned.startsWith('[x] ') || cleaned.startsWith('[X] ')) {
@@ -239,11 +256,11 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
               } else if (cleaned.startsWith('[ ] ')) {
                 cleaned = cleaned.slice(4).trim();
               }
-              parsed.push({ text: cleaned, completed });
+              parsed.push({ id: `prio_${idx}`, text: cleaned, completed });
             });
           }
           while (parsed.length < 3) {
-            parsed.push({ text: '', completed: false });
+            parsed.push({ id: `prio_slot_${parsed.length}`, text: '', completed: false });
           }
           return parsed;
         };
@@ -253,11 +270,14 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         // Reset extra empty slots if value has grown to fill them
         const displayRows = [...rows];
         for (let i = 0; i < extraEmptySlots; i++) {
-          displayRows.push({ text: '', completed: false });
+          displayRows.push({
+            id: `prio_extra_${rows.length + i}`,
+            text: '',
+            completed: false
+          });
         }
 
         const serializeAndSync = (nextRows: PriorityRow[], toggledRow?: PriorityRow) => {
-          // Keep trailing non-empty rows, preserving internal empty rows
           let lastNonEmptyIdx = -1;
           nextRows.forEach((r, i) => {
             if (r.text.trim().length > 0) lastNonEmptyIdx = i;
@@ -272,9 +292,9 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
             })
             .join('\n');
 
+          // Emit both formatted string and structured items so ID links never break on text edits
           onChange(formatted);
 
-          // Automatically sync completed & total counts with Main Tasks Completed + Weekly Goals
           if (onAction) {
             const filledRows = nextRows.filter(r => r.text.trim().length > 0);
             const completedCount = filledRows.filter(r => r.completed).length;
@@ -282,6 +302,8 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
             onAction('sync_daily_priorities', {
               completedCount,
               totalCount,
+              priorityItems: effectiveRows,
+              toggledItem: toggledRow,
               toggledText: toggledRow?.text?.trim(),
               isCompleted: toggledRow?.completed
             });
@@ -289,7 +311,17 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         };
 
         const handleItemChange = (index: number, text: string) => {
-          const next = displayRows.map((r, i) => i === index ? { ...r, text } : r);
+          const next = displayRows.map((r, i) =>
+            i === index
+              ? {
+                  ...r,
+                  text,
+                  // Only clear weekly link if user completely clears the row text
+                  weeklyTaskId: text.trim() ? r.weeklyTaskId : undefined,
+                  subTaskId: text.trim() ? r.subTaskId : undefined
+                }
+              : r
+          );
           if (index >= rows.length && text.trim().length > 0) {
             setExtraEmptySlots(prev => Math.max(0, prev - 1));
           }
@@ -347,6 +379,16 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                       : 'border-slate-800 focus:border-amber-500/60 text-slate-100'
                   }`}
                 />
+
+                {/* Linked Weekly Goal Badge if connected by ID */}
+                {(row.weeklyTaskId || row.subTaskId) && row.text.trim().length > 0 && (
+                  <span
+                    className="hidden sm:inline-flex items-center px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] font-bold text-amber-400 shrink-0"
+                    title="ID-linked to your Weekly Goal Crusher (survives rewording)"
+                  >
+                    🎯 Week Link
+                  </span>
+                )}
 
                 {/* Quick check button on right side when filled */}
                 {row.text.trim().length > 0 && (

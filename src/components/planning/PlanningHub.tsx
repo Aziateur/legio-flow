@@ -35,6 +35,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     saveThreeYearPlan,
     weeklyPlans,
     saveWeeklyPlan,
+    selectedWeekId,
     setSelectedWeekId,
     todayDate,
     selectedDate,
@@ -147,6 +148,33 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
   const handleVisionChange = (vision: string) => {
     saveThreeYearPlan({ ...threeYearPlan, vision });
+  };
+
+  const activeWeeklyPlan =
+    Object.values(weeklyPlans).find(p => p.startDate <= selectedDate && selectedDate <= p.endDate) ||
+    weeklyPlans[selectedWeekId] ||
+    Object.values(weeklyPlans)[0];
+
+  const handlePullMilestoneToActiveWeek = (text: string) => {
+    if (!activeWeeklyPlan) return;
+    const alreadyExists = activeWeeklyPlan.tasks.some(
+      t => t.text.toLowerCase().trim() === text.toLowerCase().trim()
+    );
+    if (!alreadyExists) {
+      saveWeeklyPlan({
+        ...activeWeeklyPlan,
+        tasks: [
+          ...activeWeeklyPlan.tasks,
+          {
+            id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            text: text.trim(),
+            score: 2,
+            completed: false
+          }
+        ]
+      });
+    }
+    setPlanningSubTab('weekly');
   };
 
   // Submit handler for creating a new weekly plan
@@ -514,12 +542,22 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                             {m.text}
                           </span>
                         </button>
-                        <button
-                          onClick={() => handleDeleteMilestone(currentPillar.id, 'year1Milestones', m.id)}
-                          className="text-slate-600 hover:text-rose-400 p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center space-x-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handlePullMilestoneToActiveWeek(m.text)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 text-[11px] font-bold transition-colors"
+                            title={`Pull into Week ${activeWeeklyPlan?.weekNumber || ''} Goal Crusher`}
+                          >
+                            + Pull to Week {activeWeeklyPlan?.weekNumber || ''}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMilestone(currentPillar.id, 'year1Milestones', m.id)}
+                            className="text-slate-600 hover:text-rose-400 p-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

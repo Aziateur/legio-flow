@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { useStorage, getCurrentWeekRange, getWeekNumberForDate } from '../../context/StorageContext';
+import {
+  useStorage,
+  getCurrentWeekRange,
+  getWeekNumberForDate,
+  getPriorityItemsForEntry,
+  formatPriorityItemsToPlanNotes
+} from '../../context/StorageContext';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -105,7 +111,9 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       case 'gws_sessions_done':
         return todaySessions;
       case 'plan_notes':
-        return currentEntry.planNotes;
+        return currentEntry.priorityItems && currentEntry.priorityItems.length > 0
+          ? currentEntry.priorityItems
+          : currentEntry.planNotes;
       case 'daily_reflexion':
         return currentEntry.reviewNotes || '';
       default:
@@ -157,31 +165,52 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     if (actionName === 'open_gws') {
       onOpenGWS();
     } else if (actionName === 'sync_daily_priorities' && payload) {
-      // 1. Sync Main Tasks Completed & Total automatically from the Daily Mission checklist
+      // 1. Sync Main Tasks Completed, Total & structured priorityItems (preserving IDs)
       saveDailyEntry(selectedDate, {
         mainTasksCompleted: payload.completedCount,
-        mainTasksTotal: payload.totalCount
+        mainTasksTotal: payload.totalCount,
+        ...(Array.isArray(payload.priorityItems) ? { priorityItems: payload.priorityItems } : {})
       });
 
-      // 2. Two-way sync: if the toggled daily priority matches a Weekly Goal OR Sub-Goal in the active week, sync its completion!
-      if (payload.toggledText && activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0) {
-        const normalizedToggled = payload.toggledText.toLowerCase().trim();
+      // 2. Two-way ID-first sync with Weekly Goal or Sub-Goal (+ auto-complete parent goal when all sub-goals are done)
+      const toggledItem = payload.toggledItem;
+      const normalizedToggled = (payload.toggledText || '').toLowerCase().trim();
+      if ((toggledItem || normalizedToggled) && activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0) {
         let matched = false;
         const updatedTasks = activeWeeklyPlan.tasks.map(t => {
           let nextTask = t;
-          if (t.text.toLowerCase().trim() === normalizedToggled) {
+
+          // Match parent weekly goal by ID first, fallback to text
+          const isDirectGoalMatch =
+            (toggledItem?.weeklyTaskId && !toggledItem?.subTaskId && t.id === toggledItem.weeklyTaskId) ||
+            (!toggledItem?.weeklyTaskId && normalizedToggled && t.text.toLowerCase().trim() === normalizedToggled);
+
+          if (isDirectGoalMatch) {
             matched = true;
             nextTask = { ...nextTask, completed: !!payload.isCompleted };
           }
+
           if (t.subTasks && t.subTasks.length > 0) {
+            let subMatched = false;
             const updatedSubs = t.subTasks.map(sub => {
-              if (sub.text.toLowerCase().trim() === normalizedToggled) {
+              const isSubMatch =
+                (toggledItem?.subTaskId && sub.id === toggledItem.subTaskId) ||
+                (!toggledItem?.subTaskId && normalizedToggled && sub.text.toLowerCase().trim() === normalizedToggled);
+              if (isSubMatch) {
                 matched = true;
+                subMatched = true;
                 return { ...sub, completed: !!payload.isCompleted };
               }
               return sub;
             });
-            nextTask = { ...nextTask, subTasks: updatedSubs };
+            if (subMatched) {
+              const allSubsDone = updatedSubs.length > 0 && updatedSubs.every(s => s.completed);
+              nextTask = {
+                ...nextTask,
+                subTasks: updatedSubs,
+                completed: allSubsDone
+              };
+            }
           }
           return nextTask;
         });
@@ -200,40 +229,47 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     }
   };
 
-  // Helper to check if a weekly goal is already in today's planNotes
-  const isGoalInTodayPlan = (goalText: string): boolean => {
+  // Helper to check if a weekly goal/sub-goal is already in today's priorities (by ID first, then text)
+  const isGoalInTodayPlan = (goalText: string, weeklyTaskId?: string, subTaskId?: string): boolean => {
+    const items = getPriorityItemsForEntry(currentEntry);
+    if (subTaskId && items.some(p => p.subTaskId === subTaskId)) return true;
+    if (weeklyTaskId && !subTaskId && items.some(p => p.weeklyTaskId === weeklyTaskId && !p.subTaskId)) return true;
     if (!currentEntry.planNotes) return false;
     return currentEntry.planNotes.toLowerCase().includes(goalText.toLowerCase().trim());
   };
 
-  // Pull a weekly goal into the next available numbered priority slot for selectedDate
-  const handlePullGoalToDay = (goalText: string, isCompleted = false) => {
+  // Pull a weekly goal or sub-goal into the next available numbered priority slot with persistent ID linkage
+  const handlePullGoalToDay = (
+    goalText: string,
+    isCompleted = false,
+    weeklyTaskId?: string,
+    subTaskId?: string
+  ) => {
     const cleanGoal = goalText.trim();
-    if (!cleanGoal || isGoalInTodayPlan(cleanGoal)) return;
+    if (!cleanGoal || isGoalInTodayPlan(cleanGoal, weeklyTaskId, subTaskId)) return;
 
-    const rawLines = (currentEntry.planNotes || '')
-      .split('\n')
-      .map(l => l.replace(/^[0-9]+[\.\)\s]+/, '').trim())
-      .filter(Boolean);
-
-    const newEntryLine = `${isCompleted ? '[x] ' : ''}${cleanGoal}`;
-    const updatedLines = [...rawLines, newEntryLine];
-
-    const formatted = updatedLines
-      .map((line, idx) => `${idx + 1} ${line}`)
-      .join('\n');
-
-    const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
-    const totalCount = Math.max(3, updatedLines.length);
+    const existingItems = getPriorityItemsForEntry(currentEntry);
+    const newItem = {
+      id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: cleanGoal,
+      completed: isCompleted,
+      weeklyTaskId,
+      subTaskId
+    };
+    const updatedItems = [...existingItems, newItem];
+    const formatted = formatPriorityItemsToPlanNotes(updatedItems);
+    const completedCount = updatedItems.filter(i => i.completed).length;
+    const totalCount = Math.max(3, updatedItems.length);
 
     saveDailyEntry(selectedDate, {
       planNotes: formatted,
+      priorityItems: updatedItems,
       mainTasksCompleted: completedCount,
       mainTasksTotal: totalCount
     });
   };
 
-  // Toggle a weekly goal directly from the Daily view and sync with today's planNotes if present
+  // Toggle a weekly goal directly from the Daily view and sync with today's priorities
   const handleToggleWeeklyGoalDirect = (taskId: string) => {
     const targetTask = activeWeeklyPlan.tasks.find(t => t.id === taskId);
     if (!targetTask) return;
@@ -252,23 +288,21 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       achievedScore: nextScore
     });
 
-    // If this goal is also in today's planNotes, update its [x] state there too
-    if (currentEntry.planNotes && isGoalInTodayPlan(targetTask.text)) {
-      const lines = currentEntry.planNotes.split('\n');
-      const updatedLines = lines.map(line => {
-        const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
-        if (stripped.toLowerCase() === targetTask.text.toLowerCase().trim()) {
-          return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+    if (isGoalInTodayPlan(targetTask.text, taskId)) {
+      const items = getPriorityItemsForEntry(currentEntry).map(item => {
+        if (
+          (item.weeklyTaskId === taskId && !item.subTaskId) ||
+          item.text.toLowerCase().trim() === targetTask.text.toLowerCase().trim()
+        ) {
+          return { ...item, completed: nextCompleted };
         }
-        return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
-      }).filter(Boolean);
-
-      const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
-      const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+        return item;
+      });
       saveDailyEntry(selectedDate, {
-        planNotes: formatted,
-        mainTasksCompleted: completedCount,
-        mainTasksTotal: Math.max(3, updatedLines.length)
+        planNotes: formatPriorityItemsToPlanNotes(items),
+        priorityItems: items,
+        mainTasksCompleted: items.filter(i => i.completed).length,
+        mainTasksTotal: Math.max(3, items.length)
       });
     }
   };
@@ -279,34 +313,42 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     if (!targetSub) return;
     const nextCompleted = !targetSub.completed;
 
-    const updatedTasks = activeWeeklyPlan.tasks.map(t =>
-      t.id === goalId
-        ? {
-            ...t,
-            subTasks: (t.subTasks || []).map(s =>
-              s.id === subId ? { ...s, completed: nextCompleted } : s
-            )
-          }
-        : t
-    );
-    saveWeeklyPlan({ ...activeWeeklyPlan, tasks: updatedTasks });
+    const updatedTasks = activeWeeklyPlan.tasks.map(t => {
+      if (t.id !== goalId) return t;
+      const updatedSubs = (t.subTasks || []).map(s =>
+        s.id === subId ? { ...s, completed: nextCompleted } : s
+      );
+      const allSubsDone = updatedSubs.length > 0 && updatedSubs.every(s => s.completed);
+      return {
+        ...t,
+        subTasks: updatedSubs,
+        completed: allSubsDone
+      };
+    });
+    const nextScore = updatedTasks
+      .filter(t => t.completed)
+      .reduce((acc, t) => acc + (t.score || 0), 0);
+    saveWeeklyPlan({
+      ...activeWeeklyPlan,
+      tasks: updatedTasks,
+      achievedScore: nextScore
+    });
 
-    if (currentEntry.planNotes && isGoalInTodayPlan(targetSub.text)) {
-      const lines = currentEntry.planNotes.split('\n');
-      const updatedLines = lines.map(line => {
-        const stripped = line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim();
-        if (stripped.toLowerCase() === targetSub.text.toLowerCase().trim()) {
-          return `${nextCompleted ? '[x] ' : ''}${stripped}`;
+    if (isGoalInTodayPlan(targetSub.text, goalId, subId)) {
+      const items = getPriorityItemsForEntry(currentEntry).map(item => {
+        if (
+          item.subTaskId === subId ||
+          item.text.toLowerCase().trim() === targetSub.text.toLowerCase().trim()
+        ) {
+          return { ...item, completed: nextCompleted };
         }
-        return line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
-      }).filter(Boolean);
-
-      const formatted = updatedLines.map((l, idx) => `${idx + 1} ${l}`).join('\n');
-      const completedCount = updatedLines.filter(l => l.startsWith('[x] ') || l.startsWith('[X] ')).length;
+        return item;
+      });
       saveDailyEntry(selectedDate, {
-        planNotes: formatted,
-        mainTasksCompleted: completedCount,
-        mainTasksTotal: Math.max(3, updatedLines.length)
+        planNotes: formatPriorityItemsToPlanNotes(items),
+        priorityItems: items,
+        mainTasksCompleted: items.filter(i => i.completed).length,
+        mainTasksTotal: Math.max(3, items.length)
       });
     }
   };
@@ -334,6 +376,15 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   };
 
   const isSelectedToday = selectedDate === todayDate;
+
+  // Find the most recent Course Correction note from previous days + most recent GWS next-sprint commitment
+  const latestPreviousReview = Object.values(dailyEntries)
+    .filter(e => e.date < selectedDate && e.reviewNotes && e.reviewNotes.trim().length > 0)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+  const latestGwsCommitment = gwsSessions
+    .filter(s => s.reflexions?.improveNext && s.reflexions.improveNext.trim().length > 0)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-5">
@@ -430,6 +481,30 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       </div>
 
+      {/* Course Correction Feedback Loop (Surfaces Yesterday's Review & Next-Sprint Commitment) */}
+      {(latestPreviousReview || latestGwsCommitment) && (
+        <div className="bg-slate-900/70 border border-emerald-500/25 rounded-2xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <div className="flex items-start sm:items-center space-x-2 min-w-0">
+            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="truncate">
+              <span className="font-extrabold uppercase tracking-wider text-[10px] text-emerald-400 mr-2">
+                Active Course Correction:
+              </span>
+              <span className="text-slate-200">
+                {latestPreviousReview
+                  ? `"${latestPreviousReview.reviewNotes}" (${latestPreviousReview.date})`
+                  : `"${latestGwsCommitment?.reflexions.improveNext}" (GWS)`}
+              </span>
+            </div>
+          </div>
+          {latestPreviousReview && latestGwsCommitment && (
+            <span className="text-[11px] text-amber-400 font-mono truncate max-w-xs shrink-0">
+              Sprint Focus: "{latestGwsCommitment.reflexions.improveNext}"
+            </span>
+          )}
+        </div>
+      )}
+
       {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
       {dailyTemplate && (
         <ModularCardGrid
@@ -474,7 +549,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
           {activeWeeklyPlan.tasks.length > 0 ? (
             <div className="space-y-2.5 pt-1">
               {activeWeeklyPlan.tasks.map((task) => {
-                const inToday = isGoalInTodayPlan(task.text);
+                const inToday = isGoalInTodayPlan(task.text, task.id);
                 const subTasks = task.subTasks || [];
                 return (
                   <div
@@ -518,7 +593,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                       ) : (
                         <button
                           type="button"
-                          onClick={() => handlePullGoalToDay(task.text, task.completed)}
+                          onClick={() => handlePullGoalToDay(task.text, task.completed, task.id)}
                           className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 px-2 py-0.5 rounded border border-amber-500/30 flex items-center space-x-0.5 transition-colors shrink-0"
                           title={`Pull into ${selectedDate}'s priorities`}
                         >
@@ -532,7 +607,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                     {subTasks.length > 0 && (
                       <div className="pl-6 flex items-center gap-1.5 flex-wrap">
                         {subTasks.map((sub) => {
-                          const subInToday = isGoalInTodayPlan(sub.text);
+                          const subInToday = isGoalInTodayPlan(sub.text, task.id, sub.id);
                           return (
                             <div
                               key={sub.id}
@@ -563,7 +638,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => handlePullGoalToDay(sub.text, sub.completed)}
+                                  onClick={() => handlePullGoalToDay(sub.text, sub.completed, task.id, sub.id)}
                                   className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded flex items-center space-x-0.5"
                                 >
                                   <ArrowDownToLine className="w-2.5 h-2.5" />
