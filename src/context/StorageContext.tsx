@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
 import { 
   DEFAULT_TEMPLATES, 
@@ -7,6 +7,7 @@ import {
   INITIAL_WEEKLY_PLANS,
   INITIAL_THREE_YEAR_PLAN
 } from '../types/defaults';
+import { getSupabaseClient } from '../lib/supabase';
 
 export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'three_year';
@@ -95,6 +96,22 @@ export const ensureContinuousWeeks = (
   return next;
 };
 
+export interface MissingPlanAlert {
+  id: 'missing_daily' | 'missing_weekly';
+  title: string;
+  message: string;
+  actionLabel: string;
+  targetSubTab: 'daily' | 'weekly';
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName?: string;
+}
+
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
+
 interface StorageContextType {
   templates: Template[];
   dailyEntries: Record<string, DailyEntry>;
@@ -110,6 +127,21 @@ interface StorageContextType {
   reviewSubTab: ReviewSubTab;
   systemLevel: SystemLevel;
   setSystemLevel: (lvl: SystemLevel) => void;
+
+  // Notifications
+  missingPlanAlerts: MissingPlanAlert[];
+  browserNotificationsEnabled: boolean;
+  enableBrowserNotifications: () => Promise<boolean>;
+
+  // Auth & Cloud Sync (Supabase)
+  authUser: AuthUser | null;
+  syncStatus: SyncStatus;
+  syncError: string | null;
+  signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  signUp: (email: string, password: string, displayName?: string, keepLocalData?: boolean) => Promise<{ ok: boolean; error?: string; needsEmailConfirm?: boolean }>;
+  signOut: () => Promise<void>;
+  syncNow: () => Promise<void>;
+  startFreshWorkspace: () => void;
   
   // Navigation
   setSelectedDate: (date: string) => void;
@@ -332,6 +364,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       document.removeEventListener('visibilitychange', syncCurrentDate);
     };
   }, []);
+
+  // Automatically create a new week whenever todayDate enters a new calendar week
+  useEffect(() => {
+    setWeeklyPlans(prev => ensureContinuousWeeks(prev, todayDate));
+  }, [todayDate]);
 
   // Progressive System Level (1 to 4)
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
@@ -701,6 +738,337 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSelectedDateState(nowStr);
   };
 
+  // Start a clean blank workspace (used for new friend accounts or fresh start)
+  const startFreshWorkspace = () => {
+    const nowStr = getTodayDateString();
+    const currentRange = getCurrentWeekRange(nowStr);
+    const currentWeekNum = getWeekNumberForDate(nowStr);
+    const freshWeekId = `week_${currentWeekNum}`;
+    const blankWeeks: Record<string, WeeklyPlan> = {
+      [freshWeekId]: {
+        id: freshWeekId,
+        weekNumber: currentWeekNum,
+        startDate: currentRange.startDate,
+        endDate: currentRange.endDate,
+        focusTheme: '',
+        notes: '',
+        tasks: [],
+        totalPossibleScore: 10,
+        achievedScore: 0,
+        rewards: [],
+        updatedAt: new Date().toISOString()
+      }
+    };
+    setTemplates(DEFAULT_TEMPLATES);
+    setDailyEntries({});
+    setGwsSessions([]);
+    setWeeklyPlans(blankWeeks);
+    setThreeYearPlan({
+      id: 'plan_3yr_core',
+      vision: '',
+      targetHorizon: '2026 — 2029',
+      strategyCore: '',
+      pillars: [],
+      updatedAt: new Date().toISOString()
+    });
+    setReviews([]);
+    setTodayDate(nowStr);
+    setSelectedDateState(nowStr);
+    setSelectedWeekIdState(freshWeekId);
+  };
+
+  // --- MISSING PLAN NOTIFICATIONS (Daily + Weekly) ---
+  const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('legio_browser_notifs') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const todayEntryForAlerts = dailyEntries[todayDate];
+  const hasTodayPlan = !!(todayEntryForAlerts && todayEntryForAlerts.planNotes && todayEntryForAlerts.planNotes.trim().length > 0);
+
+  const currentWeekNumForAlerts = getWeekNumberForDate(todayDate);
+  const currentWeekRangeForAlerts = getCurrentWeekRange(todayDate);
+  const currentWeekPlanForAlerts =
+    Object.values(weeklyPlans).find(p => p.startDate <= todayDate && todayDate <= p.endDate) ||
+    weeklyPlans[`week_${currentWeekNumForAlerts}`];
+  const hasCurrentWeekPlan = !!(
+    currentWeekPlanForAlerts &&
+    (currentWeekPlanForAlerts.tasks.length > 0 || currentWeekPlanForAlerts.focusTheme.trim().length > 0)
+  );
+
+  const missingPlanAlerts: MissingPlanAlert[] = [];
+  if (!hasTodayPlan) {
+    missingPlanAlerts.push({
+      id: 'missing_daily',
+      title: "Today's Plan Isn't Made",
+      message: `No priorities set yet for today (${todayDate}). Lock in your Day Mission.`,
+      actionLabel: 'Plan Today',
+      targetSubTab: 'daily'
+    });
+  }
+  if (systemLevel >= 3 && !hasCurrentWeekPlan) {
+    missingPlanAlerts.push({
+      id: 'missing_weekly',
+      title: `Week ${currentWeekNumForAlerts} Plan Isn't Made`,
+      message: `Set your weekly focus & deliverables for ${currentWeekRangeForAlerts.startDate} → ${currentWeekRangeForAlerts.endDate}.`,
+      actionLabel: `Plan Week ${currentWeekNumForAlerts}`,
+      targetSubTab: 'weekly'
+    });
+  }
+
+  const enableBrowserNotifications = async (): Promise<boolean> => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      return false;
+    }
+    if (Notification.permission === 'granted') {
+      setBrowserNotificationsEnabled(true);
+      localStorage.setItem('legio_browser_notifs', 'true');
+      return true;
+    }
+    const perm = await Notification.requestPermission();
+    const granted = perm === 'granted';
+    setBrowserNotificationsEnabled(granted);
+    localStorage.setItem('legio_browser_notifs', granted ? 'true' : 'false');
+    if (granted && missingPlanAlerts.length > 0) {
+      new Notification('Legio Flow Reminder', {
+        body: missingPlanAlerts.map(a => a.title).join(' • ')
+      });
+    }
+    return granted;
+  };
+
+  // Fire native browser notification once per day if enabled & plans are missing
+  useEffect(() => {
+    if (!browserNotificationsEnabled || missingPlanAlerts.length === 0) return;
+    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+    const notifKey = `legio_notified_${todayDate}_${missingPlanAlerts.map(a => a.id).join('_')}`;
+    if (localStorage.getItem(notifKey)) return;
+    try {
+      new Notification('Legio Flow — Plan Reminder', {
+        body: missingPlanAlerts.map(a => a.message).join('\n')
+      });
+      localStorage.setItem(notifKey, '1');
+    } catch {
+      // Ignore browser notification restrictions
+    }
+  }, [browserNotificationsEnabled, todayDate, missingPlanAlerts.length]);
+
+  // --- SUPABASE AUTH & MULTI-USER CLOUD SYNC ---
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const isHydratingFromCloudRef = useRef(false);
+
+  const buildCloudPayload = () => ({
+    templates,
+    dailyEntries,
+    gwsSessions,
+    weeklyPlans,
+    threeYearPlan,
+    reviews,
+    systemLevel
+  });
+
+  const applyCloudPayload = (state: any) => {
+    if (!state || typeof state !== 'object') return;
+    isHydratingFromCloudRef.current = true;
+    if (Array.isArray(state.templates)) setTemplates(state.templates);
+    if (state.dailyEntries) setDailyEntries(state.dailyEntries);
+    if (Array.isArray(state.gwsSessions)) setGwsSessions(state.gwsSessions);
+    if (state.weeklyPlans) setWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString()));
+    if (state.threeYearPlan) setThreeYearPlan(state.threeYearPlan);
+    if (Array.isArray(state.reviews)) setReviews(state.reviews);
+    if (state.systemLevel >= 1 && state.systemLevel <= 4) setSystemLevelState(state.systemLevel);
+    setTimeout(() => {
+      isHydratingFromCloudRef.current = false;
+    }, 300);
+  };
+
+  const loadUserCloudState = async (userId: string) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    setSyncStatus('syncing');
+    setSyncError(null);
+    try {
+      const { data, error } = await supabase
+        .from('legio_user_state')
+        .select('state, display_name')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error) {
+        setSyncStatus('error');
+        setSyncError(error.message);
+        return;
+      }
+
+      if (data && data.state) {
+        applyCloudPayload(data.state);
+        setSyncStatus('synced');
+      } else {
+        // First time this user has no cloud row yet -> push current workspace
+        const { error: upsertErr } = await supabase
+          .from('legio_user_state')
+          .upsert({
+            user_id: userId,
+            state: buildCloudPayload(),
+            updated_at: new Date().toISOString()
+          });
+        if (upsertErr) {
+          setSyncStatus('error');
+          setSyncError(upsertErr.message);
+        } else {
+          setSyncStatus('synced');
+        }
+      }
+    } catch (err: any) {
+      setSyncStatus('error');
+      setSyncError(err?.message || 'Unable to reach Supabase');
+    }
+  };
+
+  // Subscribe to Supabase auth session on mount
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setSyncStatus('offline');
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      const u = data?.session?.user;
+      if (u) {
+        setAuthUser({
+          id: u.id,
+          email: u.email || '',
+          displayName: u.user_metadata?.display_name
+        });
+        loadUserCloudState(u.id);
+      }
+    }).catch(() => {
+      setSyncStatus('offline');
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user;
+      if (u) {
+        setAuthUser({
+          id: u.id,
+          email: u.email || '',
+          displayName: u.user_metadata?.display_name
+        });
+      } else {
+        setAuthUser(null);
+        setSyncStatus('idle');
+      }
+    });
+
+    return () => {
+      sub?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  // Debounced auto-save to Supabase whenever workspace data changes while signed in
+  useEffect(() => {
+    if (!authUser || isHydratingFromCloudRef.current) return;
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const timer = setTimeout(async () => {
+      setSyncStatus('syncing');
+      try {
+        const { error } = await supabase
+          .from('legio_user_state')
+          .upsert({
+            user_id: authUser.id,
+            display_name: authUser.displayName || authUser.email,
+            state: buildCloudPayload(),
+            updated_at: new Date().toISOString()
+          });
+        if (error) {
+          setSyncStatus('error');
+          setSyncError(error.message);
+        } else {
+          setSyncStatus('synced');
+          setSyncError(null);
+        }
+      } catch (err: any) {
+        setSyncStatus('error');
+        setSyncError(err?.message || 'Sync failed');
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [authUser, templates, dailyEntries, gwsSessions, weeklyPlans, threeYearPlan, reviews, systemLevel]);
+
+  const signIn = async (email: string, password: string) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) return { ok: false, error: error.message };
+      if (data.user) {
+        setAuthUser({
+          id: data.user.id,
+          email: data.user.email || email,
+          displayName: data.user.user_metadata?.display_name
+        });
+        await loadUserCloudState(data.user.id);
+      }
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Network error reaching Supabase.' };
+    }
+  };
+
+  const signUp = async (email: string, password: string, displayName?: string, keepLocalData = false) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
+    try {
+      if (!keepLocalData) {
+        startFreshWorkspace();
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: { display_name: displayName?.trim() || email.split('@')[0] }
+        }
+      });
+      if (error) return { ok: false, error: error.message };
+      if (data.user && data.session) {
+        setAuthUser({
+          id: data.user.id,
+          email: data.user.email || email,
+          displayName: displayName?.trim() || email.split('@')[0]
+        });
+        await loadUserCloudState(data.user.id);
+        return { ok: true };
+      }
+      return { ok: true, needsEmailConfirm: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Network error reaching Supabase.' };
+    }
+  };
+
+  const signOut = async () => {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setAuthUser(null);
+    setSyncStatus('idle');
+    setSyncError(null);
+  };
+
+  const syncNow = async () => {
+    if (!authUser) return;
+    await loadUserCloudState(authUser.id);
+  };
+
   return (
     <StorageContext.Provider
       value={{
@@ -718,6 +1086,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         reviewSubTab,
         systemLevel,
         setSystemLevel,
+        missingPlanAlerts,
+        browserNotificationsEnabled,
+        enableBrowserNotifications,
+        authUser,
+        syncStatus,
+        syncError,
+        signIn,
+        signUp,
+        signOut,
+        syncNow,
+        startFreshWorkspace,
         setSelectedDate,
         setSelectedWeekId,
         setActiveTab,

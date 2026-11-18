@@ -17,28 +17,43 @@ import {
   X,
   Database,
   Copy,
-  Check
+  Check,
+  Bell,
+  User,
+  ArrowRight
 } from 'lucide-react';
 import { SupabaseSyncModal } from './SupabaseSyncModal';
+import { AuthModal } from './AuthModal';
 
 export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGWS }) => {
   const { 
     activeTab, 
     setActiveTab, 
+    setPlanningSubTab,
+    todayDate,
+    setSelectedDate,
     selectedDate, 
     gwsSessions, 
     dailyEntries,
     systemLevel,
     setSystemLevel,
+    missingPlanAlerts,
+    browserNotificationsEnabled,
+    enableBrowserNotifications,
+    authUser,
+    syncStatus,
+    syncNow,
     exportData, 
     importData, 
     resetAllData 
   } = useStorage();
 
   const [levelDropdownOpen, setLevelDropdownOpen] = useState(false);
+  const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [copiedAllSuccess, setCopiedAllSuccess] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
   const [importError, setImportError] = useState('');
@@ -202,6 +217,108 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 <span>+ GWS Sprint</span>
               </button>
 
+              {/* Notification Bell (Missing Day / Week Plan Alerts) */}
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setNotifDropdownOpen(!notifDropdownOpen);
+                    setLevelDropdownOpen(false);
+                  }}
+                  title={missingPlanAlerts.length > 0 ? `${missingPlanAlerts.length} missing plan reminder(s)` : 'All plans set'}
+                  className={`relative p-2 rounded-lg border transition-colors ${
+                    missingPlanAlerts.length > 0
+                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+                      : 'bg-slate-800/60 text-slate-400 border-slate-700/60 hover:text-slate-200'
+                  }`}
+                >
+                  <Bell className="w-4 h-4" />
+                  {missingPlanAlerts.length > 0 && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-extrabold flex items-center justify-center shadow">
+                      {missingPlanAlerts.length}
+                    </span>
+                  )}
+                </button>
+
+                {notifDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl p-3 shadow-2xl z-50 space-y-2.5">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                        Plan Reminders
+                      </span>
+                      <button
+                        type="button"
+                        onClick={enableBrowserNotifications}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-colors ${
+                          browserNotificationsEnabled
+                            ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200 border-slate-700'
+                        }`}
+                      >
+                        {browserNotificationsEnabled ? 'Push Alerts: ON' : 'Enable Push Alerts'}
+                      </button>
+                    </div>
+
+                    {missingPlanAlerts.length === 0 ? (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center space-x-2">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>Today's plan and this week's plan are both locked in!</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {missingPlanAlerts.map((alert) => (
+                          <div
+                            key={alert.id}
+                            className="p-3 rounded-xl bg-slate-950 border border-amber-500/30 space-y-2"
+                          >
+                            <div className="text-xs font-bold text-amber-400">{alert.title}</div>
+                            <p className="text-[11px] text-slate-400 leading-snug">{alert.message}</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedDate(todayDate);
+                                setPlanningSubTab(alert.targetSubTab);
+                                setNotifDropdownOpen(false);
+                              }}
+                              className="w-full py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center space-x-1"
+                            >
+                              <span>{alert.actionLabel}</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Account / Supabase Auth Button */}
+              <button
+                onClick={() => setShowAuthModal(true)}
+                title={authUser ? `Signed in as ${authUser.email}` : 'Sign In / Create Account'}
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                  authUser
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                    : 'bg-slate-800/80 text-slate-200 border-slate-700 hover:border-amber-500/40'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span className="max-w-[90px] truncate">
+                  {authUser ? (authUser.displayName || authUser.email.split('@')[0]) : 'Sign In'}
+                </span>
+                {authUser && (
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      syncStatus === 'synced'
+                        ? 'bg-emerald-400'
+                        : syncStatus === 'syncing'
+                        ? 'bg-amber-400 animate-pulse'
+                        : 'bg-rose-400'
+                    }`}
+                  />
+                )}
+              </button>
+
               {/* Data Export / Import / Copy / Supabase Menu */}
               <div className="flex items-center space-x-1 pl-2 border-l border-slate-800">
                 <button
@@ -248,6 +365,25 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
 
             {/* Mobile menu trigger */}
             <div className="flex md:hidden items-center space-x-2">
+              <button
+                onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
+                className="relative p-1.5 rounded-lg bg-slate-800 text-amber-400"
+                title="Plan Reminders"
+              >
+                <Bell className="w-4 h-4" />
+                {missingPlanAlerts.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {missingPlanAlerts.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setShowAuthModal(true)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-200"
+                title="Account"
+              >
+                <User className="w-4 h-4" />
+              </button>
               <button
                 onClick={onOpenQuickGWS}
                 className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 font-bold text-xs"
@@ -303,6 +439,13 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
       <SupabaseSyncModal
         isOpen={showSupabaseModal}
         onClose={() => setShowSupabaseModal(false)}
+        onSyncNow={syncNow}
+      />
+
+      {/* Account Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
       />
 
       {/* Import Modal */}

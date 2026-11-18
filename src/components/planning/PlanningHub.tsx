@@ -20,7 +20,8 @@ import {
   Layers,
   ChevronRight,
   X,
-  FilePlus
+  FilePlus,
+  Bell
 } from 'lucide-react';
 
 export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
@@ -35,10 +36,14 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     weeklyPlans,
     saveWeeklyPlan,
     setSelectedWeekId,
+    todayDate,
     selectedDate,
     setSelectedDate,
-    systemLevel
+    systemLevel,
+    missingPlanAlerts
   } = useStorage();
+
+  const [dismissedAlerts, setDismissedAlerts] = useState(false);
 
   // Create Plan Modal state
   const [showCreatePlanModal, setShowCreatePlanModal] = useState(false);
@@ -276,6 +281,51 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
         </div>
       </div>
+
+      {/* Missing Plan Notification Banner (Day / Week Plan Reminder) */}
+      {!dismissedAlerts && missingPlanAlerts.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-start sm:items-center space-x-3">
+              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div className="space-y-0.5">
+                <div className="text-xs font-extrabold text-amber-300 uppercase tracking-wider">
+                  {missingPlanAlerts.map(a => a.title).join(' • ')}
+                </div>
+                <div className="text-xs text-slate-300">
+                  {missingPlanAlerts.map(a => a.message).join(' ')}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+              {missingPlanAlerts.map(alert => (
+                <button
+                  key={alert.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedDate(todayDate);
+                    setPlanningSubTab(alert.targetSubTab);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-sm"
+                >
+                  {alert.actionLabel}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setDismissedAlerts(true)}
+                className="p-1.5 text-slate-400 hover:text-slate-200"
+                title="Dismiss reminder"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* VIEW 1: DAILY PLANNING */}
       {planningSubTab === 'daily' && (

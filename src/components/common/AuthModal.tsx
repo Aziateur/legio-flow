@@ -1,0 +1,330 @@
+import React, { useState } from 'react';
+import { useStorage } from '../../context/StorageContext';
+import { SUPABASE_SCHEMA_SQL } from '../../lib/supabase';
+import {
+  User,
+  LogIn,
+  UserPlus,
+  LogOut,
+  Check,
+  AlertCircle,
+  Cloud,
+  RefreshCw,
+  Copy,
+  X,
+  Sparkles
+} from 'lucide-react';
+
+interface AuthModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
+  const {
+    authUser,
+    syncStatus,
+    syncError,
+    signIn,
+    signUp,
+    signOut,
+    syncNow,
+    startFreshWorkspace
+  } = useStorage();
+
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [keepLocalData, setKeepLocalData] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [infoMsg, setInfoMsg] = useState('');
+  const [copiedSql, setCopiedSql] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setInfoMsg('');
+    setLoading(true);
+
+    if (mode === 'signin') {
+      const res = await signIn(email, password);
+      setLoading(false);
+      if (res.ok) {
+        onClose();
+      } else {
+        setErrorMsg(res.error || 'Could not sign in. Please check your credentials.');
+      }
+    } else {
+      const res = await signUp(email, password, displayName, keepLocalData);
+      setLoading(false);
+      if (res.ok) {
+        if (res.needsEmailConfirm) {
+          setInfoMsg('Account created! Check your email inbox to confirm your address, then sign in.');
+        } else {
+          onClose();
+        }
+      } else {
+        setErrorMsg(res.error || 'Could not create account.');
+      }
+    }
+  };
+
+  const handleCopySQL = () => {
+    navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-md p-3 sm:p-6 flex justify-center items-start">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-6 sm:p-8 shadow-2xl space-y-6 relative my-6">
+        <button
+          onClick={onClose}
+          className="absolute top-5 right-5 p-2 rounded-xl bg-slate-950 text-slate-400 hover:text-slate-100"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+        {/* Header */}
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30">
+            <User className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-extrabold text-slate-100">
+              {authUser ? 'Your Legio Account' : 'Legio Flow Accounts'}
+            </h2>
+            <p className="text-xs text-slate-400">
+              {authUser
+                ? 'Synced privately to your Supabase account'
+                : 'Sign in or create an account so your plans sync across devices'}
+            </p>
+          </div>
+        </div>
+
+        {/* Logged-in View */}
+        {authUser ? (
+          <div className="space-y-4">
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Signed in as</span>
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border flex items-center space-x-1 ${
+                    syncStatus === 'synced'
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                      : syncStatus === 'syncing'
+                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                      : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                  }`}
+                >
+                  <Cloud className="w-3 h-3" />
+                  <span>
+                    {syncStatus === 'synced'
+                      ? 'Cloud Synced'
+                      : syncStatus === 'syncing'
+                      ? 'Syncing...'
+                      : syncStatus === 'error'
+                      ? 'Sync Error'
+                      : 'Ready'}
+                  </span>
+                </span>
+              </div>
+              <div className="text-sm font-bold text-slate-100">
+                {authUser.displayName || authUser.email}
+              </div>
+              <div className="text-xs font-mono text-slate-400">{authUser.email}</div>
+            </div>
+
+            {syncError && (
+              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
+                <div className="flex items-center space-x-1.5 font-bold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Cloud Sync Notice</span>
+                </div>
+                <p>{syncError}</p>
+                <p className="text-[11px] text-slate-400">
+                  Make sure the Supabase project is active and the <code>legio_user_state</code> table SQL has been run in Supabase SQL Editor.
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={syncNow}
+                className="flex-1 flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                <span>Sync Now</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm('Clear sample data and start a completely blank workspace?')) {
+                    startFreshWorkspace();
+                  }
+                }}
+                className="flex-1 flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-amber-400 border border-slate-800 text-xs font-bold transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Start Fresh</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await signOut();
+                onClose();
+              }}
+              className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-bold transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        ) : (
+          /* Logged-out Sign In / Sign Up Form */
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('signin');
+                  setErrorMsg('');
+                  setInfoMsg('');
+                }}
+                className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all ${
+                  mode === 'signin'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign In</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('signup');
+                  setErrorMsg('');
+                  setInfoMsg('');
+                }}
+                className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all ${
+                  mode === 'signup'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Create Account</span>
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {infoMsg && (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-start space-x-2">
+                <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{infoMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-3">
+              {mode === 'signup' && (
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Your Name
+                  </label>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="e.g. Ali"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs sm:text-sm text-slate-100 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs sm:text-sm text-slate-100 focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  minLength={6}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs sm:text-sm text-slate-100 focus:outline-none"
+                  required
+                />
+              </div>
+
+              {mode === 'signup' && (
+                <label className="flex items-center space-x-2 text-xs text-slate-400 pt-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={keepLocalData}
+                    onChange={(e) => setKeepLocalData(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                  />
+                  <span>Keep my current local plans (leave unchecked for a clean new account)</span>
+                </label>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider shadow-lg shadow-amber-500/20 disabled:opacity-50"
+              >
+                {loading
+                  ? 'Connecting...'
+                  : mode === 'signin'
+                  ? 'Sign In & Sync'
+                  : 'Create Free Account'}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* Admin SQL helper */}
+        <div className="pt-3 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
+          <span>Powered by Supabase Auth + RLS</span>
+          <button
+            type="button"
+            onClick={handleCopySQL}
+            className="flex items-center space-x-1 text-slate-400 hover:text-amber-400 font-mono"
+          >
+            {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+            <span>{copiedSql ? 'SQL Copied!' : 'Copy Setup SQL'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
