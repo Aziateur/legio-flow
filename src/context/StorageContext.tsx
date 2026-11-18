@@ -7,7 +7,12 @@ import {
   INITIAL_WEEKLY_PLANS,
   INITIAL_THREE_YEAR_PLAN
 } from '../types/defaults';
-import { getSupabaseClient } from '../lib/supabase';
+import {
+  getSupabaseClient,
+  getRememberDevicePreference,
+  setRememberDevicePreference,
+  REMEMBERED_USER_CACHE_KEY
+} from '../lib/supabase';
 
 export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'three_year';
@@ -190,10 +195,12 @@ interface StorageContextType {
 
   // Auth & Cloud Sync (Supabase)
   authUser: AuthUser | null;
+  rememberDevice: boolean;
+  setRememberDevice: (remember: boolean) => void;
   syncStatus: SyncStatus;
   syncError: string | null;
-  signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  signUp: (email: string, password: string, displayName?: string, keepLocalData?: boolean) => Promise<{ ok: boolean; error?: string; needsEmailConfirm?: boolean }>;
+  signIn: (email: string, password: string, remember?: boolean) => Promise<{ ok: boolean; error?: string }>;
+  signUp: (email: string, password: string, displayName?: string, keepLocalData?: boolean, remember?: boolean) => Promise<{ ok: boolean; error?: string; needsEmailConfirm?: boolean }>;
   signOut: () => Promise<void>;
   syncNow: () => Promise<void>;
   startFreshWorkspace: () => void;
@@ -937,7 +944,36 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [browserNotificationsEnabled, todayDate, missingPlanAlerts.length]);
 
   // --- SUPABASE AUTH & MULTI-USER CLOUD SYNC ---
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [rememberDevice, setRememberDeviceState] = useState<boolean>(() => getRememberDevicePreference());
+  const setRememberDevice = (remember: boolean) => {
+    setRememberDeviceState(remember);
+    setRememberDevicePreference(remember);
+  };
+
+  const [authUser, setAuthUserState] = useState<AuthUser | null>(() => {
+    // Immediately restore remembered user on startup so UI says "Signed in" with zero flash
+    if (!getRememberDevicePreference()) return null;
+    try {
+      const cached = localStorage.getItem(REMEMBERED_USER_CACHE_KEY);
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setAuthUser = (user: AuthUser | null) => {
+    setAuthUserState(user);
+    try {
+      if (user && getRememberDevicePreference()) {
+        localStorage.setItem(REMEMBERED_USER_CACHE_KEY, JSON.stringify(user));
+      } else if (!user) {
+        localStorage.removeItem(REMEMBERED_USER_CACHE_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
   const isHydratingFromCloudRef = useRef(false);
@@ -1103,7 +1139,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return msg;
   };
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = async (email: string, password: string, remember = true) => {
+    setRememberDevice(remember);
     const supabase = getSupabaseClient();
     if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
     try {
@@ -1123,7 +1160,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const signUp = async (email: string, password: string, displayName?: string, keepLocalData = false) => {
+  const signUp = async (email: string, password: string, displayName?: string, keepLocalData = false, remember = true) => {
+    setRememberDevice(remember);
     const supabase = getSupabaseClient();
     if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
     try {
@@ -1191,6 +1229,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         browserNotificationsEnabled,
         enableBrowserNotifications,
         authUser,
+        rememberDevice,
+        setRememberDevice,
         syncStatus,
         syncError,
         signIn,

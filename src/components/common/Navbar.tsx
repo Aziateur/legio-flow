@@ -295,7 +295,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               {/* Account / Supabase Auth Button */}
               <button
                 onClick={() => setShowAuthModal(true)}
-                title={authUser ? `Signed in as ${authUser.email}` : 'Sign In / Create Account'}
+                title={authUser ? `Signed in as ${authUser.email} (This computer is remembered)` : 'Sign In / Create Account'}
                 className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                   authUser
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
@@ -303,8 +303,10 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 }`}
               >
                 <User className="w-3.5 h-3.5" />
-                <span className="max-w-[90px] truncate">
-                  {authUser ? (authUser.displayName || authUser.email.split('@')[0]) : 'Sign In'}
+                <span className="max-w-[140px] truncate">
+                  {authUser
+                    ? `Signed in (${authUser.displayName || authUser.email.split('@')[0]})`
+                    : 'Sign In'}
                 </span>
                 {authUser && (
                   <span
@@ -379,10 +381,15 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               </button>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-200"
+                className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center space-x-1 ${
+                  authUser
+                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-200'
+                }`}
                 title="Account"
               >
-                <User className="w-4 h-4" />
+                <User className="w-3.5 h-3.5" />
+                <span>{authUser ? 'Signed in' : 'Sign In'}</span>
               </button>
               <button
                 onClick={onOpenQuickGWS}

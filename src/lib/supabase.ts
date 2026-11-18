@@ -2,6 +2,29 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL_KEY = 'legio_supabase_url';
 const SUPABASE_ANON_KEY = 'legio_supabase_anon_key';
+export const REMEMBER_DEVICE_KEY = 'legio_remember_device_v1';
+export const REMEMBERED_USER_CACHE_KEY = 'legio_remembered_user_v1';
+
+export function getRememberDevicePreference(): boolean {
+  try {
+    const val = localStorage.getItem(REMEMBER_DEVICE_KEY);
+    // Default to true so user stays signed in on their computer unless unchecked
+    return val === null ? true : val === 'true';
+  } catch {
+    return true;
+  }
+}
+
+export function setRememberDevicePreference(remember: boolean) {
+  try {
+    localStorage.setItem(REMEMBER_DEVICE_KEY, remember ? 'true' : 'false');
+    if (!remember) {
+      localStorage.removeItem(REMEMBERED_USER_CACHE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
 
 // Default Supabase project config (safe public URL + publishable key; data is protected by Auth + RLS)
 export const DEFAULT_PROJECT_REF = 'hdpqwpkktxzrcrprtyxq';
@@ -39,13 +62,22 @@ export function getSupabaseClient(): SupabaseClient | null {
   if (!url || !anonKey) {
     return null;
   }
-  const keyIdentifier = `${url}_${anonKey}`;
+  const remember = getRememberDevicePreference();
+  const keyIdentifier = `${url}_${anonKey}_${remember ? 'local' : 'session'}`;
   if (cachedClient && lastUsedKey === keyIdentifier) {
     return cachedClient;
   }
   try {
     cachedClient = createClient(url, anonKey, {
-      auth: { persistSession: true }
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storageKey: 'legio_flow_auth_token_v1',
+        storage: typeof window !== 'undefined'
+          ? (remember ? window.localStorage : window.sessionStorage)
+          : undefined
+      }
     });
     lastUsedKey = keyIdentifier;
     return cachedClient;

@@ -23,6 +23,8 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const {
     authUser,
+    rememberDevice,
+    setRememberDevice,
     syncStatus,
     syncError,
     signIn,
@@ -37,6 +39,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [keepLocalData, setKeepLocalData] = useState(false);
+  const [rememberMe, setRememberMe] = useState(rememberDevice);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
@@ -51,7 +54,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     setLoading(true);
 
     if (mode === 'signin') {
-      const res = await signIn(email, password);
+      const res = await signIn(email, password, rememberMe);
       setLoading(false);
       if (res.ok) {
         onClose();
@@ -59,7 +62,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         setErrorMsg(res.error || 'Could not sign in. Please check your credentials.');
       }
     } else {
-      const res = await signUp(email, password, displayName, keepLocalData);
+      const res = await signUp(email, password, displayName, keepLocalData, rememberMe);
       setLoading(false);
       if (res.ok) {
         if (res.needsEmailConfirm) {
@@ -137,6 +140,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 {authUser.displayName || authUser.email}
               </div>
               <div className="text-xs font-mono text-slate-400">{authUser.email}</div>
+
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                <label className="flex items-center space-x-2 text-emerald-400 font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rememberDevice}
+                    onChange={(e) => setRememberDevice(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span>Remember this computer & stay signed in</span>
+                </label>
+              </div>
             </div>
 
             {syncError && (
@@ -296,6 +311,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   required
                 />
               </div>
+
+              <label className="flex items-center space-x-2 text-xs text-slate-300 pt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span>Remember this computer & keep me signed in</span>
+              </label>
 
               {mode === 'signup' && (
                 <label className="flex items-center space-x-2 text-xs text-slate-400 pt-1 cursor-pointer">
