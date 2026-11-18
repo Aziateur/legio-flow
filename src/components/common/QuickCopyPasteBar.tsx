@@ -17,49 +17,52 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
   const [pasteInputOpen, setPasteInputOpen] = useState(false);
   const [pastedRawText, setPastedRawText] = useState('');
 
-  // 1a. Copy ONLY the Daily Plan & Priorities for Discord / Notion
+  // 1a. Copy ONLY the Date & Daily Plan (clean plain text, no emojis, no target count)
   const handleCopyPlanOnly = () => {
-    let text = `📋 **Legio Flow — Daily Plan (${currentEntry.date})**\n\n`;
-    if (currentEntry.planNotes && currentEntry.planNotes.trim()) {
-      text += `${currentEntry.planNotes.trim()}\n`;
-    } else {
-      text += `_No priorities logged yet for ${currentEntry.date}._\n`;
-    }
-    text += `\n🎯 **Target Tasks:** ${currentEntry.mainTasksTotal}`;
+    const cleanLines = (currentEntry.planNotes || '')
+      .split('\n')
+      .map(line => line.replace(/^[0-9]+[\.\)\s]+/, '').replace(/^\[[xX\s]\]\s*/, '').trim())
+      .filter(Boolean)
+      .map((line, idx) => `${idx + 1} ${line}`)
+      .join('\n');
+
+    const text = cleanLines
+      ? `${currentEntry.date}\n\n${cleanLines}`
+      : `${currentEntry.date}`;
 
     navigator.clipboard.writeText(text);
     setCopiedType('plan');
     setTimeout(() => setCopiedType(null), 2500);
   };
 
-  // 1b. Copy ONLY the Daily Review & Telemetry for Discord / Notion
+  // 1b. Copy ONLY the Daily Review & Telemetry (clean plain text, no emojis)
   const handleCopyReviewOnly = () => {
     const todaySessions = gwsSessions.filter(s => s.date === currentEntry.date);
 
-    let text = `🔍 **Legio Flow — Daily Review (${currentEntry.date})**\n\n`;
-    text += `🎯 **Main Tasks Completed:** ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
-    text += `⚡ **Execution Score:** ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
-    text += `🔁 **Automatic Habits:** ${currentEntry.automaticTasksCompleted ? '✅ Complete (Locked In)' : '❌ Pending'}\n`;
+    let text = `${currentEntry.date} — Daily Review\n\n`;
+    text += `Main Tasks Completed: ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
+    text += `Execution Score: ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
+    text += `Automatic Habits: ${currentEntry.automaticTasksCompleted ? 'Yes' : 'No'}\n`;
 
     if (todaySessions.length > 0) {
-      text += `\n⏱️ **GWS Deep Work (${todaySessions.length} session${todaySessions.length > 1 ? 's' : ''}):**\n`;
+      text += `\nGWS Deep Work (${todaySessions.length}):\n`;
       todaySessions.forEach((s) => {
-        text += `• ${s.taskName} (${s.actualMinutes}m) — Score: ${s.ratings.total}/15\n`;
-        if (s.reflexions.accomplished) text += `  └ Done: ${s.reflexions.accomplished}\n`;
-        if (s.reflexions.heldBack) text += `  └ Blockers: ${s.reflexions.heldBack}\n`;
-        if (s.reflexions.improveNext) text += `  └ Next Calibration: ${s.reflexions.improveNext}\n`;
+        text += `- ${s.taskName} (${s.actualMinutes}m) — Score: ${s.ratings.total}/15\n`;
+        if (s.reflexions.accomplished) text += `  Done: ${s.reflexions.accomplished}\n`;
+        if (s.reflexions.heldBack) text += `  Problems: ${s.reflexions.heldBack}\n`;
+        if (s.reflexions.improveNext) text += `  Improve Next: ${s.reflexions.improveNext}\n`;
       });
     }
 
     if (currentEntry.problemsEncountered && currentEntry.problemsEncountered.trim()) {
-      text += `\n⚠️ **Problems Encountered:**\n${currentEntry.problemsEncountered.trim()}\n`;
+      text += `\nProblems Encountered:\n${currentEntry.problemsEncountered.trim()}\n`;
     }
 
     if (currentEntry.reviewNotes && currentEntry.reviewNotes.trim()) {
-      text += `\n📝 **Daily Reflexion & Course Correction:**\n${currentEntry.reviewNotes.trim()}\n`;
+      text += `\nReflexion & Course Correction:\n${currentEntry.reviewNotes.trim()}\n`;
     }
 
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text.trim());
     setCopiedType('review');
     setTimeout(() => setCopiedType(null), 2500);
   };
