@@ -496,25 +496,71 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         const updateReward = (id: string, text: string) => {
           onChange(rewards.map(r => r.id === id ? { ...r, reward: text } : r));
         };
+        const updateThreshold = (id: string, minScore: number) => {
+          onChange(
+            rewards
+              .map(r => r.id === id ? { ...r, minScore } : r)
+              .sort((a, b) => a.minScore - b.minScore)
+          );
+        };
+        const deleteReward = (id: string) => {
+          onChange(rewards.filter(r => r.id !== id));
+        };
+        const addReward = () => {
+          const used = rewards.map(r => r.minScore);
+          let nextScore = 6;
+          for (let i = 1; i <= 10; i++) {
+            if (!used.includes(i)) {
+              nextScore = i;
+              break;
+            }
+          }
+          onChange(
+            [...rewards, { id: `rew_${Date.now()}`, minScore: nextScore, reward: '' }]
+              .sort((a, b) => a.minScore - b.minScore)
+          );
+        };
 
         return (
           <div className="space-y-2.5">
             {rewards.map((r) => (
-              <div key={r.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+              <div key={r.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
                 <div className="flex justify-between items-center text-[11px]">
-                  <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                    {r.minScore}+ Pts
-                  </span>
+                  <select
+                    value={r.minScore}
+                    onChange={(e) => updateThreshold(r.id, parseInt(e.target.value) || 1)}
+                    className="font-mono font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 focus:outline-none cursor-pointer"
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((pts) => (
+                      <option key={pts} value={pts}>{pts}+ Pts</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => deleteReward(r.id)}
+                    className="p-1 text-slate-600 hover:text-rose-400"
+                    title="Delete reward"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
                 <input
                   type="text"
                   value={r.reward}
                   onChange={(e) => updateReward(r.id, e.target.value)}
-                  placeholder="Reward details..."
+                  placeholder="Custom reward details..."
                   className="w-full bg-transparent text-xs text-slate-200 focus:outline-none"
                 />
               </div>
             ))}
+            <button
+              type="button"
+              onClick={addReward}
+              className="w-full py-2 rounded-xl border border-dashed border-slate-800 hover:border-amber-500/40 text-xs font-bold text-amber-400 flex items-center justify-center space-x-1 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Custom Reward</span>
+            </button>
           </div>
         );
       }

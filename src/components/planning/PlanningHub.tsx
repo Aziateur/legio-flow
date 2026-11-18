@@ -153,23 +153,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       weekNumber: newWeekNum,
       startDate: newWeekStart,
       endDate: newWeekEnd,
-      focusTheme: newWeekFocus.trim() || `Week ${newWeekNum} Focus`,
-      notes: 'Break large strategic goals into prioritized deliverables summing to 10 points.',
-      tasks: [
-        { id: `w${newWeekNum}_t1`, text: 'Primary high-leverage objective', score: 3, completed: false },
-        { id: `w${newWeekNum}_t2`, text: 'Secondary operational milestone', score: 3, completed: false },
-        { id: `w${newWeekNum}_t3`, text: 'Infrastructure & tooling advancement', score: 2, completed: false },
-        { id: `w${newWeekNum}_t4`, text: 'Execution consistency & review sprint', score: 2, completed: false }
-      ],
+      focusTheme: newWeekFocus.trim(),
+      notes: '',
+      tasks: [],
       totalPossibleScore: 10,
       achievedScore: 0,
-      rewards: [
-        { id: 'r1', minScore: 6, reward: 'Tier 1 Celebration' },
-        { id: 'r2', minScore: 7, reward: 'Tier 2 Reward' },
-        { id: 'r3', minScore: 8, reward: 'Tier 3 Reward' },
-        { id: 'r4', minScore: 9, reward: 'Tier 4 Splurge' },
-        { id: 'r5', minScore: 10, reward: 'Ultimate Victory Reward' }
-      ],
+      rewards: [],
       updatedAt: new Date().toISOString()
     };
 
@@ -685,19 +674,18 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Weekly Focus Headline</label>
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Weekly Focus Headline (Optional)</label>
                   <input
                     type="text"
                     value={newWeekFocus}
                     onChange={(e) => setNewWeekFocus(e.target.value)}
                     placeholder="e.g. Discord cohort onboarding & Miro trading checkpoints"
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-sm text-slate-100 focus:outline-none"
-                    required
                   />
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-normal">
-                  ⚡ Creates Week {newWeekNum} with 10-point task templates and reward ladders (6+ to 10), ready to crush!
+                  ⚡ Creates a clean blank Week {newWeekNum} sheet where you can add your own goals and custom rewards.
                 </p>
 
                 <button

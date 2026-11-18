@@ -383,11 +383,8 @@ export const INITIAL_WEEKLY_PLANS: Record<string, WeeklyPlan> = {
     totalPossibleScore: 10,
     achievedScore: 0,
     rewards: [
-      { id: 'r1', minScore: 6, reward: 'Special dinner out' },
-      { id: 'r2', minScore: 7, reward: 'New course/subscription purchase' },
-      { id: 'r3', minScore: 8, reward: 'Full weekend celebration' },
-      { id: 'r4', minScore: 9, reward: 'High value tech gear purchase' },
-      { id: 'r5', minScore: 10, reward: 'Complete victory weekend' }
+      { id: 'r1', minScore: 7, reward: 'Special dinner out' },
+      { id: 'r2', minScore: 10, reward: 'Complete victory weekend' }
     ],
     reviewNotes: '',
     updatedAt: '2026-10-28T09:00:00.000Z'

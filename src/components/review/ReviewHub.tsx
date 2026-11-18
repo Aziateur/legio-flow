@@ -243,23 +243,12 @@ export const ReviewHub: React.FC = () => {
       weekNumber: modalNewWeekNum,
       startDate: '2026-11-02',
       endDate: '2026-11-08',
-      focusTheme: modalNewWeekFocus.trim() || `Week ${modalNewWeekNum} Focus`,
-      notes: 'Break large strategic goals into prioritized deliverables summing to 10 points.',
-      tasks: [
-        { id: `w${modalNewWeekNum}_t1`, text: 'Primary high-leverage objective', score: 3, completed: false },
-        { id: `w${modalNewWeekNum}_t2`, text: 'Secondary operational milestone', score: 3, completed: false },
-        { id: `w${modalNewWeekNum}_t3`, text: 'Infrastructure & tooling advancement', score: 2, completed: false },
-        { id: `w${modalNewWeekNum}_t4`, text: 'Execution consistency & review sprint', score: 2, completed: false }
-      ],
+      focusTheme: modalNewWeekFocus.trim(),
+      notes: '',
+      tasks: [],
       totalPossibleScore: 10,
       achievedScore: 0,
-      rewards: [
-        { id: 'r1', minScore: 6, reward: 'Tier 1 Celebration' },
-        { id: 'r2', minScore: 7, reward: 'Tier 2 Reward' },
-        { id: 'r3', minScore: 8, reward: 'Tier 3 Reward' },
-        { id: 'r4', minScore: 9, reward: 'Tier 4 Splurge' },
-        { id: 'r5', minScore: 10, reward: 'Ultimate Victory Reward' }
-      ],
+      rewards: [],
       updatedAt: new Date().toISOString()
     };
 
@@ -1197,31 +1186,39 @@ export const ReviewHub: React.FC = () => {
 
             {/* Unlocked Reward Tiers */}
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-              <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-sky-400">
-                <Gift className="w-4 h-4" />
-                <span>Unlocked Reward Tiers</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-sky-400">
+                  <Gift className="w-4 h-4" />
+                  <span>Custom Weekly Rewards ({targetPlanForReview.rewards.length})</span>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                {targetPlanForReview.rewards.map((r) => {
-                  const unlocked = targetPlanForReview.achievedScore >= r.minScore;
-                  return (
-                    <div
-                      key={r.id}
-                      className={`flex items-center justify-between p-3 rounded-2xl border text-xs ${
-                        unlocked
-                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 font-medium'
-                          : 'bg-slate-950/60 border-slate-800 text-slate-500'
-                      }`}
-                    >
-                      <span>{r.minScore}+ Points: {r.reward}</span>
-                      <span className="font-bold uppercase text-[10px]">
-                        {unlocked ? 'Unlocked 🎖️' : `${r.minScore - targetPlanForReview.achievedScore} pts needed`}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              {targetPlanForReview.rewards.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-xs text-slate-500 text-center">
+                  No custom rewards configured for this week.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {targetPlanForReview.rewards.map((r) => {
+                    const unlocked = targetPlanForReview.achievedScore >= r.minScore;
+                    return (
+                      <div
+                        key={r.id}
+                        className={`flex items-center justify-between p-3 rounded-2xl border text-xs ${
+                          unlocked
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 font-medium'
+                            : 'bg-slate-950/60 border-slate-800 text-slate-500'
+                        }`}
+                      >
+                        <span>{r.minScore}+ Points: {r.reward || 'Unnamed reward'}</span>
+                        <span className="font-bold uppercase text-[10px]">
+                          {unlocked ? 'Unlocked 🎖️' : `${r.minScore - targetPlanForReview.achievedScore} pts needed`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
           </div>

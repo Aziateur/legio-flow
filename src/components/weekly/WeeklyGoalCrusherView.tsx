@@ -126,18 +126,48 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       tasks: [],
       totalPossibleScore: 10,
       achievedScore: 0,
-      rewards: [
-        { id: 'r1', minScore: 6, reward: 'Nice dinner / Celebration break' },
-        { id: 'r2', minScore: 7, reward: 'Productivity tool upgrade / Book' },
-        { id: 'r3', minScore: 8, reward: 'Full day of celebration freedom' },
-        { id: 'r4', minScore: 9, reward: 'Major milestone splurge' },
-        { id: 'r5', minScore: 10, reward: 'Ultimate victory reward' }
-      ],
+      rewards: [],
       updatedAt: new Date().toISOString()
     };
 
     saveWeeklyPlan(newPlan);
     setSelectedWeekId(nextId);
+  };
+
+  // Custom Rewards Add / Delete / Edit
+  const handleAddCustomReward = () => {
+    const existingScores = plan.rewards.map(r => r.minScore);
+    // Find next available threshold (e.g. 6, 8, 10 or any score between 1 and 10)
+    let nextThreshold = 6;
+    for (let i = 1; i <= 10; i++) {
+      if (!existingScores.includes(i)) {
+        nextThreshold = i;
+        break;
+      }
+    }
+    const newReward = {
+      id: `rew_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      minScore: nextThreshold,
+      reward: ''
+    };
+    saveWeeklyPlan({
+      ...plan,
+      rewards: [...plan.rewards, newReward].sort((a, b) => a.minScore - b.minScore)
+    });
+  };
+
+  const handleDeleteReward = (id: string) => {
+    saveWeeklyPlan({
+      ...plan,
+      rewards: plan.rewards.filter(r => r.id !== id)
+    });
+  };
+
+  const handleUpdateRewardThreshold = (id: string, minScore: number) => {
+    const updated = plan.rewards.map(r =>
+      r.id === id ? { ...r, minScore: Math.min(10, Math.max(1, minScore)) } : r
+    ).sort((a, b) => a.minScore - b.minScore);
+    saveWeeklyPlan({ ...plan, rewards: updated });
   };
 
   return (
@@ -178,63 +208,120 @@ export const WeeklyGoalCrusherView: React.FC = () => {
           </button>
         </div>
 
-        {/* Reward Ladder Collapsible Toggle */}
+        {/* Custom Rewards Collapsible Toggle */}
         <button
           onClick={() => setShowRewardLadder(!showRewardLadder)}
-          className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
             showRewardLadder
               ? 'bg-sky-500/20 text-sky-400 border-sky-500/30'
               : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
           }`}
         >
           <Gift className="w-3.5 h-3.5" />
-          <span>Reward Ladder ({achievedScore}/10 pts)</span>
+          <span>
+            Custom Rewards ({plan.rewards.length}) • {achievedScore}/10 pts
+          </span>
           <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showRewardLadder ? 'rotate-180' : ''}`} />
         </button>
       </div>
 
       {/* Collapsible Reward Ladder Drawer (Only visible when toggled) */}
       {showRewardLadder && (
-        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3 shadow-xl">
+        <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
-              <Gift className="w-4 h-4 text-sky-400" />
-              <span>Milestone Rewards Ladder</span>
-            </span>
-            <span className="text-xs font-mono font-extrabold text-amber-400">
-              Current: {achievedScore} Pts
-            </span>
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+                <Gift className="w-4 h-4 text-sky-400" />
+                <span>Custom Milestone Rewards</span>
+              </span>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Set as few or as many rewards as you want for this week (or just 1 celebration at 10 pts).
+              </p>
+            </div>
+            
+            <div className="flex items-center space-x-3">
+              <span className="text-xs font-mono font-extrabold text-amber-400">
+                Score: {achievedScore} Pts
+              </span>
+              <button
+                type="button"
+                onClick={handleAddCustomReward}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Reward</span>
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-1">
-            {plan.rewards.map((r) => {
-              const isUnlocked = achievedScore >= r.minScore;
-              return (
-                <div
-                  key={r.id}
-                  className={`p-3 rounded-2xl border transition-all ${
-                    isUnlocked
-                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 font-bold'
-                      : 'bg-slate-950 border-slate-800/80 text-slate-500'
-                  }`}
-                >
-                  <div className="flex justify-between items-center text-[10px] font-mono mb-1">
-                    <span>{r.minScore}+ Pts</span>
-                    {isUnlocked && <Sparkles className="w-3 h-3 text-emerald-400" />}
+          {plan.rewards.length === 0 ? (
+            <div className="p-6 text-center rounded-2xl bg-slate-950/60 border border-slate-800/80 text-xs text-slate-500">
+              No rewards set for this week. Click "+ Add Reward" if you want to set milestone incentives.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+              {plan.rewards.map((r) => {
+                const isUnlocked = achievedScore >= r.minScore;
+                return (
+                  <div
+                    key={r.id}
+                    className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between space-y-2 ${
+                      isUnlocked
+                        ? 'bg-gradient-to-r from-emerald-500/15 to-emerald-600/10 border-emerald-500/40 text-emerald-300 shadow-md shadow-emerald-500/10'
+                        : 'bg-slate-950 border-slate-800/80 text-slate-300'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center text-xs">
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-[10px] uppercase font-bold text-slate-500">Unlock at:</span>
+                        <select
+                          value={r.minScore}
+                          onChange={(e) => handleUpdateRewardThreshold(r.id, parseInt(e.target.value) || 1)}
+                          className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 font-mono font-extrabold text-xs text-amber-400 focus:outline-none cursor-pointer"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(score => (
+                            <option key={score} value={score}>{score}+ pts</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="flex items-center space-x-1">
+                        {isUnlocked ? (
+                          <span className="text-[10px] font-bold text-emerald-400 flex items-center space-x-1 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            <Sparkles className="w-3 h-3" />
+                            <span>Unlocked!</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500">
+                            {r.minScore - achievedScore} pts away
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReward(r.id)}
+                          className="p-1 text-slate-600 hover:text-rose-400 rounded transition-colors"
+                          title="Remove reward"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={r.reward}
+                      onChange={(e) => {
+                        const updated = plan.rewards.map(rw => rw.id === r.id ? { ...rw, reward: e.target.value } : rw);
+                        saveWeeklyPlan({ ...plan, rewards: updated });
+                      }}
+                      placeholder="e.g. Steak dinner, massage, weekend freedom..."
+                      className="w-full bg-slate-900/60 border border-slate-800/80 focus:border-amber-500/50 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+                    />
                   </div>
-                  <input
-                    type="text"
-                    value={r.reward}
-                    onChange={(e) => {
-                      const updated = plan.rewards.map(rw => rw.id === r.id ? { ...rw, reward: e.target.value } : rw);
-                      saveWeeklyPlan({ ...plan, rewards: updated });
-                    }}
-                    className="w-full bg-transparent text-xs focus:outline-none"
-                  />
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
