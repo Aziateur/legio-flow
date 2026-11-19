@@ -1,386 +1,513 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useStorage } from '../../context/StorageContext';
 import { ChecklistItem, ChecklistRecurrence } from '../../types/schema';
-import { CheckCircle2, Circle, Plus, Trash2, ListChecks } from 'lucide-react';
+import { CheckCircle2, Circle, Flame, ListChecks, Plus, Repeat, Trash2 } from 'lucide-react';
 
-const RECURRENCE_STYLES: Record<ChecklistRecurrence, string> = {
-  daily: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  weekly: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  monthly: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-  none: 'bg-slate-800/80 text-slate-300 border-slate-700'
-};
+type ViewFilter = 'all' | 'recurring' | 'none';
+type StreakUnit = 'd' | 'w' | 'm' | '';
+
+interface SectionConfig {
+  recurrence: ChecklistRecurrence;
+  title: string;
+  subtitle: string;
+  badgeClass: string;
+  accentBorder: string;
+  streakUnit: StreakUnit;
+  placeholder: string;
+}
+
+const SECTIONS: SectionConfig[] = [
+  {
+    recurrence: 'daily',
+    title: 'Daily Recurring',
+    subtitle: 'Resets every day • Drives Daily Auto Habits',
+    badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    accentBorder: 'border-emerald-500/20',
+    streakUnit: 'd',
+    placeholder: 'Add daily recurring task...'
+  },
+  {
+    recurrence: 'weekly',
+    title: 'Weekly Recurring',
+    subtitle: 'Resets every week',
+    badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    accentBorder: 'border-amber-500/20',
+    streakUnit: 'w',
+    placeholder: 'Add weekly recurring task...'
+  },
+  {
+    recurrence: 'monthly',
+    title: 'Monthly Recurring',
+    subtitle: 'Resets every calendar month',
+    badgeClass: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+    accentBorder: 'border-purple-500/20',
+    streakUnit: 'm',
+    placeholder: 'Add monthly recurring task...'
+  },
+  {
+    recurrence: 'none',
+    title: 'One-Off Tasks',
+    subtitle: 'Non-recurring • Stays checked once done',
+    badgeClass: 'bg-slate-800 text-slate-300 border-slate-700',
+    accentBorder: 'border-slate-800',
+    streakUnit: '',
+    placeholder: 'Add one-off task...'
+  }
+];
+
+function shiftDateStr(dateStr: string, deltaDays: number): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  d.setDate(d.getDate() + deltaDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function shiftMonthStr(monthKey: string, deltaMonths: number): string {
+  const [yStr, mStr] = monthKey.split('-');
+  const y = parseInt(yStr, 10);
+  const m = parseInt(mStr, 10);
+  if (Number.isNaN(y) || Number.isNaN(m)) return monthKey;
+  const d = new Date(y, m - 1 + deltaMonths, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function shiftWeekId(weekId: string, deltaWeeks: number): string | null {
+  const match = /^week_(\d+)$/.exec(weekId);
+  if (!match) return null;
+  const next = parseInt(match[1], 10) + deltaWeeks;
+  return next >= 1 ? `week_${next}` : null;
+}
+
+function getPeriodKey(recurrence: ChecklistRecurrence, selectedDate: string, selectedWeekId: string): string {
+  if (recurrence === 'daily') return selectedDate;
+  if (recurrence === 'weekly') return selectedWeekId;
+  if (recurrence === 'monthly') return selectedDate.slice(0, 7);
+  return '';
+}
+
+function stepPeriodKey(recurrence: ChecklistRecurrence, periodKey: string, delta: number): string | null {
+  if (recurrence === 'daily') return shiftDateStr(periodKey, delta);
+  if (recurrence === 'weekly') return shiftWeekId(periodKey, delta);
+  if (recurrence === 'monthly') return shiftMonthStr(periodKey, delta);
+  return null;
+}
+
+function computeStreak(
+  item: ChecklistItem,
+  selectedDate: string,
+  selectedWeekId: string
+): { count: number; unit: StreakUnit; completedCurrent: boolean } {
+  const unit: StreakUnit =
+    item.recurrence === 'daily' ? 'd' : item.recurrence === 'weekly' ? 'w' : item.recurrence === 'monthly' ? 'm' : '';
+
+  if (item.recurrence === 'none') {
+    return { count: 0, unit: '', completedCurrent: item.completed };
+  }
+
+  const periods = new Set(item.completedPeriods || []);
+  const currentKey = getPeriodKey(item.recurrence, selectedDate, selectedWeekId);
+  const completedCurrent = periods.has(currentKey);
+
+  // Start at current period if checked, otherwise preserve unbroken streak ending at previous period.
+  let cursor: string | null = completedCurrent
+    ? currentKey
+    : stepPeriodKey(item.recurrence, currentKey, -1);
+
+  let count = 0;
+  let guard = 0;
+  while (cursor && periods.has(cursor) && guard < 3650) {
+    count += 1;
+    cursor = stepPeriodKey(item.recurrence, cursor, -1);
+    guard += 1;
+  }
+
+  return { count, unit, completedCurrent };
+}
 
 export const ChecklistView: React.FC = () => {
   const {
-    checklistCategories,
     checklistItems,
-    saveChecklistCategories,
     saveChecklistItems,
     selectedDate,
     selectedWeekId,
     saveDailyEntry
   } = useStorage();
 
-  const [recurrenceFilter, setRecurrenceFilter] = useState<'all' | ChecklistRecurrence>('all');
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [newTaskTextByCat, setNewTaskTextByCat] = useState<Record<string, string>>({});
-  const [newTaskRecurrenceByCat, setNewTaskRecurrenceByCat] = useState<Record<string, ChecklistRecurrence>>({});
+  const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
+  const [drafts, setDrafts] = useState<Record<ChecklistRecurrence, string>>({
+    daily: '',
+    weekly: '',
+    monthly: '',
+    none: ''
+  });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
 
   const monthKey = selectedDate.slice(0, 7);
-
-  const getPeriodKey = (recurrence: ChecklistRecurrence): string => {
-    if (recurrence === 'daily') return selectedDate;
-    if (recurrence === 'weekly') return selectedWeekId;
-    if (recurrence === 'monthly') return monthKey;
-    return 'none';
-  };
+  const weekLabel = selectedWeekId.replace('week_', 'Week ');
 
   const isItemDone = (item: ChecklistItem): boolean => {
-    if (item.recurrence === 'none') return !!item.completed;
-    const pKey = getPeriodKey(item.recurrence);
-    return Boolean(item.completedPeriods?.includes(pKey));
+    if (item.recurrence === 'none') return item.completed;
+    const key = getPeriodKey(item.recurrence, selectedDate, selectedWeekId);
+    return (item.completedPeriods || []).includes(key);
   };
 
   const syncDailyAutomaticHabits = (items: ChecklistItem[]) => {
-    const dailyItems = items.filter(i => i.recurrence === 'daily');
+    const dailyItems = items.filter((i) => i.recurrence === 'daily');
     if (dailyItems.length > 0) {
-      const allDailyDone = dailyItems.every(i => Boolean(i.completedPeriods?.includes(selectedDate)));
+      const allDailyDone = dailyItems.every((i) => (i.completedPeriods || []).includes(selectedDate));
       saveDailyEntry(selectedDate, { automaticTasksCompleted: allDailyDone });
     }
   };
 
-  const handleToggleItem = (item: ChecklistItem) => {
-    const updated = checklistItems.map(it => {
-      if (it.id !== item.id) return it;
-      if (it.recurrence === 'none') {
-        return { ...it, completed: !it.completed };
+  const handleToggleItem = (itemId: string) => {
+    const updated = checklistItems.map((item) => {
+      if (item.id !== itemId) return item;
+      if (item.recurrence === 'none') {
+        return { ...item, completed: !item.completed };
       }
-      const pKey = getPeriodKey(it.recurrence);
-      const currentPeriods = it.completedPeriods || [];
-      const exists = currentPeriods.includes(pKey);
-      return {
-        ...it,
-        completedPeriods: exists
-          ? currentPeriods.filter(p => p !== pKey)
-          : [...currentPeriods, pKey]
-      };
+      const key = getPeriodKey(item.recurrence, selectedDate, selectedWeekId);
+      const existing = item.completedPeriods || [];
+      const nextPeriods = existing.includes(key)
+        ? existing.filter((p) => p !== key)
+        : [...existing, key];
+      return { ...item, completedPeriods: nextPeriods };
     });
+
     saveChecklistItems(updated);
     syncDailyAutomaticHabits(updated);
   };
 
-  const handleAddCategory = (e: React.FormEvent) => {
+  const handleAddItem = (recurrence: ChecklistRecurrence, e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = newCategoryName.trim();
-    if (!trimmed) return;
-    saveChecklistCategories([
-      ...checklistCategories,
-      { id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, name: trimmed }
-    ]);
-    setNewCategoryName('');
-  };
-
-  const handleRenameCategory = (catId: string, name: string) => {
-    saveChecklistCategories(
-      checklistCategories.map(c => (c.id === catId ? { ...c, name } : c))
-    );
-  };
-
-  const handleDeleteCategory = (catId: string) => {
-    saveChecklistCategories(checklistCategories.filter(c => c.id !== catId));
-    saveChecklistItems(checklistItems.filter(i => i.categoryId !== catId));
-  };
-
-  const handleAddItem = (catId: string) => {
-    const text = (newTaskTextByCat[catId] || '').trim();
+    const text = (drafts[recurrence] || '').trim();
     if (!text) return;
-    const recurrence = newTaskRecurrenceByCat[catId] || 'none';
-    const nextItem: ChecklistItem = {
-      id: `chk_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      categoryId: catId,
+
+    const newItem: ChecklistItem = {
+      id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring',
       text,
       recurrence,
       completed: false,
       completedPeriods: []
     };
-    const updated = [...checklistItems, nextItem];
-    saveChecklistItems(updated);
-    setNewTaskTextByCat(prev => ({ ...prev, [catId]: '' }));
-    syncDailyAutomaticHabits(updated);
-  };
 
-  const handleEditItemText = (itemId: string, text: string) => {
-    saveChecklistItems(
-      checklistItems.map(it => (it.id === itemId ? { ...it, text } : it))
-    );
-  };
-
-  const handleChangeItemRecurrence = (itemId: string, recurrence: ChecklistRecurrence) => {
-    const updated = checklistItems.map(it =>
-      it.id === itemId ? { ...it, recurrence } : it
-    );
+    const updated = [...checklistItems, newItem];
     saveChecklistItems(updated);
     syncDailyAutomaticHabits(updated);
+    setDrafts((prev) => ({ ...prev, [recurrence]: '' }));
   };
 
   const handleDeleteItem = (itemId: string) => {
-    const updated = checklistItems.filter(it => it.id !== itemId);
+    const updated = checklistItems.filter((item) => item.id !== itemId);
     saveChecklistItems(updated);
     syncDailyAutomaticHabits(updated);
   };
 
-  const handleClearCompletedOneOffs = () => {
-    saveChecklistItems(
-      checklistItems.filter(it => !(it.recurrence === 'none' && it.completed))
+  const handleChangeRecurrence = (itemId: string, recurrence: ChecklistRecurrence) => {
+    const updated = checklistItems.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            recurrence,
+            categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring'
+          }
+        : item
     );
+    saveChecklistItems(updated);
+    syncDailyAutomaticHabits(updated);
   };
 
-  const totalItems = checklistItems.length;
-  const totalDone = checklistItems.filter(isItemDone).length;
-  const completedOneOffCount = checklistItems.filter(it => it.recurrence === 'none' && it.completed).length;
+  const startEditing = (item: ChecklistItem) => {
+    setEditingId(item.id);
+    setEditingText(item.text);
+  };
 
-  return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* Simple Top Bar */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-2.5 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30">
-              <ListChecks className="w-5 h-5" />
+  const commitEdit = () => {
+    if (!editingId) return;
+    const trimmed = editingText.trim();
+    if (trimmed) {
+      const updated = checklistItems.map((item) =>
+        item.id === editingId ? { ...item, text: trimmed } : item
+      );
+      saveChecklistItems(updated);
+    }
+    setEditingId(null);
+    setEditingText('');
+  };
+
+  const handleClearCompletedOneOffs = () => {
+    const updated = checklistItems.filter((i) => !(i.recurrence === 'none' && i.completed));
+    saveChecklistItems(updated);
+  };
+
+  const streaksById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof computeStreak>>();
+    for (const item of checklistItems) {
+      map.set(item.id, computeStreak(item, selectedDate, selectedWeekId));
+    }
+    return map;
+  }, [checklistItems, selectedDate, selectedWeekId]);
+
+  const bestActiveStreak = useMemo(() => {
+    let best: { count: number; unit: StreakUnit } = { count: 0, unit: 'd' };
+    for (const item of checklistItems) {
+      if (item.recurrence === 'none') continue;
+      const streak = streaksById.get(item.id);
+      if (streak && streak.count > best.count) {
+        best = { count: streak.count, unit: streak.unit };
+      }
+    }
+    return best;
+  }, [checklistItems, streaksById]);
+
+  const totalCount = checklistItems.length;
+  const doneCount = checklistItems.filter(isItemDone).length;
+  const completedOneOffCount = checklistItems.filter((i) => i.recurrence === 'none' && i.completed).length;
+
+  const recurringSections = SECTIONS.filter((s) => s.recurrence !== 'none');
+  const oneOffSection = SECTIONS.find((s) => s.recurrence === 'none')!;
+
+  const renderSectionCard = (section: SectionConfig) => {
+    const items = checklistItems.filter((i) => i.recurrence === section.recurrence);
+    const sectionDone = items.filter(isItemDone).length;
+
+    return (
+      <div
+        key={section.recurrence}
+        className={`flex flex-col rounded-xl border ${section.accentBorder} bg-slate-900/70 p-4 shadow-sm`}
+      >
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-slate-100">{section.title}</h2>
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${section.badgeClass}`}>
+                {sectionDone}/{items.length}
+              </span>
             </div>
-            <div>
-              <div className="flex items-center space-x-2.5">
-                <h1 className="text-xl font-extrabold text-slate-100">Checklist</h1>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold">
-                  {totalDone} / {totalItems} Done
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">
-                {selectedDate} • {selectedWeekId.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())} • {monthKey}
-              </p>
-            </div>
+            <p className="mt-0.5 text-xs text-slate-400">{section.subtitle}</p>
           </div>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Recurrence Filter Buttons */}
-            <div className="flex items-center space-x-1 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
-              {(
-                [
-                  { id: 'all', label: 'All' },
-                  { id: 'daily', label: 'Daily' },
-                  { id: 'weekly', label: 'Weekly' },
-                  { id: 'monthly', label: 'Monthly' },
-                  { id: 'none', label: 'One-Off' }
-                ] as const
-              ).map(f => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setRecurrenceFilter(f.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                    recurrenceFilter === f.id
-                      ? 'bg-amber-500 text-slate-950 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+        <div className="flex-1 space-y-1.5">
+          {items.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-800 px-3 py-4 text-center text-xs text-slate-500">
+              No tasks yet
+            </div>
+          ) : (
+            items.map((item) => {
+              const done = isItemDone(item);
+              const streak = streaksById.get(item.id);
+              const isEditing = editingId === item.id;
+
+              return (
+                <div
+                  key={item.id}
+                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                    done
+                      ? 'border-slate-800/70 bg-slate-950/40'
+                      : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
                   }`}
                 >
-                  {f.label}
-                </button>
-              ))}
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleItem(item.id)}
+                    className="shrink-0 text-slate-400 transition-colors hover:text-emerald-400"
+                    aria-label={done ? 'Mark incomplete' : 'Mark complete'}
+                  >
+                    {done ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    ) : (
+                      <Circle className="h-4 w-4" />
+                    )}
+                  </button>
 
-            {completedOneOffCount > 0 && (
-              <button
-                type="button"
-                onClick={handleClearCompletedOneOffs}
-                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-semibold transition-colors"
-              >
-                Clear Done One-Offs ({completedOneOffCount})
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Simple Inline + New Category Form */}
-        <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-3 border-t border-slate-800/80">
-          <input
-            type="text"
-            value={newCategoryName}
-            onChange={(e) => setNewCategoryName(e.target.value)}
-            placeholder="New category..."
-            className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
-          />
-          <button
-            type="submit"
-            className="flex items-center justify-center space-x-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-colors shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Add Category</span>
-          </button>
-        </form>
-      </div>
-
-      {/* Category Cards Grid */}
-      {checklistCategories.length === 0 ? (
-        <div className="p-10 text-center rounded-3xl bg-slate-900/70 border border-slate-800 text-xs text-slate-500">
-          No categories yet. Add a category above to start building your checklist.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {checklistCategories.map(cat => {
-            const catAllItems = checklistItems.filter(it => it.categoryId === cat.id);
-            const catDoneCount = catAllItems.filter(isItemDone).length;
-            const visibleItems = catAllItems.filter(
-              it => recurrenceFilter === 'all' || it.recurrence === recurrenceFilter
-            );
-
-            return (
-              <div
-                key={cat.id}
-                className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between space-y-4"
-              >
-                <div className="space-y-3">
-                  {/* Category Card Header */}
-                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-800/80">
+                  {isEditing ? (
                     <input
                       type="text"
-                      value={cat.name}
-                      onChange={(e) => handleRenameCategory(cat.id, e.target.value)}
-                      className="flex-1 bg-transparent text-sm font-extrabold text-slate-100 focus:outline-none focus:text-amber-300"
+                      value={editingText}
+                      autoFocus
+                      onChange={(e) => setEditingText(e.target.value)}
+                      onBlur={commitEdit}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitEdit();
+                        if (e.key === 'Escape') {
+                          setEditingId(null);
+                          setEditingText('');
+                        }
+                      }}
+                      className="min-w-0 flex-1 rounded border border-amber-500/50 bg-slate-900 px-2 py-0.5 text-sm text-slate-100 outline-none"
                     />
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <span className="px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono font-bold text-amber-400">
-                        {catDoneCount} / {catAllItems.length}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm(`Delete category "${cat.name}" and its tasks?`)) {
-                            handleDeleteCategory(cat.id);
-                          }
-                        }}
-                        className="p-1 text-slate-600 hover:text-rose-400 transition-colors"
-                        title="Delete category"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Checklist Items */}
-                  {visibleItems.length === 0 ? (
-                    <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/70 text-[11px] text-slate-500 text-center">
-                      No tasks here{recurrenceFilter !== 'all' ? ` matching ${recurrenceFilter}` : ''}.
-                    </div>
                   ) : (
-                    <div className="space-y-2">
-                      {visibleItems.map(item => {
-                        const done = isItemDone(item);
-                        return (
-                          <div
-                            key={item.id}
-                            className={`flex items-center justify-between gap-2 p-2.5 rounded-2xl border transition-all ${
-                              done
-                                ? 'bg-emerald-500/5 border-emerald-500/25'
-                                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2.5 flex-1 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => handleToggleItem(item)}
-                                className="shrink-0 transition-transform active:scale-90"
-                              >
-                                {done ? (
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                                ) : (
-                                  <Circle className="w-4 h-4 text-slate-500 hover:text-amber-400" />
-                                )}
-                              </button>
-
-                              <input
-                                type="text"
-                                value={item.text}
-                                onChange={(e) => handleEditItemText(item.id, e.target.value)}
-                                className={`w-full bg-transparent text-xs font-medium focus:outline-none ${
-                                  done ? 'line-through text-slate-500' : 'text-slate-100'
-                                }`}
-                              />
-                            </div>
-
-                            <div className="flex items-center space-x-1.5 shrink-0">
-                              <select
-                                value={item.recurrence}
-                                onChange={(e) =>
-                                  handleChangeItemRecurrence(item.id, e.target.value as ChecklistRecurrence)
-                                }
-                                className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold focus:outline-none cursor-pointer ${RECURRENCE_STYLES[item.recurrence]}`}
-                              >
-                                <option value="daily">Daily</option>
-                                <option value="weekly">Weekly</option>
-                                <option value="monthly">Monthly</option>
-                                <option value="none">One-Off</option>
-                              </select>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteItem(item.id)}
-                                className="p-1 text-slate-600 hover:text-rose-400 transition-colors"
-                                title="Delete task"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => startEditing(item)}
+                      className={`min-w-0 flex-1 text-left text-sm ${
+                        done ? 'text-slate-500 line-through' : 'text-slate-200'
+                      }`}
+                      title="Click to rename"
+                    >
+                      {item.text}
+                    </button>
                   )}
-                </div>
 
-                {/* Bottom Quick-Add Task Bar */}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleAddItem(cat.id);
-                  }}
-                  className="flex items-center gap-1.5 pt-2 border-t border-slate-800/80"
-                >
-                  <input
-                    type="text"
-                    value={newTaskTextByCat[cat.id] || ''}
-                    onChange={(e) =>
-                      setNewTaskTextByCat(prev => ({ ...prev, [cat.id]: e.target.value }))
-                    }
-                    placeholder={`Add task to ${cat.name}...`}
-                    className="flex-1 min-w-0 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
-                  />
+                  {item.recurrence !== 'none' && streak && (
+                    <span
+                      title={
+                        streak.count > 0
+                          ? `${streak.count}${streak.unit} consecutive streak`
+                          : 'No active streak yet'
+                      }
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                        streak.count > 0
+                          ? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+                          : 'border-slate-800 bg-slate-900 text-slate-500'
+                      }`}
+                    >
+                      <Flame className={`h-3 w-3 ${streak.count > 0 ? 'fill-amber-400 text-amber-400' : ''}`} />
+                      {streak.count}
+                      {streak.unit}
+                    </span>
+                  )}
+
                   <select
-                    value={newTaskRecurrenceByCat[cat.id] || 'none'}
-                    onChange={(e) =>
-                      setNewTaskRecurrenceByCat(prev => ({
-                        ...prev,
-                        [cat.id]: e.target.value as ChecklistRecurrence
-                      }))
-                    }
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-2 py-1.5 text-[11px] font-semibold text-slate-300 focus:outline-none cursor-pointer"
+                    value={item.recurrence}
+                    onChange={(e) => handleChangeRecurrence(item.id, e.target.value as ChecklistRecurrence)}
+                    aria-label="Task recurrence"
+                    className="shrink-0 rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-400 outline-none hover:border-slate-700 hover:text-slate-200"
                   >
-                    <option value="none">One-Off</option>
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
+                    <option value="none">One-Off</option>
                   </select>
+
                   <button
-                    type="submit"
-                    className="p-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold transition-colors shrink-0"
-                    title="Add task"
+                    type="button"
+                    onClick={() => handleDeleteItem(item.id)}
+                    className="shrink-0 text-slate-600 opacity-0 transition-opacity hover:text-rose-400 group-hover:opacity-100"
+                    aria-label="Delete task"
                   >
-                    <Plus className="w-4 h-4" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
-                </form>
-              </div>
-            );
-          })}
+                </div>
+              );
+            })
+          )}
         </div>
+
+        <form onSubmit={(e) => handleAddItem(section.recurrence, e)} className="mt-3 flex items-center gap-2">
+          <input
+            type="text"
+            value={drafts[section.recurrence]}
+            onChange={(e) =>
+              setDrafts((prev) => ({
+                ...prev,
+                [section.recurrence]: e.target.value
+              }))
+            }
+            placeholder={section.placeholder}
+            className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-amber-500/50"
+          />
+          <button
+            type="submit"
+            disabled={!drafts[section.recurrence].trim()}
+            className="inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-200 transition-colors hover:border-amber-500/40 hover:bg-amber-500/15 hover:text-amber-300 disabled:opacity-40"
+            aria-label={`Add ${section.title} task`}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </form>
+      </div>
+    );
+  };
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+      {/* Top Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/80 p-4">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <ListChecks className="h-5 w-5 text-amber-400" />
+            <h1 className="text-lg font-bold tracking-tight text-slate-100">Checklist</h1>
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
+              {doneCount} / {totalCount} Done
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-300">
+              <Flame className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+              Best Streak: {bestActiveStreak.count > 0 ? `${bestActiveStreak.count}${bestActiveStreak.unit}` : '0'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-400">
+            {selectedDate} • {weekLabel} • {monthKey}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-800 bg-slate-950 p-0.5">
+            {(
+              [
+                { id: 'all', label: 'All' },
+                { id: 'recurring', label: 'Recurring' },
+                { id: 'none', label: 'One-Off' }
+              ] as { id: ViewFilter; label: string }[]
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setViewFilter(tab.id)}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  viewFilter === tab.id
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {completedOneOffCount > 0 && (
+            <button
+              type="button"
+              onClick={handleClearCompletedOneOffs}
+              className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-rose-500/40 hover:text-rose-300"
+            >
+              Clear Done One-Offs ({completedOneOffCount})
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Recurring Sections */}
+      {viewFilter !== 'none' && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <Repeat className="h-4 w-4 text-amber-400" />
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Recurring • Streaks
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            {recurringSections.map(renderSectionCard)}
+          </div>
+        </section>
+      )}
+
+      {/* One-Off Section */}
+      {viewFilter !== 'recurring' && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <CheckCircle2 className="h-4 w-4 text-slate-400" />
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              One-Off
+            </h2>
+          </div>
+          {renderSectionCard(oneOffSection)}
+        </section>
       )}
     </div>
   );
