@@ -4,7 +4,8 @@ import {
   GWSSession,
   WeeklyPlan,
   ReviewEntry,
-  ThreeYearPlan,
+  MonthlyPlan,
+  YearlyPlan,
   ChecklistCategory,
   ChecklistItem
 } from './schema';
@@ -400,90 +401,9 @@ export const INITIAL_WEEKLY_PLANS: Record<string, WeeklyPlan> = {
   }
 };
 
-export const INITIAL_THREE_YEAR_PLAN: ThreeYearPlan = {
-  id: 'plan_3yr_core',
-  vision: 'Build an indomitable operational fortress: Master full-spectrum trading, scale the Online & IRL Legio ecosystem, and engineer automated software systems that ensure unrelenting compounding.',
-  targetHorizon: '2026 — 2029',
-  strategyCore: 'Execute daily GWS sprints with strict 1–15 ratings, enforce weekly 10-point Goal Crusher milestones with earned reward tiers, and maintain unambiguous Miro boundaries across trading and business.',
-  updatedAt: '2026-10-28T10:00:00.000Z',
-  pillars: [
-    {
-      id: 'pillar_trading',
-      title: 'Trading Strategy & Mastery',
-      subtitle: 'Miro-style strategic path, strict boundary checkpoints & capital growth',
-      iconName: 'TrendingUp',
-      boundariesAndCheckpoints: [
-        'Boundary: Max 1.5% capital risk per trade; no emotional doubling down',
-        'Checkpoint: Must complete pre-market checklist before entering any position',
-        'Boundary: 2 consecutive losses trigger mandatory session pause & GWS review',
-        'Checkpoint: Weekly Miro board review of all logged trade setups'
-      ],
-      year1Milestones: [
-        { id: 't_y1_1', text: 'Devise comprehensive trading strategy on Miro with explicit boundaries and checkpoints', completed: true },
-        { id: 't_y1_2', text: 'Achieve 3 consecutive months of disciplined rule-based execution', completed: false },
-        { id: 't_y1_3', text: 'Build consistent trade journaling with post-market reflexions', completed: false }
-      ],
-      year2Milestones: [
-        { id: 't_y2_1', text: 'Scale capital base through funded accounts and retained earnings', completed: false },
-        { id: 't_y2_2', text: 'Integrate automated volatility and risk alert infrastructure', completed: false }
-      ],
-      year3Milestones: [
-        { id: 't_y3_1', text: 'Full financial independence driven by algorithmic & discretionary mastery', completed: false },
-        { id: 't_y3_2', text: 'Manage multi-asset portfolio with institutional-grade risk management', completed: false }
-      ]
-    },
-    {
-      id: 'pillar_legio',
-      title: 'Legio Ecosystem (Online & IRL)',
-      subtitle: 'Cohort community, individual onboarding pipelines & mastermind network',
-      iconName: 'Users',
-      boundariesAndCheckpoints: [
-        'Boundary: High commitment barrier — zero tolerance for passive lurkers',
-        'Checkpoint: Every new member undergoes 1-on-1 onboarding and commitment audit',
-        'Checkpoint: Weekly group synchronizations with mandatory progress reporting',
-        'Boundary: IRL Legio unit economics must remain strictly cash-flow positive'
-      ],
-      year1Milestones: [
-        { id: 'l_y1_1', text: 'Finish Discord architecture, onboarding test run & secure cohort commitments', completed: true },
-        { id: 'l_y1_2', text: 'Run Boot camp cohort 1 with 100% active attendance', completed: false },
-        { id: 'l_y1_3', text: 'Complete recruiting math and physical logistics for IRL Legio launch', completed: false }
-      ],
-      year2Milestones: [
-        { id: 'l_y2_1', text: 'Expand to 3 active cohort tiers with trained community mentors', completed: false },
-        { id: 'l_y2_2', text: 'Host first high-impact IRL Legio flagship gathering', completed: false }
-      ],
-      year3Milestones: [
-        { id: 'l_y3_1', text: 'Thriving global brotherhood with vetted IRL chapters in key cities', completed: false },
-        { id: 'l_y3_2', text: 'Syndicate investments and high-leverage ventures inside the Legio network', completed: false }
-      ]
-    },
-    {
-      id: 'pillar_systems',
-      title: 'Systems, Tooling & Infrastructure',
-      subtitle: 'Monthly procurement budget, automated software & disciplined operations',
-      iconName: 'Cpu',
-      boundariesAndCheckpoints: [
-        'Boundary: Every tool or software purchase must have an explicit ROI within 30 days',
-        'Checkpoint: Maintain strict monthly hardware/software procurement budget',
-        'Checkpoint: Weekly system backups and telemetry audit in Legio Flow',
-        'Boundary: Minimize technical debt by keeping tools modular and local-first'
-      ],
-      year1Milestones: [
-        { id: 's_y1_1', text: 'Take complete stock of all needed tools, costs, and procurement sequence', completed: true },
-        { id: 's_y1_2', text: 'Deploy Legio Flow OS for frictionless daily input and retrospective reviews', completed: true },
-        { id: 's_y1_3', text: 'Establish fixed monthly operating budget for tech stack', completed: false }
-      ],
-      year2Milestones: [
-        { id: 's_y2_1', text: 'Automate content, member analytics, and daily performance dashboards', completed: false },
-        { id: 's_y2_2', text: 'Hardware and dual-screen workspace setup completely finalized', completed: false }
-      ],
-      year3Milestones: [
-        { id: 's_y3_1', text: 'Proprietary automated software stack operating with near-zero overhead', completed: false },
-        { id: 's_y3_2', text: 'Full operational redundancy allowing location-independent lifestyle', completed: false }
-      ]
-    }
-  ]
-};
+export const INITIAL_MONTHLY_PLANS: Record<string, MonthlyPlan> = {};
+
+export const INITIAL_YEARLY_PLANS: Record<string, YearlyPlan> = {};
 
 export const INITIAL_CHECKLIST_CATEGORIES: ChecklistCategory[] = [
   { id: 'cat_routine', name: 'Daily Routine & Habits' },

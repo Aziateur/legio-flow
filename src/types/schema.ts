@@ -131,24 +131,21 @@ export interface WeeklyPlan {
   updatedAt: string;
 }
 
-export interface StrategicPillar {
-  id: string;
-  title: string;
-  subtitle: string;
-  iconName: string;
-  year1Milestones: TaskItem[];
-  year2Milestones: TaskItem[];
-  year3Milestones: TaskItem[];
-  boundariesAndCheckpoints: string[];
+export interface MonthlyPlan {
+  id: string;        // e.g. '2026-11'
+  monthKey: string;  // 'YYYY-MM'
+  focusTheme: string;
+  notes: string;
+  tasks: TaskItem[];
+  updatedAt: string;
 }
 
-export interface ThreeYearPlan {
-  id: string;
-  vision: string;
-  targetHorizon: string; // e.g. "2026 — 2029"
-  strategyCore: string;
-  pillars: StrategicPillar[];
-  reviewNotes?: string;
+export interface YearlyPlan {
+  id: string;       // e.g. '2026'
+  yearKey: string;  // 'YYYY'
+  focusTheme: string;
+  notes: string;
+  tasks: TaskItem[];
   updatedAt: string;
 }
 

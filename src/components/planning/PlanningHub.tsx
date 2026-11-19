@@ -1,16 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   useStorage,
-  PlanningSubTab,
   findBestWeeklyPlanForDate,
   getWeekRangeForWeekNumber,
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
-import { INITIAL_THREE_YEAR_PLAN } from '../../types/defaults';
 import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
 import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
-import { WeeklyPlan } from '../../types/schema';
+import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
   Calendar,
   Target,
@@ -19,18 +17,40 @@ import {
   Circle,
   Plus,
   Trash2,
-  ShieldAlert,
-  TrendingUp,
-  Users,
-  Cpu,
+  ChevronLeft,
+  ChevronRight,
+  ArrowDownToLine,
+  Layers,
   X,
   FilePlus,
   Bell,
-  Table,
-  RotateCcw
+  Table
 } from 'lucide-react';
 
-type MilestoneYearKey = 'year1Milestones' | 'year2Milestones' | 'year3Milestones';
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+const formatMonthLabel = (monthKey: string): string => {
+  const [yStr, mStr] = monthKey.split('-');
+  const year = parseInt(yStr, 10) || 2026;
+  const month = Math.min(12, Math.max(1, parseInt(mStr, 10) || 1));
+  return `${MONTH_NAMES[month - 1]} ${year}`;
+};
+
+const shiftMonthKey = (monthKey: string, delta: number): string => {
+  const [yStr, mStr] = monthKey.split('-');
+  const year = parseInt(yStr, 10) || 2026;
+  const month = Math.min(12, Math.max(1, parseInt(mStr, 10) || 1));
+  const d = new Date(year, month - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const shiftYearKey = (yearKey: string, delta: number): string => {
+  const year = parseInt(yearKey, 10) || 2026;
+  return String(year + delta);
+};
 
 export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
   onOpenGWS,
@@ -39,10 +59,14 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   const {
     planningSubTab,
     setPlanningSubTab,
-    threeYearPlan,
-    saveThreeYearPlan,
     weeklyPlans,
     saveWeeklyPlan,
+    monthlyPlans,
+    getMonthlyPlan,
+    saveMonthlyPlan,
+    yearlyPlans,
+    getYearlyPlan,
+    saveYearlyPlan,
     saveDailyEntry,
     selectedWeekId,
     setSelectedWeekId,
@@ -57,7 +81,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
   // Create Plan Modal state
   const [showCreatePlanModal, setShowCreatePlanModal] = useState(false);
-  const [createPlanType, setCreatePlanType] = useState<'weekly' | 'daily'>('weekly');
+  const [createPlanType, setCreatePlanType] = useState<'weekly' | 'daily' | 'monthly' | 'yearly'>('weekly');
 
   const existingWeekNums = Object.values(weeklyPlans).map(p => p.weekNumber);
   const maxWeekNum = existingWeekNums.length > 0 ? Math.max(...existingWeekNums) : 1;
@@ -69,290 +93,50 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   const [newWeekStart, setNewWeekStart] = useState<string>(defaultWeekRange.startDate);
   const [newWeekEnd, setNewWeekEnd] = useState<string>(defaultWeekRange.endDate);
 
-  // New Daily Plan form state
   const [newPlanDate, setNewPlanDate] = useState<string>(selectedDate);
   const [newPlanNotes, setNewPlanNotes] = useState<string>('');
 
-  // 3-Year Plan editing state
-  const [activeYearPillar, setActiveYearPillar] = useState<string>(
-    () => threeYearPlan.pillars[0]?.id || 'pillar_trading'
-  );
-  const [newMilestoneText, setNewMilestoneText] = useState('');
-  const [selectedMilestoneYear, setSelectedMilestoneYear] = useState<'year1' | 'year2' | 'year3'>('year1');
-  const [yearMilestoneDrafts, setYearMilestoneDrafts] = useState<Record<MilestoneYearKey, string>>({
-    year1Milestones: '',
-    year2Milestones: '',
-    year3Milestones: ''
-  });
-  const [newBoundaryText, setNewBoundaryText] = useState('');
+  const [modalMonthKey, setModalMonthKey] = useState<string>(selectedDate.slice(0, 7));
+  const [modalMonthFocus, setModalMonthFocus] = useState<string>('');
+  const [modalYearKey, setModalYearKey] = useState<string>(selectedDate.slice(0, 4));
+  const [modalYearFocus, setModalYearFocus] = useState<string>('');
 
-  // Keep activeYearPillar aligned whenever pillars change or get deleted
-  useEffect(() => {
-    if (
-      threeYearPlan.pillars.length > 0 &&
-      !threeYearPlan.pillars.some(p => p.id === activeYearPillar)
-    ) {
-      setActiveYearPillar(threeYearPlan.pillars[0].id);
-    }
-  }, [threeYearPlan.pillars, activeYearPillar]);
-
-  const currentPillar =
-    threeYearPlan.pillars.find(p => p.id === activeYearPillar) || threeYearPlan.pillars[0];
-
-  // Overall 3-Year milestones stats
-  const allMilestonesStats = threeYearPlan.pillars.reduce(
-    (acc, p) => {
-      const all = [
-        ...(p.year1Milestones || []),
-        ...(p.year2Milestones || []),
-        ...(p.year3Milestones || [])
-      ];
-      return {
-        done: acc.done + all.filter(m => m.completed).length,
-        total: acc.total + all.length
-      };
-    },
-    { done: 0, total: 0 }
-  );
-
-  // 3-Year Plan top-level & pillar CRUD handlers
-  const handleVisionChange = (vision: string) => {
-    saveThreeYearPlan({ ...threeYearPlan, vision });
-  };
-
-  const handleTargetHorizonChange = (targetHorizon: string) => {
-    saveThreeYearPlan({ ...threeYearPlan, targetHorizon });
-  };
-
-  const handleStrategyCoreChange = (strategyCore: string) => {
-    saveThreeYearPlan({ ...threeYearPlan, strategyCore });
-  };
-
-  const handleAddPillar = () => {
-    const iconOptions = ['TrendingUp', 'Users', 'Cpu'];
-    const newId = `pillar_${Date.now()}`;
-    const nextNum = threeYearPlan.pillars.length + 1;
-    const newPillar = {
-      id: newId,
-      title: `Strategic Pillar ${nextNum}`,
-      subtitle: 'Core objectives, boundaries & annual checkpoints',
-      iconName: iconOptions[threeYearPlan.pillars.length % iconOptions.length],
-      year1Milestones: [],
-      year2Milestones: [],
-      year3Milestones: [],
-      boundariesAndCheckpoints: []
-    };
-    saveThreeYearPlan({
-      ...threeYearPlan,
-      pillars: [...threeYearPlan.pillars, newPillar]
-    });
-    setActiveYearPillar(newId);
-  };
-
-  const handleUpdatePillarMeta = (
-    pillarId: string,
-    updates: { title?: string; subtitle?: string; iconName?: string }
-  ) => {
-    saveThreeYearPlan({
-      ...threeYearPlan,
-      pillars: threeYearPlan.pillars.map(p => (p.id === pillarId ? { ...p, ...updates } : p))
-    });
-  };
-
-  const handleDeletePillar = (pillarId: string) => {
-    const target = threeYearPlan.pillars.find(p => p.id === pillarId);
-    if (target && !confirm(`Delete pillar "${target.title}" and all its milestones?`)) {
-      return;
-    }
-    const remaining = threeYearPlan.pillars.filter(p => p.id !== pillarId);
-    saveThreeYearPlan({
-      ...threeYearPlan,
-      pillars: remaining
-    });
-    setActiveYearPillar(remaining[0]?.id || '');
-  };
-
-  const handleRestoreDefaultPillars = () => {
-    saveThreeYearPlan({
-      ...threeYearPlan,
-      targetHorizon: threeYearPlan.targetHorizon?.trim() || INITIAL_THREE_YEAR_PLAN.targetHorizon,
-      vision: threeYearPlan.vision?.trim() || INITIAL_THREE_YEAR_PLAN.vision,
-      strategyCore: threeYearPlan.strategyCore?.trim() || INITIAL_THREE_YEAR_PLAN.strategyCore,
-      pillars: INITIAL_THREE_YEAR_PLAN.pillars
-    });
-    setActiveYearPillar(INITIAL_THREE_YEAR_PLAN.pillars[0].id);
-  };
-
-  // Boundaries CRUD
-  const handleAddBoundary = (pillarId: string, e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newBoundaryText.trim()) return;
-
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        boundariesAndCheckpoints: [...p.boundariesAndCheckpoints, newBoundaryText.trim()]
-      };
-    });
-
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-    setNewBoundaryText('');
-  };
-
-  const handleEditBoundary = (pillarId: string, index: number, text: string) => {
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        boundariesAndCheckpoints: p.boundariesAndCheckpoints.map((b, i) => (i === index ? text : b))
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  const handleDeleteBoundary = (pillarId: string, index: number) => {
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        boundariesAndCheckpoints: p.boundariesAndCheckpoints.filter((_, i) => i !== index)
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  // Milestones CRUD
-  const handleToggleMilestone = (
-    pillarId: string,
-    yearKey: MilestoneYearKey,
-    milestoneId: string
-  ) => {
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        [yearKey]: p[yearKey].map(m => (m.id === milestoneId ? { ...m, completed: !m.completed } : m))
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  const handleEditMilestone = (
-    pillarId: string,
-    yearKey: MilestoneYearKey,
-    milestoneId: string,
-    text: string
-  ) => {
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        [yearKey]: p[yearKey].map(m => (m.id === milestoneId ? { ...m, text } : m))
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  const handleMoveMilestoneYear = (
-    pillarId: string,
-    fromKey: MilestoneYearKey,
-    toKey: MilestoneYearKey,
-    milestoneId: string
-  ) => {
-    if (fromKey === toKey) return;
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      const item = p[fromKey].find(m => m.id === milestoneId);
-      if (!item) return p;
-      return {
-        ...p,
-        [fromKey]: p[fromKey].filter(m => m.id !== milestoneId),
-        [toKey]: [...p[toKey], item]
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  const handleAddMilestoneForYear = (
-    pillarId: string,
-    yearKey: MilestoneYearKey,
-    rawText: string
-  ) => {
-    const text = rawText.trim();
-    if (!text) return;
-
-    const newM = {
-      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      text,
-      completed: false
-    };
-
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        [yearKey]: [...p[yearKey], newM]
-      };
-    });
-
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
-
-  const handleAddMilestone = (pillarId: string, e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMilestoneText.trim()) return;
-
-    const key: MilestoneYearKey =
-      selectedMilestoneYear === 'year1'
-        ? 'year1Milestones'
-        : selectedMilestoneYear === 'year2'
-        ? 'year2Milestones'
-        : 'year3Milestones';
-
-    handleAddMilestoneForYear(pillarId, key, newMilestoneText);
-    setNewMilestoneText('');
-  };
-
-  const handleDeleteMilestone = (
-    pillarId: string,
-    yearKey: MilestoneYearKey,
-    milestoneId: string
-  ) => {
-    const updatedPillars = threeYearPlan.pillars.map(p => {
-      if (p.id !== pillarId) return p;
-      return {
-        ...p,
-        [yearKey]: p[yearKey].filter(m => m.id !== milestoneId)
-      };
-    });
-    saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
-  };
+  // Active Monthly & Yearly selection + quick-add inputs
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string>(() => selectedDate.slice(0, 7));
+  const [selectedYearKey, setSelectedYearKey] = useState<string>(() => selectedDate.slice(0, 4));
+  const [newMonthlyGoalInput, setNewMonthlyGoalInput] = useState('');
+  const [newYearlyGoalInput, setNewYearlyGoalInput] = useState('');
 
   const activeWeeklyPlan =
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId] ||
     Object.values(weeklyPlans)[0];
 
-  const isMilestoneInActiveWeek = (text: string): boolean => {
+  const activeMonthPlan = getMonthlyPlan(selectedMonthKey);
+  const activeYearPlan = getYearlyPlan(selectedYearKey);
+
+  // Pull helpers
+  const isTextInWeeklyPlan = (text: string): boolean => {
     if (!activeWeeklyPlan) return false;
     const norm = text.toLowerCase().trim();
-    if (!norm) return false;
-    return activeWeeklyPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
+    return !!norm && activeWeeklyPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
   };
 
-  const handlePullMilestoneToActiveWeek = (text: string) => {
+  const isTextInMonthlyPlan = (text: string): boolean => {
+    const norm = text.toLowerCase().trim();
+    return !!norm && activeMonthPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
+  };
+
+  const handlePullGoalToActiveWeek = (text: string) => {
     if (!activeWeeklyPlan) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-
-    if (isMilestoneInActiveWeek(trimmed)) {
+    if (isTextInWeeklyPlan(trimmed)) {
       setSelectedWeekId(activeWeeklyPlan.id);
       setPlanningSubTab('weekly');
       return;
     }
-
-    const nextTasks = [
+    const nextTasks: TaskItem[] = [
       ...activeWeeklyPlan.tasks,
       {
         id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -368,6 +152,125 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     });
   };
 
+  const handlePullGoalToActiveMonth = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (isTextInMonthlyPlan(trimmed)) {
+      setPlanningSubTab('monthly');
+      return;
+    }
+    const nextTasks: TaskItem[] = [
+      ...activeMonthPlan.tasks,
+      {
+        id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: trimmed,
+        completed: false
+      }
+    ];
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: nextTasks
+    });
+  };
+
+  // Monthly Plan handlers
+  const handleAddMonthlyGoal = () => {
+    const trimmed = newMonthlyGoalInput.trim();
+    if (!trimmed) return;
+    const nextTask: TaskItem = {
+      id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: trimmed,
+      completed: false
+    };
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: [...activeMonthPlan.tasks, nextTask]
+    });
+    setNewMonthlyGoalInput('');
+  };
+
+  const handleToggleMonthlyGoal = (id: string) => {
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: activeMonthPlan.tasks.map(t => (t.id === id ? { ...t, completed: !t.completed } : t))
+    });
+  };
+
+  const handleEditMonthlyGoal = (id: string, text: string) => {
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: activeMonthPlan.tasks.map(t => (t.id === id ? { ...t, text } : t))
+    });
+  };
+
+  const handleDeleteMonthlyGoal = (id: string) => {
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: activeMonthPlan.tasks.filter(t => t.id !== id)
+    });
+  };
+
+  // Yearly Plan handlers
+  const handleAddYearlyGoal = () => {
+    const trimmed = newYearlyGoalInput.trim();
+    if (!trimmed) return;
+    const nextTask: TaskItem = {
+      id: `ygoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: trimmed,
+      completed: false
+    };
+    saveYearlyPlan({
+      ...activeYearPlan,
+      tasks: [...activeYearPlan.tasks, nextTask]
+    });
+    setNewYearlyGoalInput('');
+  };
+
+  const handleToggleYearlyGoal = (id: string) => {
+    saveYearlyPlan({
+      ...activeYearPlan,
+      tasks: activeYearPlan.tasks.map(t => (t.id === id ? { ...t, completed: !t.completed } : t))
+    });
+  };
+
+  const handleEditYearlyGoal = (id: string, text: string) => {
+    saveYearlyPlan({
+      ...activeYearPlan,
+      tasks: activeYearPlan.tasks.map(t => (t.id === id ? { ...t, text } : t))
+    });
+  };
+
+  const handleDeleteYearlyGoal = (id: string) => {
+    saveYearlyPlan({
+      ...activeYearPlan,
+      tasks: activeYearPlan.tasks.filter(t => t.id !== id)
+    });
+  };
+
+  // Known month & year chips
+  const knownMonthKeys = Array.from(
+    new Set([
+      shiftMonthKey(selectedMonthKey, -1),
+      todayDate.slice(0, 7),
+      selectedDate.slice(0, 7),
+      selectedMonthKey,
+      shiftMonthKey(selectedMonthKey, 1),
+      ...Object.keys(monthlyPlans)
+    ])
+  ).sort();
+
+  const knownYearKeys = Array.from(
+    new Set([
+      '2026',
+      '2027',
+      '2028',
+      todayDate.slice(0, 4),
+      selectedDate.slice(0, 4),
+      selectedYearKey,
+      ...Object.keys(yearlyPlans)
+    ])
+  ).sort();
+
   // Open Create Plan modal with synced week number + range
   const openCreatePlanModal = () => {
     const nums = Object.values(weeklyPlans).map(p => p.weekNumber);
@@ -377,11 +280,21 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     setNewWeekStart(nextRange.startDate);
     setNewWeekEnd(nextRange.endDate);
     setNewPlanDate(selectedDate);
-    setCreatePlanType(planningSubTab === 'weekly' ? 'weekly' : 'daily');
+    setModalMonthKey(selectedMonthKey);
+    setModalYearKey(selectedYearKey);
+    setCreatePlanType(
+      planningSubTab === 'weekly'
+        ? 'weekly'
+        : planningSubTab === 'monthly'
+        ? 'monthly'
+        : planningSubTab === 'yearly'
+        ? 'yearly'
+        : 'daily'
+    );
     setShowCreatePlanModal(true);
   };
 
-  // Submit handler for creating a new weekly plan
+  // Submit handlers in Create Plan modal
   const handleCreateWeeklyPlanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const safeWeekNum = Math.max(1, newWeekNum || 1);
@@ -419,45 +332,36 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     setNewPlanNotes('');
   };
 
-  const getPillarIcon = (name: string) => {
-    if (name === 'TrendingUp') return TrendingUp;
-    if (name === 'Users') return Users;
-    return Cpu;
+  const handleCreateMonthlyPlanSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = modalMonthKey || todayDate.slice(0, 7);
+    const existing = getMonthlyPlan(key);
+    saveMonthlyPlan({
+      ...existing,
+      ...(modalMonthFocus.trim() ? { focusTheme: modalMonthFocus.trim() } : {})
+    });
+    setSelectedMonthKey(key);
+    setPlanningSubTab('monthly');
+    setShowCreatePlanModal(false);
+    setModalMonthFocus('');
   };
 
-  const yearSections: Array<{
-    key: MilestoneYearKey;
-    badgeLabel: string;
-    subtitle: string;
-    badgeClass: string;
-    activeCardClass: string;
-    iconDoneClass: string;
-  }> = [
-    {
-      key: 'year1Milestones',
-      badgeLabel: 'Year 1',
-      subtitle: 'Foundation & Strategy Execution',
-      badgeClass: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-      activeCardClass: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200',
-      iconDoneClass: 'text-emerald-400 fill-emerald-400/20'
-    },
-    {
-      key: 'year2Milestones',
-      badgeLabel: 'Year 2',
-      subtitle: 'Scaling & Systematic Compounding',
-      badgeClass: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-      activeCardClass: 'bg-amber-500/10 border-amber-500/30 text-amber-200',
-      iconDoneClass: 'text-amber-400 fill-amber-400/20'
-    },
-    {
-      key: 'year3Milestones',
-      badgeLabel: 'Year 3',
-      subtitle: 'Apex Dominance & Autonomy',
-      badgeClass: 'text-sky-400 bg-sky-500/10 border-sky-500/20',
-      activeCardClass: 'bg-sky-500/10 border-sky-500/30 text-sky-200',
-      iconDoneClass: 'text-sky-400 fill-sky-400/20'
-    }
-  ];
+  const handleCreateYearlyPlanSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = String(parseInt(modalYearKey, 10) || parseInt(todayDate.slice(0, 4), 10) || 2026);
+    const existing = getYearlyPlan(key);
+    saveYearlyPlan({
+      ...existing,
+      ...(modalYearFocus.trim() ? { focusTheme: modalYearFocus.trim() } : {})
+    });
+    setSelectedYearKey(key);
+    setPlanningSubTab('yearly');
+    setShowCreatePlanModal(false);
+    setModalYearFocus('');
+  };
+
+  const monthlyDoneCount = activeMonthPlan.tasks.filter(t => t.completed).length;
+  const yearlyDoneCount = activeYearPlan.tasks.filter(t => t.completed).length;
 
   return (
     <div className="space-y-6">
@@ -477,8 +381,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               <div className="text-sm font-extrabold text-slate-100">
                 {planningSubTab === 'daily' && 'Daily Mission & Priorities'}
                 {planningSubTab === 'weekly' && 'Weekly Goal Crusher (10 Pts)'}
+                {planningSubTab === 'monthly' && `Monthly Plan (${formatMonthLabel(selectedMonthKey)})`}
+                {planningSubTab === 'yearly' && `Yearly Plan (${selectedYearKey})`}
                 {planningSubTab === 'matrix' && 'Weeks Matrix (GWS & Daily Checklist Consistency)'}
-                {planningSubTab === 'three_year' && '3-Year Strategic Roadmap'}
               </div>
             </div>
           </div>
@@ -516,6 +421,36 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 </button>
               )}
 
+              {systemLevel >= 4 && (
+                <button
+                  type="button"
+                  onClick={() => setPlanningSubTab('monthly')}
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                    planningSubTab === 'monthly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Monthly Plan</span>
+                </button>
+              )}
+
+              {systemLevel >= 5 && (
+                <button
+                  type="button"
+                  onClick={() => setPlanningSubTab('yearly')}
+                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                    planningSubTab === 'yearly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>Yearly Plan</span>
+                </button>
+              )}
+
               {systemLevel >= 3 && (
                 <button
                   type="button"
@@ -528,21 +463,6 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 >
                   <Table className="w-3.5 h-3.5" />
                   <span>Weeks Matrix</span>
-                </button>
-              )}
-
-              {systemLevel >= 5 && (
-                <button
-                  type="button"
-                  onClick={() => setPlanningSubTab('three_year')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
-                    planningSubTab === 'three_year'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                  }`}
-                >
-                  <Compass className="w-3.5 h-3.5" />
-                  <span>3-Year Plan</span>
                 </button>
               )}
             </div>
@@ -620,468 +540,453 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         <WeeklyGoalCrusherView />
       )}
 
-      {/* VIEW 2B: WEEKS MATRIX */}
+      {/* VIEW 3: MONTHLY PLANNING */}
+      {planningSubTab === 'monthly' && (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+
+          {/* Month Selector & Switcher */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={() => setSelectedMonthKey(shiftMonthKey(selectedMonthKey, -1))}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                title="Previous Month"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="px-2">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-400 block">
+                  Monthly Execution Plan
+                </span>
+                <div className="text-lg font-extrabold text-slate-100">
+                  {formatMonthLabel(selectedMonthKey)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedMonthKey(shiftMonthKey(selectedMonthKey, 1))}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                title="Next Month"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
+              {knownMonthKeys.map((mKey) => {
+                const isSelected = mKey === selectedMonthKey;
+                const mPlan = monthlyPlans[mKey];
+                const hasContent = !!(mPlan && (mPlan.tasks.length > 0 || mPlan.focusTheme.trim()));
+                return (
+                  <button
+                    key={mKey}
+                    type="button"
+                    onClick={() => setSelectedMonthKey(mKey)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all shrink-0 ${
+                      isSelected
+                        ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                        : hasContent
+                        ? 'bg-slate-950 text-slate-200 border border-slate-700 hover:border-purple-500/40'
+                        : 'bg-slate-950/60 text-slate-500 border border-slate-800 hover:text-slate-300'
+                    }`}
+                  >
+                    {mKey}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Monthly Plan Sheet */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 block mb-1">
+                  Monthly Singular Outcome • {formatMonthLabel(selectedMonthKey)}
+                </span>
+                <input
+                  type="text"
+                  value={activeMonthPlan.focusTheme}
+                  onChange={(e) => saveMonthlyPlan({ ...activeMonthPlan, focusTheme: e.target.value })}
+                  placeholder="What is the #1 outcome that makes this month a victory?"
+                  className="w-full bg-transparent text-xl sm:text-2xl font-extrabold text-amber-400 placeholder-slate-700 focus:outline-none"
+                />
+              </div>
+
+              <span className="self-start sm:self-center px-3 py-1 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30 text-xs font-mono font-bold shrink-0">
+                {monthlyDoneCount} / {activeMonthPlan.tasks.length} goals
+              </span>
+            </div>
+
+            {/* Monthly Deliverables Checklist */}
+            <div className="space-y-2.5 pt-3 border-t border-slate-800/80">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-400">
+                <span>Monthly Goals & Deliverables ({activeMonthPlan.tasks.length})</span>
+                {activeWeeklyPlan && (
+                  <span className="text-[11px] font-mono text-slate-500">
+                    Pull directly into Week {activeWeeklyPlan.weekNumber}
+                  </span>
+                )}
+              </div>
+
+              {activeMonthPlan.tasks.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
+                  No monthly deliverables set yet for {formatMonthLabel(selectedMonthKey)}. Add your first one below.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {activeMonthPlan.tasks.map((task) => {
+                    const inWeek = isTextInWeeklyPlan(task.text);
+                    return (
+                      <div
+                        key={task.id}
+                        className={`group flex items-center justify-between gap-3 p-3.5 rounded-2xl border transition-all ${
+                          task.completed
+                            ? 'bg-emerald-500/5 border-emerald-500/25'
+                            : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3 flex-1 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMonthlyGoal(task.id)}
+                            className="shrink-0 transition-transform active:scale-90"
+                          >
+                            {task.completed ? (
+                              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                            ) : (
+                              <Circle className="w-5 h-5 text-slate-600 hover:text-purple-400" />
+                            )}
+                          </button>
+
+                          <input
+                            type="text"
+                            value={task.text}
+                            onChange={(e) => handleEditMonthlyGoal(task.id, e.target.value)}
+                            className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
+                              task.completed ? 'line-through text-slate-500' : 'text-slate-100'
+                            }`}
+                          />
+                        </div>
+
+                        <div className="flex items-center space-x-2 shrink-0">
+                          {activeWeeklyPlan && (
+                            <button
+                              type="button"
+                              onClick={() => handlePullGoalToActiveWeek(task.text)}
+                              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                                inWeek
+                                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
+                                  : 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-800'
+                              }`}
+                              title={
+                                inWeek
+                                  ? `Already in Week ${activeWeeklyPlan.weekNumber} — click to open Weekly Plan`
+                                  : `Pull goal into Week ${activeWeeklyPlan.weekNumber}`
+                              }
+                            >
+                              {!inWeek && <ArrowDownToLine className="w-3 h-3" />}
+                              <span>
+                                {inWeek ? `✓ In Week ${activeWeeklyPlan.weekNumber}` : `+ Pull to Week ${activeWeeklyPlan.weekNumber}`}
+                              </span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMonthlyGoal(task.id)}
+                            className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Delete goal"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Quick Add Monthly Goal */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAddMonthlyGoal();
+                }}
+                className="flex items-center space-x-2 p-3 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-purple-500/50 transition-colors"
+              >
+                <Plus className="w-4 h-4 text-slate-500 shrink-0" />
+                <input
+                  type="text"
+                  value={newMonthlyGoalInput}
+                  onChange={(e) => setNewMonthlyGoalInput(e.target.value)}
+                  placeholder="Type a monthly goal and press Enter..."
+                  className="flex-1 bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!newMonthlyGoalInput.trim()}
+                  className="px-3 py-1 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 disabled:opacity-40 text-purple-300 border border-purple-500/30 text-xs font-bold"
+                >
+                  + Add
+                </button>
+              </form>
+            </div>
+
+            {/* Monthly Strategy & Notes */}
+            <div className="space-y-1.5 pt-3 border-t border-slate-800/80">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
+                Monthly Strategy, Focus Rules & Notes
+              </label>
+              <textarea
+                rows={4}
+                value={activeMonthPlan.notes}
+                onChange={(e) => saveMonthlyPlan({ ...activeMonthPlan, notes: e.target.value })}
+                placeholder="Key systems, bottlenecks to eliminate, budgets, or weekly milestones for this month..."
+                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500/50 rounded-2xl p-4 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none leading-relaxed resize-y"
+              />
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* VIEW 4: YEARLY PLANNING */}
+      {planningSubTab === 'yearly' && (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+
+          {/* Year Selector & Switcher */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={() => setSelectedYearKey(shiftYearKey(selectedYearKey, -1))}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                title="Previous Year"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="px-2">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 block">
+                  Annual Execution Plan
+                </span>
+                <div className="text-lg font-extrabold text-slate-100">
+                  {selectedYearKey} Yearly Plan
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedYearKey(shiftYearKey(selectedYearKey, 1))}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                title="Next Year"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
+              {knownYearKeys.map((yKey) => {
+                const isSelected = yKey === selectedYearKey;
+                const yPlan = yearlyPlans[yKey];
+                const hasContent = !!(yPlan && (yPlan.tasks.length > 0 || yPlan.focusTheme.trim()));
+                return (
+                  <button
+                    key={yKey}
+                    type="button"
+                    onClick={() => setSelectedYearKey(yKey)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all shrink-0 ${
+                      isSelected
+                        ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                        : hasContent
+                        ? 'bg-slate-950 text-slate-200 border border-slate-700 hover:border-rose-500/40'
+                        : 'bg-slate-950/60 text-slate-500 border border-slate-800 hover:text-slate-300'
+                    }`}
+                  >
+                    {yKey}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Yearly Plan Sheet */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 block mb-1">
+                  Yearly Core Focus & Thesis • {selectedYearKey}
+                </span>
+                <input
+                  type="text"
+                  value={activeYearPlan.focusTheme}
+                  onChange={(e) => saveYearlyPlan({ ...activeYearPlan, focusTheme: e.target.value })}
+                  placeholder={`What is your defining objective for ${selectedYearKey}?`}
+                  className="w-full bg-transparent text-xl sm:text-2xl font-extrabold text-amber-400 placeholder-slate-700 focus:outline-none"
+                />
+              </div>
+
+              <span className="self-start sm:self-center px-3 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30 text-xs font-mono font-bold shrink-0">
+                {yearlyDoneCount} / {activeYearPlan.tasks.length} goals
+              </span>
+            </div>
+
+            {/* Yearly Objectives Checklist */}
+            <div className="space-y-2.5 pt-3 border-t border-slate-800/80">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-400">
+                <span>Yearly Objectives ({activeYearPlan.tasks.length})</span>
+                <span className="text-[11px] font-mono text-slate-500">
+                  Pull down to {selectedMonthKey} or {activeWeeklyPlan ? `Week ${activeWeeklyPlan.weekNumber}` : 'Active Week'}
+                </span>
+              </div>
+
+              {activeYearPlan.tasks.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
+                  No yearly goals set yet for {selectedYearKey}. Add your first objective below.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {activeYearPlan.tasks.map((task) => {
+                    const inMonth = isTextInMonthlyPlan(task.text);
+                    const inWeek = isTextInWeeklyPlan(task.text);
+                    return (
+                      <div
+                        key={task.id}
+                        className={`group flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3.5 rounded-2xl border transition-all ${
+                          task.completed
+                            ? 'bg-emerald-500/5 border-emerald-500/25'
+                            : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3 flex-1 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleYearlyGoal(task.id)}
+                            className="shrink-0 transition-transform active:scale-90"
+                          >
+                            {task.completed ? (
+                              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                            ) : (
+                              <Circle className="w-5 h-5 text-slate-600 hover:text-rose-400" />
+                            )}
+                          </button>
+
+                          <input
+                            type="text"
+                            value={task.text}
+                            onChange={(e) => handleEditYearlyGoal(task.id, e.target.value)}
+                            className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
+                              task.completed ? 'line-through text-slate-500' : 'text-slate-100'
+                            }`}
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => handlePullGoalToActiveMonth(task.text)}
+                            className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                              inMonth
+                                ? 'bg-purple-500/20 text-purple-300 border-purple-500/35 hover:bg-purple-500/30'
+                                : 'bg-slate-900 hover:bg-slate-800 text-purple-300 border-slate-800'
+                            }`}
+                            title={
+                              inMonth
+                                ? `Already in ${selectedMonthKey} — click to open Monthly Plan`
+                                : `Pull into ${selectedMonthKey} Monthly Plan`
+                            }
+                          >
+                            {!inMonth && <ArrowDownToLine className="w-3 h-3" />}
+                            <span>{inMonth ? `✓ In ${selectedMonthKey}` : `+ Month (${selectedMonthKey.slice(5)})`}</span>
+                          </button>
+
+                          {activeWeeklyPlan && (
+                            <button
+                              type="button"
+                              onClick={() => handlePullGoalToActiveWeek(task.text)}
+                              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                                inWeek
+                                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
+                                  : 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-800'
+                              }`}
+                              title={
+                                inWeek
+                                  ? `Already in Week ${activeWeeklyPlan.weekNumber} — click to open Weekly Plan`
+                                  : `Pull into Week ${activeWeeklyPlan.weekNumber}`
+                              }
+                            >
+                              {!inWeek && <ArrowDownToLine className="w-3 h-3" />}
+                              <span>{inWeek ? `✓ In Week ${activeWeeklyPlan.weekNumber}` : `+ Week ${activeWeeklyPlan.weekNumber}`}</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteYearlyGoal(task.id)}
+                            className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Delete goal"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Quick Add Yearly Goal */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAddYearlyGoal();
+                }}
+                className="flex items-center space-x-2 p-3 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-rose-500/50 transition-colors"
+              >
+                <Plus className="w-4 h-4 text-slate-500 shrink-0" />
+                <input
+                  type="text"
+                  value={newYearlyGoalInput}
+                  onChange={(e) => setNewYearlyGoalInput(e.target.value)}
+                  placeholder={`Type a ${selectedYearKey} goal and press Enter...`}
+                  className="flex-1 bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!newYearlyGoalInput.trim()}
+                  className="px-3 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-40 text-rose-300 border border-rose-500/30 text-xs font-bold"
+                >
+                  + Add
+                </button>
+              </form>
+            </div>
+
+            {/* Yearly Strategy & Rules */}
+            <div className="space-y-1.5 pt-3 border-t border-slate-800/80">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
+                Yearly Strategy, Boundaries & Operating Thesis
+              </label>
+              <textarea
+                rows={5}
+                value={activeYearPlan.notes}
+                onChange={(e) => saveYearlyPlan({ ...activeYearPlan, notes: e.target.value })}
+                placeholder={`Document key pillars, operating boundaries, and strategic shifts for ${selectedYearKey}...`}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500/50 rounded-2xl p-4 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none leading-relaxed resize-y"
+              />
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* VIEW 5: WEEKS MATRIX */}
       {planningSubTab === 'matrix' && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
           <SpreadsheetMatrixView />
         </div>
       )}
 
-      {/* VIEW 3: 3-YEAR STRATEGIC PLAN */}
-      {planningSubTab === 'three_year' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
-
-          {/* Executive Vision Banner */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <span className="text-[11px] font-bold uppercase tracking-widest px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  Strategic Horizon
-                </span>
-                <input
-                  type="text"
-                  value={threeYearPlan.targetHorizon}
-                  onChange={(e) => handleTargetHorizonChange(e.target.value)}
-                  placeholder="2026 — 2029"
-                  aria-label="Target Horizon"
-                  className="bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-1 text-xs sm:text-sm font-mono font-bold text-slate-200 focus:outline-none w-36"
-                />
-                <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 text-[11px] font-mono font-bold">
-                  {allMilestonesStats.done} / {allMilestonesStats.total} milestones (
-                  {allMilestonesStats.total > 0
-                    ? Math.round((allMilestonesStats.done / allMilestonesStats.total) * 100)
-                    : 0}
-                  %)
-                </span>
-              </div>
-              <span className="text-xs text-slate-500 font-mono">Saved automatically</span>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
-                  Core 3-Year Vision & Destination
-                </label>
-                <textarea
-                  value={threeYearPlan.vision}
-                  onChange={(e) => handleVisionChange(e.target.value)}
-                  placeholder="Define where you want to stand at the end of your 3-year horizon..."
-                  rows={3}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-sm font-medium text-amber-300 placeholder-slate-600 focus:outline-none transition-colors resize-y leading-relaxed"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
-                  Strategy Core & Operating Thesis
-                </label>
-                <textarea
-                  value={threeYearPlan.strategyCore}
-                  onChange={(e) => handleStrategyCoreChange(e.target.value)}
-                  placeholder="Define the core operating rules and weekly execution system driving this 3-year plan..."
-                  rows={3}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/50 rounded-2xl p-4 text-sm font-medium text-cyan-300 placeholder-slate-600 focus:outline-none transition-colors resize-y leading-relaxed"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Pillar Header Controls + Strategic Pillar Selector Tabs */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-              <div className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
-                Strategic Pillars ({threeYearPlan.pillars.length})
-              </div>
-              <div className="flex items-center space-x-2">
-                {threeYearPlan.pillars.length === 0 && (
-                  <button
-                    type="button"
-                    onClick={handleRestoreDefaultPillars}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Restore Default Pillars</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleAddPillar}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30 text-xs font-bold transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Pillar</span>
-                </button>
-              </div>
-            </div>
-
-            {threeYearPlan.pillars.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {threeYearPlan.pillars.map((pillar) => {
-                  const Icon = getPillarIcon(pillar.iconName);
-                  const isSelected = currentPillar && pillar.id === currentPillar.id;
-                  const all = [
-                    ...(pillar.year1Milestones || []),
-                    ...(pillar.year2Milestones || []),
-                    ...(pillar.year3Milestones || [])
-                  ];
-                  const completedCount = all.filter(m => m.completed).length;
-                  const totalCount = all.length;
-
-                  return (
-                    <button
-                      type="button"
-                      key={pillar.id}
-                      onClick={() => setActiveYearPillar(pillar.id)}
-                      className={`p-6 rounded-3xl text-left border transition-all ${
-                        isSelected
-                          ? 'bg-slate-900 border-amber-500/40 shadow-xl shadow-amber-500/10 ring-2 ring-amber-400/60'
-                          : 'bg-slate-950/70 border-slate-800 hover:bg-slate-900 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className={`p-2.5 rounded-2xl ${
-                          isSelected ? 'bg-amber-500 text-slate-950' : 'bg-slate-900 text-slate-400'
-                        }`}>
-                          <Icon className="w-5 h-5" />
-                        </div>
-                        <span className="text-xs font-mono font-bold text-slate-400">
-                          {completedCount} / {totalCount} done
-                        </span>
-                      </div>
-                      <h3 className="text-base font-extrabold text-slate-100">{pillar.title || 'Untitled Pillar'}</h3>
-                      <p className="text-xs text-slate-400 mt-1 line-clamp-2">{pillar.subtitle || 'Click to edit pillar details'}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Active Pillar Details or Clean Empty State */}
-          {!currentPillar ? (
-            <div className="bg-slate-900/90 border border-dashed border-slate-700 rounded-3xl p-10 text-center space-y-4">
-              <Compass className="w-8 h-8 text-amber-400 mx-auto" />
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-slate-100">No Strategic Pillars Yet</h3>
-                <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Create your first strategic pillar to map Year 1, Year 2, and Year 3 milestones, or load the default 3 pillars.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleAddPillar}
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center space-x-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Strategic Pillar</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRestoreDefaultPillars}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs flex items-center space-x-1.5"
-                >
-                  <RotateCcw className="w-4 h-4 text-amber-400" />
-                  <span>Restore Default Pillars</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-
-              {/* Left 4 cols: Miro-Style Strategic Boundaries & Checkpoints */}
-              <div className="lg:col-span-4 space-y-6">
-                <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-
-                  <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
-                    <ShieldAlert className="w-4 h-4" />
-                    <span>Miro Boundaries & Rules</span>
-                  </div>
-                  <p className="text-xs text-slate-400">
-                    Non-negotiable operational boundaries and risk rules for <strong>{currentPillar.title || 'this pillar'}</strong>:
-                  </p>
-
-                  {/* Boundaries list (inline editable) */}
-                  <div className="space-y-2.5">
-                    {currentPillar.boundariesAndCheckpoints.length === 0 ? (
-                      <div className="p-3 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
-                        No boundaries added yet.
-                      </div>
-                    ) : (
-                      currentPillar.boundariesAndCheckpoints.map((b, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between p-2.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-300 gap-2"
-                        >
-                          <span className="text-amber-400 font-bold shrink-0 pl-1">•</span>
-                          <input
-                            type="text"
-                            value={b}
-                            onChange={(e) => handleEditBoundary(currentPillar.id, idx, e.target.value)}
-                            className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 focus:outline-none focus:text-amber-200"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteBoundary(currentPillar.id, idx)}
-                            className="text-slate-600 hover:text-rose-400 p-1 shrink-0"
-                            title="Delete boundary"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  {/* Add boundary form */}
-                  <form onSubmit={(e) => handleAddBoundary(currentPillar.id, e)} className="pt-2 flex items-center space-x-2">
-                    <input
-                      type="text"
-                      value={newBoundaryText}
-                      onChange={(e) => setNewBoundaryText(e.target.value)}
-                      placeholder="Add rule or boundary..."
-                      className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!newBoundaryText.trim()}
-                      className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-bold text-xs"
-                    >
-                      + Add
-                    </button>
-                  </form>
-
-                </div>
-              </div>
-
-              {/* Right 8 cols: Pillar Meta Editor + Year 1 -> Year 2 -> Year 3 Milestone Runway */}
-              <div className="lg:col-span-8 space-y-6">
-                <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-
-                  {/* Editable Active Pillar Title, Subtitle & Delete */}
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-slate-800">
-                    <div className="flex-1 space-y-1.5">
-                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400 block">
-                        Strategic Runway (Click title or subtitle to edit)
-                      </span>
-                      <input
-                        type="text"
-                        value={currentPillar.title}
-                        onChange={(e) => handleUpdatePillarMeta(currentPillar.id, { title: e.target.value })}
-                        placeholder="Pillar title..."
-                        className="w-full bg-transparent text-lg font-bold text-slate-100 focus:outline-none focus:text-amber-300"
-                      />
-                      <input
-                        type="text"
-                        value={currentPillar.subtitle}
-                        onChange={(e) => handleUpdatePillarMeta(currentPillar.id, { subtitle: e.target.value })}
-                        placeholder="Pillar subtitle / scope..."
-                        className="w-full bg-transparent text-xs text-slate-400 focus:outline-none focus:text-slate-200"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePillar(currentPillar.id)}
-                      className="self-start flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-rose-500/15 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-500/30 text-xs font-semibold transition-colors shrink-0"
-                      title="Delete this pillar"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete Pillar</span>
-                    </button>
-                  </div>
-
-                  {/* Unified Year 1, Year 2, Year 3 Sections */}
-                  {yearSections.map((sec, secIdx) => {
-                    const milestones = currentPillar[sec.key] || [];
-                    const draft = yearMilestoneDrafts[sec.key] || '';
-
-                    return (
-                      <div
-                        key={sec.key}
-                        className={`space-y-3 ${secIdx > 0 ? 'pt-4 border-t border-slate-800/80' : ''}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider">
-                            <span className={`px-2 py-0.5 rounded-md border ${sec.badgeClass}`}>
-                              {sec.badgeLabel}
-                            </span>
-                            <span className="text-slate-300">{sec.subtitle}</span>
-                          </div>
-                          <span className="text-[11px] font-mono text-slate-500">
-                            {milestones.filter(m => m.completed).length}/{milestones.length} done
-                          </span>
-                        </div>
-
-                        <div className="space-y-2">
-                          {milestones.length === 0 ? (
-                            <div className="p-3 rounded-2xl bg-slate-950/50 border border-dashed border-slate-800 text-xs text-slate-500">
-                              No {sec.badgeLabel} milestones yet.
-                            </div>
-                          ) : (
-                            milestones.map((m) => {
-                              const inActiveWeek = isMilestoneInActiveWeek(m.text);
-
-                              return (
-                                <div
-                                  key={m.id}
-                                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-2xl border transition-all ${
-                                    m.completed
-                                      ? sec.activeCardClass
-                                      : 'bg-slate-950 border-slate-800 text-slate-200'
-                                  }`}
-                                >
-                                  <div className="flex items-center space-x-2.5 flex-1 min-w-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleMilestone(currentPillar.id, sec.key, m.id)}
-                                      className="shrink-0"
-                                      title={m.completed ? 'Mark milestone incomplete' : 'Mark milestone completed'}
-                                    >
-                                      {m.completed ? (
-                                        <CheckCircle2 className={`w-4 h-4 ${sec.iconDoneClass}`} />
-                                      ) : (
-                                        <Circle className="w-4 h-4 text-slate-500 hover:text-amber-400" />
-                                      )}
-                                    </button>
-                                    <input
-                                      type="text"
-                                      value={m.text}
-                                      onChange={(e) =>
-                                        handleEditMilestone(currentPillar.id, sec.key, m.id, e.target.value)
-                                      }
-                                      className={`w-full bg-transparent text-xs focus:outline-none ${
-                                        m.completed ? 'line-through text-slate-400' : 'text-slate-100 font-medium'
-                                      }`}
-                                    />
-                                  </div>
-
-                                  <div className="flex items-center space-x-1.5 shrink-0 self-end sm:self-center">
-                                    {activeWeeklyPlan && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handlePullMilestoneToActiveWeek(m.text)}
-                                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
-                                          inActiveWeek
-                                            ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/30'
-                                            : 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-800'
-                                        }`}
-                                        title={
-                                          inActiveWeek
-                                            ? `Already in Week ${activeWeeklyPlan.weekNumber} — click to open Weekly Plan`
-                                            : `Pull into Week ${activeWeeklyPlan.weekNumber} Goal Crusher`
-                                        }
-                                      >
-                                        {inActiveWeek
-                                          ? `✓ In Week ${activeWeeklyPlan.weekNumber}`
-                                          : `+ Pull to Week ${activeWeeklyPlan.weekNumber}`}
-                                      </button>
-                                    )}
-
-                                    <select
-                                      value={sec.key}
-                                      onChange={(e) =>
-                                        handleMoveMilestoneYear(
-                                          currentPillar.id,
-                                          sec.key,
-                                          e.target.value as MilestoneYearKey,
-                                          m.id
-                                        )
-                                      }
-                                      aria-label="Move milestone year"
-                                      title="Move milestone between Year 1 / 2 / 3"
-                                      className="bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800 rounded-lg px-1.5 py-1 text-[10px] font-mono focus:outline-none cursor-pointer"
-                                    >
-                                      <option value="year1Milestones">Y1</option>
-                                      <option value="year2Milestones">Y2</option>
-                                      <option value="year3Milestones">Y3</option>
-                                    </select>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteMilestone(currentPillar.id, sec.key, m.id)}
-                                      className="text-slate-600 hover:text-rose-400 p-1"
-                                      title="Delete milestone"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-
-                        {/* Inline Quick-Add directly inside each Year section */}
-                        <form
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            if (!draft.trim()) return;
-                            handleAddMilestoneForYear(currentPillar.id, sec.key, draft);
-                            setYearMilestoneDrafts(prev => ({ ...prev, [sec.key]: '' }));
-                          }}
-                          className="flex items-center space-x-2"
-                        >
-                          <input
-                            type="text"
-                            value={draft}
-                            onChange={(e) =>
-                              setYearMilestoneDrafts(prev => ({ ...prev, [sec.key]: e.target.value }))
-                            }
-                            placeholder={`Add ${sec.badgeLabel} milestone...`}
-                            className="flex-1 bg-slate-950/70 border border-slate-800/90 focus:border-amber-500/50 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
-                          />
-                          <button
-                            type="submit"
-                            disabled={!draft.trim()}
-                            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 disabled:opacity-40 text-slate-200 text-xs font-bold transition-colors"
-                          >
-                            + Add
-                          </button>
-                        </form>
-                      </div>
-                    );
-                  })}
-
-                  {/* Unified Bottom Add milestone form */}
-                  <form
-                    onSubmit={(e) => handleAddMilestone(currentPillar.id, e)}
-                    className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center gap-2"
-                  >
-                    <select
-                      value={selectedMilestoneYear}
-                      onChange={(e) => setSelectedMilestoneYear(e.target.value as 'year1' | 'year2' | 'year3')}
-                      className="w-full sm:w-auto bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none"
-                    >
-                      <option value="year1">Year 1</option>
-                      <option value="year2">Year 2</option>
-                      <option value="year3">Year 3</option>
-                    </select>
-                    <input
-                      type="text"
-                      value={newMilestoneText}
-                      onChange={(e) => setNewMilestoneText(e.target.value)}
-                      placeholder="Add milestone checkpoint..."
-                      className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!newMilestoneText.trim()}
-                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-bold text-xs"
-                    >
-                      + Add Milestone
-                    </button>
-                  </form>
-
-                </div>
-              </div>
-
-            </div>
-          )}
-
-        </div>
-      )}
-
-      {/* CREATE PLAN MODAL (Clear, Obvious Creation for Weeks and Days) */}
+      {/* CREATE PLAN MODAL (Weekly, Daily, Monthly & Yearly) */}
       {showCreatePlanModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-md p-3 sm:p-6 flex justify-center items-start">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg p-6 sm:p-8 shadow-2xl space-y-6 relative my-4 sm:my-8">
@@ -1105,18 +1010,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
             </div>
 
             {/* Type selector */}
-            <div className="grid grid-cols-2 gap-3 p-1 rounded-2xl bg-slate-950 border border-slate-800">
-              <button
-                type="button"
-                onClick={() => setCreatePlanType('weekly')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
-                  createPlanType === 'weekly'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                🎯 New Weekly Plan
-              </button>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1 rounded-2xl bg-slate-950 border border-slate-800">
               <button
                 type="button"
                 onClick={() => setCreatePlanType('daily')}
@@ -1126,7 +1020,40 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                📅 New Daily Plan
+                Daily
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatePlanType('weekly')}
+                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  createPlanType === 'weekly'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Weekly
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatePlanType('monthly')}
+                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  createPlanType === 'monthly'
+                    ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatePlanType('yearly')}
+                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  createPlanType === 'yearly'
+                    ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Yearly
               </button>
             </div>
 
@@ -1185,7 +1112,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-normal">
-                  ⚡ Creates a clean blank Week {newWeekNum} sheet ({newWeekStart} → {newWeekEnd}) where you can add your own goals and custom rewards.
+                  Creates a clean blank Week {newWeekNum} sheet ({newWeekStart} → {newWeekEnd}) where you can add your own goals and custom rewards.
                 </p>
 
                 <button
@@ -1227,6 +1154,76 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-amber-500/20"
                 >
                   Open Plan for {newPlanDate}
+                </button>
+              </form>
+            )}
+
+            {/* Monthly Plan Creation Form */}
+            {createPlanType === 'monthly' && (
+              <form onSubmit={handleCreateMonthlyPlanSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Month</label>
+                  <input
+                    type="month"
+                    value={modalMonthKey}
+                    onChange={(e) => setModalMonthKey(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm font-mono text-slate-100 focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Monthly Focus Outcome (Optional)</label>
+                  <input
+                    type="text"
+                    value={modalMonthFocus}
+                    onChange={(e) => setModalMonthFocus(e.target.value)}
+                    placeholder="e.g. Reach 10 active cohort clients & lock daily discipline"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500/50 rounded-xl p-3 text-sm text-slate-100 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-purple-500/20"
+                >
+                  Open {formatMonthLabel(modalMonthKey)} Monthly Plan
+                </button>
+              </form>
+            )}
+
+            {/* Yearly Plan Creation Form */}
+            {createPlanType === 'yearly' && (
+              <form onSubmit={handleCreateYearlyPlanSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Target Year</label>
+                  <input
+                    type="number"
+                    min={2020}
+                    max={2100}
+                    value={modalYearKey}
+                    onChange={(e) => setModalYearKey(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm font-mono text-slate-100 focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Yearly Core Thesis (Optional)</label>
+                  <input
+                    type="text"
+                    value={modalYearFocus}
+                    onChange={(e) => setModalYearFocus(e.target.value)}
+                    placeholder="e.g. Profitable funded trading & full Legio automation"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500/50 rounded-xl p-3 text-sm text-slate-100 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-rose-500/20"
+                >
+                  Open {modalYearKey} Yearly Plan
                 </button>
               </form>
             )}

@@ -106,8 +106,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     1: { name: 'Level 1: Basic Flow', desc: 'Daily checklist, mission plan & daily review' },
     2: { name: 'Level 2: Deep Work', desc: 'Adds GWS cockpit, stopwatch & reflexions' },
     3: { name: 'Level 3: Goal Crusher', desc: 'Adds Weekly Goal Crusher (10 Pts) & Weeks Matrix' },
-    4: { name: 'Level 4: Macro Reviews', desc: 'Adds Monthly & Quarterly Reviews (all smaller time scales)' },
-    5: { name: 'Level 5: 3-Year & Yearly', desc: 'Adds 3-Year Strategic Roadmap & Yearly Review' }
+    4: { name: 'Level 4: Monthly & Macro', desc: 'Adds Monthly Plan plus Monthly & Quarterly Reviews' },
+    5: { name: 'Level 5: Yearly Strategy', desc: 'Adds Yearly Plan & Yearly Review across all timeframes' }
   };
 
   return (

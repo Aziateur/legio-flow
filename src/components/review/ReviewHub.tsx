@@ -154,11 +154,9 @@ const shiftQuarterKey = (quarterKey: string, delta: number): string => {
 };
 
 const getYearInfo = (yearKey: string) => {
-  const year = parseInt(yearKey) || 2026;
+  const year = parseInt(yearKey, 10) || 2026;
   const quarters = [1, 2, 3, 4].map(q => `${year}-Q${q}`);
   const months = Array.from({ length: 12 }, (_, idx) => `${year}-${String(idx + 1).padStart(2, '0')}`);
-  const rawIndex = year - 2026 + 1;
-  const planYearIndex: 1 | 2 | 3 = rawIndex <= 1 ? 1 : rawIndex === 2 ? 2 : 3;
   return {
     yearKey: String(year),
     year,
@@ -166,8 +164,7 @@ const getYearInfo = (yearKey: string) => {
     endDate: `${year}-12-31`,
     quarters,
     months,
-    planYearIndex,
-    label: `Year ${planYearIndex} (${year})`
+    label: String(year)
   };
 };
 
@@ -194,8 +191,9 @@ export const ReviewHub: React.FC = () => {
     selectedWeekId,
     setSelectedWeekId,
     saveWeeklyPlan,
-    threeYearPlan,
-    saveThreeYearPlan,
+    yearlyPlans,
+    getYearlyPlan,
+    saveYearlyPlan,
     reviews,
     systemLevel,
     saveReview,
@@ -222,7 +220,7 @@ export const ReviewHub: React.FC = () => {
   const [selectedYear, setSelectedYear] = useState<string>(() => selectedDate.slice(0, 4));
   const [monthlyScaleFilter, setMonthlyScaleFilter] = useState<'all' | 'weekly' | 'daily' | 'gws'>('all');
   const [quarterlyScaleFilter, setQuarterlyScaleFilter] = useState<'all' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
-  const [yearlyScaleFilter, setYearlyScaleFilter] = useState<'all' | 'three_year' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
+  const [yearlyScaleFilter, setYearlyScaleFilter] = useState<'all' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
   const [copiedMacroType, setCopiedMacroType] = useState<'monthly' | 'quarterly' | 'yearly' | null>(null);
 
   // GWS filter states
@@ -372,7 +370,7 @@ export const ReviewHub: React.FC = () => {
     const existing = getSavedYearlyReview(yearKey);
     const entry: ReviewEntry = {
       id: existing?.id || `rev_yearly_${info.yearKey}`,
-      title: updates.title ?? existing?.title ?? `${info.label} — Yearly 3-Year Framework Review`,
+      title: updates.title ?? existing?.title ?? `${info.label} — Yearly Macro Review`,
       periodType: 'yearly',
       periodKey: info.yearKey,
       startDate: info.startDate,
@@ -746,34 +744,17 @@ export const ReviewHub: React.FC = () => {
     const avgGwsTotal =
       gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
 
-    // 6. 3-Year Strategic Framework Milestones for this Year (Year 1/2/3)
-    const milestoneKey: 'year1Milestones' | 'year2Milestones' | 'year3Milestones' =
-      info.planYearIndex === 1
-        ? 'year1Milestones'
-        : info.planYearIndex === 2
-        ? 'year2Milestones'
-        : 'year3Milestones';
+    // 6. Yearly Plan goals & focus for this Year
+    const yearPlan = getYearlyPlan(info.yearKey);
+    const yearGoals = yearPlan.tasks || [];
+    const completedYearGoals = yearGoals.filter(g => g.completed).length;
+    const totalYearGoals = yearGoals.length;
 
-    const pillarRollups = threeYearPlan.pillars.map(p => {
-      const yearMilestones = p[milestoneKey] || [];
-      return {
-        pillar: p,
-        milestones: yearMilestones,
-        completedCount: yearMilestones.filter(m => m.completed).length,
-        totalCount: yearMilestones.length
-      };
-    });
-
-    const completedMilestones = pillarRollups.reduce((acc, p) => acc + p.completedCount, 0);
-    const totalMilestones = pillarRollups.reduce((acc, p) => acc + p.totalCount, 0);
-
-    // Hierarchical 1-level-below rollup: 3-Year Milestones + Quarterly Reviews first, fallback to unreviewed lower scales
+    // Hierarchical 1-level-below rollup: Yearly Plan Goals + Quarterly Reviews first, fallback to unreviewed lower scales
     const rolledUpWins = dedupeLines([
-      ...pillarRollups.flatMap(pr =>
-        pr.milestones
-          .filter(m => m.completed)
-          .map(m => `• [3-Year Pillar: ${pr.pillar.title} — Y${info.planYearIndex}] ${m.text}`)
-      ),
+      ...yearGoals
+        .filter(g => g.completed)
+        .map(g => `• [${info.yearKey} Yearly Goal] ${g.text}`),
       ...quartersData.flatMap(q =>
         q.saved?.wins?.trim()
           ? [`• [${q.info.quarterKey} Quarterly] ${q.saved.wins.trim()}`]
@@ -800,10 +781,10 @@ export const ReviewHub: React.FC = () => {
     return {
       info,
       saved,
-      milestoneKey,
-      pillarRollups,
-      completedMilestones,
-      totalMilestones,
+      yearPlan,
+      yearGoals,
+      completedYearGoals,
+      totalYearGoals,
       quartersData,
       monthsData,
       weeks,
@@ -835,6 +816,7 @@ export const ReviewHub: React.FC = () => {
       '2028',
       selectedDate.slice(0, 4),
       selectedYear,
+      ...Object.keys(yearlyPlans),
       ...allKnownQuarters.map(q => q.slice(0, 4)),
       ...reviews.filter(r => r.periodType === 'yearly' && r.periodKey).map(r => r.periodKey!)
     ])
@@ -1087,7 +1069,7 @@ export const ReviewHub: React.FC = () => {
     })
     .filter(Boolean) as VaultItem[];
 
-  // 6. Gather all Yearly reviews (from saved yearly reviews OR active years in the 3-Year Plan)
+  // 6. Gather all Yearly reviews (from saved yearly reviews OR active years with plans/data)
   const yearlyVaultItems: VaultItem[] = allKnownYears
     .map(yKey => {
       const yData = compileYearData(yKey);
@@ -1096,14 +1078,15 @@ export const ReviewHub: React.FC = () => {
         yData.weeks.length > 0 ||
         yData.days.length > 0 ||
         yData.gws.length > 0 ||
-        yData.totalMilestones > 0;
+        yData.totalYearGoals > 0 ||
+        yData.yearPlan.focusTheme.trim().length > 0;
       if (!hasActivity) return null;
 
       const structuredYearlyReview = [
-        yData.saved?.wins?.trim() ? `1. Yearly Wins & 3-Year Milestones:\n${yData.saved.wins.trim()}` : '',
-        yData.saved?.blockers?.trim() ? `2. Structural Problems & Strategic Drift:\n${yData.saved.blockers.trim()}` : '',
+        yData.saved?.wins?.trim() ? `1. Yearly Wins & Shipped Goals:\n${yData.saved.wins.trim()}` : '',
+        yData.saved?.blockers?.trim() ? `2. Structural Problems & Bottlenecks:\n${yData.saved.blockers.trim()}` : '',
         yData.saved?.courseCorrections?.trim()
-          ? `3. Next Year Thesis & 3-Year Realignment:\n${yData.saved.courseCorrections.trim()}`
+          ? `3. Next Year Thesis & Course Corrections:\n${yData.saved.courseCorrections.trim()}`
           : ''
       ]
         .filter(Boolean)
@@ -1121,18 +1104,18 @@ export const ReviewHub: React.FC = () => {
         id: `vault_yearly_${yKey}`,
         type: 'yearly' as const,
         dateOrPeriod: `${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate})`,
-        title: yData.saved?.title || `${yData.info.label} — Yearly & 3-Year Strategic Review`,
+        title: yData.saved?.title || `${yData.info.label} — Yearly Macro Review`,
         scoreBadge:
           yData.saved?.score && yData.saved.score > 0
             ? `Year ${yData.saved.score}/10`
-            : `${yData.completedMilestones}/${yData.totalMilestones} 3Y milestones`,
-        scoreNumber: yData.saved?.score || yData.completedMilestones,
-        plannedOrContext: `3-Year Plan Horizon (${threeYearPlan.targetHorizon}):\n• Pillar Milestones (Year ${yData.info.planYearIndex}): ${yData.completedMilestones}/${yData.totalMilestones} done across ${threeYearPlan.pillars.length} pillars\n• Quarters: 4 (${yData.quartersData.filter(q => !!q.saved).length} reviewed) • Months: ${yData.monthsData.length} active\n• Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts (${yData.weeks.length} wks) • Daily Avg: ${yData.avgDailyScore}/10 (${yData.days.length}d)\n• GWS Deep Work: ${yData.gwsHours}h (${yData.gws.length} sprints)`,
+            : `${yData.completedYearGoals}/${yData.totalYearGoals} yearly goals`,
+        scoreNumber: yData.saved?.score || yData.completedYearGoals,
+        plannedOrContext: `Yearly Focus (${yData.info.yearKey}): ${yData.yearPlan.focusTheme || 'Not set'}\n• Yearly Goals: ${yData.completedYearGoals}/${yData.totalYearGoals} completed\n• Quarters: 4 (${yData.quartersData.filter(q => !!q.saved).length} reviewed) • Months: ${yData.monthsData.length} active\n• Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts (${yData.weeks.length} wks) • Daily Avg: ${yData.avgDailyScore}/10 (${yData.days.length}d)\n• GWS Deep Work: ${yData.gwsHours}h (${yData.gws.length} sprints)`,
         reviewContent:
           structuredYearlyReview ||
           autoRollupFallback ||
-          'Click "Inspect / Edit" to synthesize your Yearly Review inside the 3-Year Plan framework.',
-        secondaryContent: `Contains: ${threeYearPlan.pillars.length} 3-Year Pillars • 4 Quarters • ${yData.monthsData.length} Months • ${yData.weeks.length} Weeks • ${yData.days.length} Days`,
+          'Click "Inspect / Edit" to synthesize your Yearly Review from all Quarterly, Monthly, Weekly, Daily & GWS data.',
+        secondaryContent: `Contains: ${yData.totalYearGoals} Yearly Goals • 4 Quarters • ${yData.monthsData.length} Months • ${yData.weeks.length} Weeks • ${yData.days.length} Days`,
         rawDate: yData.info.endDate,
         jumpTarget: () => {
           setSelectedYear(yKey);
@@ -1305,7 +1288,7 @@ export const ReviewHub: React.FC = () => {
                 {reviewSubTab === 'weekly' && 'Weekly Retrospective & Milestones'}
                 {reviewSubTab === 'monthly' && 'Monthly Review (Contains Weekly, Daily & GWS Data)'}
                 {reviewSubTab === 'quarterly' && 'Quarterly Review (Contains Monthly, Weekly, Daily & GWS Data)'}
-                {reviewSubTab === 'yearly' && 'Yearly Review & 3-Year Plan Framework'}
+                {reviewSubTab === 'yearly' && 'Yearly Review (Contains Quarterly, Monthly, Weekly, Daily & GWS Data)'}
               </div>
             </div>
           </div>
@@ -1618,7 +1601,7 @@ export const ReviewHub: React.FC = () => {
 
                 const getTypeStyle = () => {
                   if (item.type === 'yearly') return {
-                    label: 'Yearly & 3-Year Review',
+                    label: 'Yearly Macro Review',
                     color: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
                     icon: Compass
                   };
@@ -3744,41 +3727,30 @@ export const ReviewHub: React.FC = () => {
         const yearProblems = yData.saved?.blockers || '';
         const yearCorrections = yData.saved?.courseCorrections || '';
 
-        const handleToggleYearPillarMilestone = (
-          pillarId: string,
-          milestoneKey: 'year1Milestones' | 'year2Milestones' | 'year3Milestones',
-          milestoneId: string
-        ) => {
-          const updatedPillars = threeYearPlan.pillars.map(p => {
-            if (p.id !== pillarId) return p;
-            return {
-              ...p,
-              [milestoneKey]: p[milestoneKey].map(m =>
-                m.id === milestoneId ? { ...m, completed: !m.completed } : m
-              )
-            };
-          });
-          saveThreeYearPlan({ ...threeYearPlan, pillars: updatedPillars });
+        const handleToggleYearlyGoalInReview = (goalId: string) => {
+          const updatedTasks = yData.yearGoals.map(g =>
+            g.id === goalId ? { ...g, completed: !g.completed } : g
+          );
+          saveYearlyPlan({ ...yData.yearPlan, tasks: updatedTasks });
         };
 
         const handleCopyYearlyPlain = () => {
           let text = `${yData.info.label} — Yearly Strategic Review\n\n`;
-          text += `3-Year Vision (${threeYearPlan.targetHorizon}): ${threeYearPlan.vision || 'Not set'}\n`;
-          text += `3-Year Strategy Core: ${threeYearPlan.strategyCore || 'Not set'}\n`;
+          text += `Yearly Focus (${yData.info.yearKey}): ${yData.yearPlan.focusTheme || 'Not set'}\n`;
           text += `Yearly Score: ${yearScore > 0 ? `${yearScore}/10` : 'Unscored'}\n`;
-          text += `3-Year Pillar Milestones (Year ${yData.info.planYearIndex}): ${yData.completedMilestones}/${yData.totalMilestones} completed\n`;
+          text += `Yearly Plan Goals: ${yData.completedYearGoals}/${yData.totalYearGoals} completed\n`;
           text += `Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts across ${yData.weeks.length} weeks (Avg ${yData.avgWeeklyScore}/10)\n`;
           text += `Daily Discipline: ${yData.days.length} days logged • Avg ${yData.avgDailyScore}/10 • Habits ${yData.habitRatePct}%\n`;
           text += `GWS Deep Work: ${yData.gwsHours}h across ${yData.gws.length} sprints (Avg ${yData.avgGwsTotal}/15)\n`;
 
           if (yearWins.trim()) {
-            text += `\n1. Yearly Wins & 3-Year Milestones Shipped:\n${yearWins.trim()}\n`;
+            text += `\n1. Yearly Wins & Shipped Goals:\n${yearWins.trim()}\n`;
           }
           if (yearProblems.trim()) {
-            text += `\n2. Major Problems, Systemic Bottlenecks & Strategic Drift:\n${yearProblems.trim()}\n`;
+            text += `\n2. Major Problems & Systemic Bottlenecks:\n${yearProblems.trim()}\n`;
           }
           if (yearCorrections.trim()) {
-            text += `\n3. Next Year Strategic Thesis & 3-Year Roadmap Realignment:\n${yearCorrections.trim()}\n`;
+            text += `\n3. Next Year Thesis & Course Corrections:\n${yearCorrections.trim()}\n`;
           }
 
           navigator.clipboard.writeText(text.trim());
@@ -3804,10 +3776,10 @@ export const ReviewHub: React.FC = () => {
                 </button>
                 <div>
                   <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 block">
-                    Yearly 3-Year Framework Review ({yData.info.startDate} → {yData.info.endDate})
+                    Yearly Macro Review ({yData.info.startDate} → {yData.info.endDate})
                   </span>
                   <div className="text-xl font-extrabold text-slate-100">
-                    {yData.info.label} — 3-Year Plan Strategic Review
+                    {yData.info.label} — Full-Year Executive Review
                   </div>
                 </div>
                 <button
@@ -3834,7 +3806,7 @@ export const ReviewHub: React.FC = () => {
                           : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
                       }`}
                     >
-                      {yMeta.yearKey} (Year {yMeta.planYearIndex})
+                      {yMeta.yearKey}
                     </button>
                   );
                 })}
@@ -3866,13 +3838,15 @@ export const ReviewHub: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
                 <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400">
-                  3-Year Milestones (Year {yData.info.planYearIndex})
+                  Yearly Plan Goals ({yData.info.yearKey})
                 </span>
                 <div className="text-2xl font-extrabold font-mono text-slate-100">
-                  {yData.completedMilestones} <span className="text-xs text-slate-500">/ {yData.totalMilestones} done</span>
+                  {yData.completedYearGoals} <span className="text-xs text-slate-500">/ {yData.totalYearGoals} done</span>
                 </div>
                 <p className="text-[11px] text-slate-400 font-mono">
-                  Across {threeYearPlan.pillars.length} strategic pillars
+                  {yData.totalYearGoals > 0
+                    ? `${Math.round((yData.completedYearGoals / yData.totalYearGoals) * 100)}% completed`
+                    : 'Set goals in Planning → Yearly'}
                 </p>
               </div>
 
@@ -3940,135 +3914,69 @@ export const ReviewHub: React.FC = () => {
               </div>
             </div>
 
-            {/* 3-Year Strategic Framework & Interactive Pillar Alignment */}
+            {/* Yearly Plan Focus, Strategy & Interactive Goals Checklist */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
                 <div>
                   <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                    3-Year Strategic Framework ({threeYearPlan.targetHorizon})
+                    Yearly Plan Alignment ({yData.info.yearKey})
                   </span>
                   <h2 className="text-xl font-extrabold text-slate-100 mt-2">
-                    Vision, Strategy Core & Year {yData.info.planYearIndex} Pillar Execution
+                    Yearly Focus, Strategy Notes & Goals Audit
                   </h2>
                 </div>
-                <span className="text-xs font-mono text-amber-400 font-bold">
-                  Active Benchmark: Year {yData.info.planYearIndex} ({yData.info.yearKey})
+                <span className="text-xs font-mono text-rose-400 font-bold">
+                  {yData.completedYearGoals} / {yData.totalYearGoals} goals done
                 </span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block">
-                    Core 3-Year Vision & Destination
+                    Yearly Focus & Thesis
                   </span>
                   <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {threeYearPlan.vision || 'Define your 3-Year Vision in Planning Hub → 3-Year Plan.'}
+                    {yData.yearPlan.focusTheme || 'Define your Yearly Focus in Planning Hub → Yearly Plan.'}
                   </p>
                 </div>
 
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
-                    Strategy Core & Operating Rules
+                    Yearly Strategy & Operating Rules
                   </span>
                   <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {threeYearPlan.strategyCore || 'Define your Strategy Core in Planning Hub → 3-Year Plan.'}
+                    {yData.yearPlan.notes || 'Define your Yearly Strategy in Planning Hub → Yearly Plan.'}
                   </p>
                 </div>
               </div>
 
-              {/* Pillar cards with Year 1 / Year 2 / Year 3 milestones */}
-              {threeYearPlan.pillars.length === 0 ? (
+              {yData.yearGoals.length === 0 ? (
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
-                  No Strategic Pillars defined yet in your 3-Year Plan.
+                  No Yearly goals logged for {yData.info.yearKey} yet. Add them in Planning Hub → Yearly Plan.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                  {threeYearPlan.pillars.map(pillar => {
-                    const y1 = pillar.year1Milestones || [];
-                    const y2 = pillar.year2Milestones || [];
-                    const y3 = pillar.year3Milestones || [];
-                    const buckets: Array<{
-                      label: string;
-                      yearIdx: 1 | 2 | 3;
-                      key: 'year1Milestones' | 'year2Milestones' | 'year3Milestones';
-                      items: typeof y1;
-                    }> = [
-                      { label: 'Year 1 Milestones', yearIdx: 1, key: 'year1Milestones', items: y1 },
-                      { label: 'Year 2 Milestones', yearIdx: 2, key: 'year2Milestones', items: y2 },
-                      { label: 'Year 3 Milestones', yearIdx: 3, key: 'year3Milestones', items: y3 }
-                    ];
-
-                    return (
-                      <div key={pillar.id} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
-                        <div>
-                          <div className="text-sm font-extrabold text-slate-100">{pillar.title}</div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">{pillar.subtitle}</div>
-                        </div>
-
-                        <div className="space-y-3">
-                          {buckets.map(b => {
-                            const isActiveYear = b.yearIdx === yData.info.planYearIndex;
-                            return (
-                              <div
-                                key={b.key}
-                                className={`p-3 rounded-xl border space-y-2 ${
-                                  isActiveYear
-                                    ? 'bg-rose-500/10 border-rose-500/30'
-                                    : 'bg-slate-900/60 border-slate-800/80'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between text-[11px] font-bold">
-                                  <span className={isActiveYear ? 'text-rose-400 uppercase tracking-wider' : 'text-slate-400'}>
-                                    {b.label} {isActiveYear ? '• ACTIVE YEAR' : ''}
-                                  </span>
-                                  <span className="font-mono text-slate-400">
-                                    {b.items.filter(m => m.completed).length}/{b.items.length}
-                                  </span>
-                                </div>
-
-                                {b.items.length === 0 ? (
-                                  <div className="text-[11px] text-slate-600 italic">No milestones logged.</div>
-                                ) : (
-                                  <div className="space-y-1.5">
-                                    {b.items.map(m => (
-                                      <button
-                                        key={m.id}
-                                        type="button"
-                                        onClick={() => handleToggleYearPillarMilestone(pillar.id, b.key, m.id)}
-                                        className="w-full flex items-start space-x-2 text-left text-xs hover:text-amber-300 transition-colors"
-                                      >
-                                        {m.completed ? (
-                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                                        ) : (
-                                          <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
-                                        )}
-                                        <span className={m.completed ? 'line-through text-slate-500' : 'text-slate-200'}>
-                                          {m.text}
-                                        </span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        {pillar.boundariesAndCheckpoints.length > 0 && (
-                          <div className="pt-2 border-t border-slate-800 space-y-1">
-                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block">
-                              Boundaries & Checkpoints
-                            </span>
-                            {pillar.boundariesAndCheckpoints.map((bp, i) => (
-                              <div key={i} className="text-[11px] text-slate-400">
-                                • {bp}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {yData.yearGoals.map(goal => (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      onClick={() => handleToggleYearlyGoalInReview(goal.id)}
+                      className={`w-full flex items-start space-x-2.5 p-3 rounded-2xl border text-left text-xs transition-colors ${
+                        goal.completed
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                          : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-rose-500/40'
+                      }`}
+                    >
+                      {goal.completed ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      )}
+                      <span className={goal.completed ? 'line-through text-slate-400' : ''}>
+                        {goal.text}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -4334,12 +4242,12 @@ export const ReviewHub: React.FC = () => {
               )}
             </div>
 
-            {/* Yearly Retrospective & 3-Year Course Correction Editor */}
+            {/* Yearly Retrospective & Course Correction Editor */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                    Yearly Retrospective & 3-Year Roadmap Realignment
+                    Yearly Retrospective & Next-Year Thesis
                   </span>
                   <h2 className="text-xl font-extrabold text-slate-100 mt-2">
                     Synthesize {yData.info.label}
@@ -4358,7 +4266,7 @@ export const ReviewHub: React.FC = () => {
                     }}
                     className="px-4 py-2 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold transition-all"
                   >
-                    + Auto-Import All Smaller-Scale Reviews & 3-Year Milestones into Yearly Draft
+                    + Auto-Import All Contained Reviews into Yearly Draft
                   </button>
                 )}
               </div>
@@ -4367,7 +4275,7 @@ export const ReviewHub: React.FC = () => {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                      1. Yearly Wins, 3-Year Milestones Shipped & Major Breakthroughs
+                      1. Yearly Wins, Completed Goals & Major Breakthroughs
                     </label>
                     {yData.rolledUpWins.length > 0 && (
                       <button
@@ -4379,7 +4287,7 @@ export const ReviewHub: React.FC = () => {
                         }
                         className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
                       >
-                        + Pull 3-Year, Quarterly & Monthly Wins ({yData.rolledUpWins.length})
+                        + Pull Yearly, Quarterly & Monthly Wins ({yData.rolledUpWins.length})
                       </button>
                     )}
                   </div>
@@ -4387,7 +4295,7 @@ export const ReviewHub: React.FC = () => {
                     value={yearWins}
                     onChange={e => upsertYearlyReview(selectedYear, { wins: e.target.value })}
                     rows={4}
-                    placeholder="What major 3-Year milestones, capabilities, and systems did you accomplish this year?"
+                    placeholder="What major annual goals, capabilities, and systems did you accomplish this year?"
                     className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
                   />
                 </div>
@@ -4395,7 +4303,7 @@ export const ReviewHub: React.FC = () => {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
-                      2. Major Problems, Systemic Bottlenecks & Strategic Drift
+                      2. Major Problems, Systemic Bottlenecks & Execution Gaps
                     </label>
                     {yData.rolledUpProblems.length > 0 && (
                       <button
@@ -4415,7 +4323,7 @@ export const ReviewHub: React.FC = () => {
                     value={yearProblems}
                     onChange={e => upsertYearlyReview(selectedYear, { blockers: e.target.value })}
                     rows={4}
-                    placeholder="Where did you drift from your 3-Year Vision? What structural bottlenecks persisted across quarters?"
+                    placeholder="Where did you drift from your Yearly Plan? What structural bottlenecks persisted across quarters?"
                     className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
                   />
                 </div>
@@ -4423,7 +4331,7 @@ export const ReviewHub: React.FC = () => {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                      3. Next Year Strategic Thesis & 3-Year Roadmap Realignment
+                      3. Next Year Strategic Thesis & Course Corrections
                     </label>
                     {yData.rolledUpCorrections.length > 0 && (
                       <button
@@ -4443,7 +4351,7 @@ export const ReviewHub: React.FC = () => {
                     value={yearCorrections}
                     onChange={e => upsertYearlyReview(selectedYear, { courseCorrections: e.target.value })}
                     rows={4}
-                    placeholder="How does the 3-Year Plan evolve for next year? Define your core thesis, boundaries, and major shifts."
+                    placeholder="How does the Yearly Plan evolve for next year? Define your core thesis, operating rules, and major shifts."
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
                   />
                 </div>
@@ -4562,7 +4470,7 @@ export const ReviewHub: React.FC = () => {
             {createReviewType === 'yearly' && (
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Year (3-Year Horizon)</label>
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Select Year</label>
                   <select
                     value={selectedYear}
                     onChange={(e) => setSelectedYear(e.target.value)}
@@ -4576,7 +4484,7 @@ export const ReviewHub: React.FC = () => {
                   </select>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Opens the Yearly Review & 3-Year Strategic Framework containing all Pillar Milestones, Quarterly, Monthly, Weekly, Daily, and GWS data for {getYearInfo(selectedYear).label}.
+                  Opens the Yearly Review containing your Yearly Plan goals plus all Quarterly, Monthly, Weekly, Daily, and GWS data for {getYearInfo(selectedYear).label}.
                 </p>
                 <button
                   type="button"

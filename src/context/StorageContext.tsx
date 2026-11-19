@@ -5,9 +5,10 @@ import {
   DailyPriorityItem,
   GWSSession,
   WeeklyPlan,
+  MonthlyPlan,
+  YearlyPlan,
   TaskItem,
   ReviewEntry,
-  ThreeYearPlan,
   SystemLevel,
   ChecklistCategory,
   ChecklistItem
@@ -17,7 +18,8 @@ import {
   INITIAL_DAILY_ENTRIES,
   INITIAL_GWS_SESSIONS,
   INITIAL_WEEKLY_PLANS,
-  INITIAL_THREE_YEAR_PLAN,
+  INITIAL_MONTHLY_PLANS,
+  INITIAL_YEARLY_PLANS,
   INITIAL_CHECKLIST_CATEGORIES,
   INITIAL_CHECKLIST_ITEMS
 } from '../types/defaults';
@@ -30,7 +32,7 @@ import {
 } from '../lib/supabase';
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
-export type PlanningSubTab = 'daily' | 'weekly' | 'matrix' | 'three_year';
+export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'matrix';
 export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export const getTodayDateString = (): string => {
@@ -320,7 +322,8 @@ interface StorageContextType {
   dailyEntries: Record<string, DailyEntry>;
   gwsSessions: GWSSession[];
   weeklyPlans: Record<string, WeeklyPlan>;
-  threeYearPlan: ThreeYearPlan;
+  monthlyPlans: Record<string, MonthlyPlan>;
+  yearlyPlans: Record<string, YearlyPlan>;
   reviews: ReviewEntry[];
   checklistCategories: ChecklistCategory[];
   checklistItems: ChecklistItem[];
@@ -373,8 +376,13 @@ interface StorageContextType {
   getWeeklyPlan: (weekId: string) => WeeklyPlan;
   saveWeeklyPlan: (plan: WeeklyPlan) => void;
 
-  // 3-Year Plan operations
-  saveThreeYearPlan: (plan: ThreeYearPlan) => void;
+  // Monthly operations
+  getMonthlyPlan: (monthKey: string) => MonthlyPlan;
+  saveMonthlyPlan: (plan: MonthlyPlan) => void;
+
+  // Yearly operations
+  getYearlyPlan: (yearKey: string) => YearlyPlan;
+  saveYearlyPlan: (plan: YearlyPlan) => void;
 
   // Template operations (Modularity)
   saveTemplate: (template: Template) => void;
@@ -400,7 +408,8 @@ const STORAGE_KEYS = {
   DAILY: 'legio_daily_v1',
   GWS: 'legio_gws_v1',
   WEEKLY: 'legio_weekly_v1',
-  THREE_YEAR: 'legio_three_year_v1',
+  MONTHLY: 'legio_monthly_plans_v1',
+  YEARLY: 'legio_yearly_plans_v1',
   REVIEWS: 'legio_reviews_v1',
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
@@ -447,9 +456,37 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return ensureContinuousWeeks(base, getTodayDateString());
   });
 
-  const [threeYearPlan, setThreeYearPlan] = useState<ThreeYearPlan>(() =>
-    readStorageSafe(STORAGE_KEYS.THREE_YEAR, INITIAL_THREE_YEAR_PLAN)
-  );
+  const [monthlyPlans, setMonthlyPlans] = useState<Record<string, MonthlyPlan>>(() => {
+    const raw = readStorageSafe<Record<string, MonthlyPlan>>(STORAGE_KEYS.MONTHLY, INITIAL_MONTHLY_PLANS);
+    const cleaned: Record<string, MonthlyPlan> = {};
+    Object.entries(raw || {}).forEach(([k, p]) => {
+      cleaned[k] = {
+        id: p?.id || k,
+        monthKey: p?.monthKey || k,
+        focusTheme: p?.focusTheme || '',
+        notes: p?.notes || '',
+        tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+        updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+      };
+    });
+    return cleaned;
+  });
+
+  const [yearlyPlans, setYearlyPlans] = useState<Record<string, YearlyPlan>>(() => {
+    const raw = readStorageSafe<Record<string, YearlyPlan>>(STORAGE_KEYS.YEARLY, INITIAL_YEARLY_PLANS);
+    const cleaned: Record<string, YearlyPlan> = {};
+    Object.entries(raw || {}).forEach(([k, p]) => {
+      cleaned[k] = {
+        id: p?.id || k,
+        yearKey: p?.yearKey || k,
+        focusTheme: p?.focusTheme || '',
+        notes: p?.notes || '',
+        tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+        updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+      };
+    });
+    return cleaned;
+  });
 
   const [reviews, setReviews] = useState<ReviewEntry[]>(() =>
     readStorageSafe<ReviewEntry[]>(STORAGE_KEYS.REVIEWS, [])
@@ -515,7 +552,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const dailyEntriesRef = useRef(dailyEntries);
   const gwsSessionsRef = useRef(gwsSessions);
   const weeklyPlansRef = useRef(weeklyPlans);
-  const threeYearPlanRef = useRef(threeYearPlan);
+  const monthlyPlansRef = useRef(monthlyPlans);
+  const yearlyPlansRef = useRef(yearlyPlans);
   const reviewsRef = useRef(reviews);
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
@@ -598,10 +636,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setWeeklyPlans(next);
   };
 
-  const commitThreeYearPlan = (next: ThreeYearPlan) => {
-    threeYearPlanRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.THREE_YEAR, next);
-    setThreeYearPlan(next);
+  const commitMonthlyPlans = (next: Record<string, MonthlyPlan>) => {
+    monthlyPlansRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.MONTHLY, next);
+    setMonthlyPlans(next);
+  };
+
+  const commitYearlyPlans = (next: Record<string, YearlyPlan>) => {
+    yearlyPlansRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.YEARLY, next);
+    setYearlyPlans(next);
   };
 
   const commitReviews = (next: ReviewEntry[]) => {
@@ -650,7 +694,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       dailyEntries: dailyEntriesRef.current,
       gwsSessions: gwsSessionsRef.current,
       weeklyPlans: weeklyPlansRef.current,
-      threeYearPlan: threeYearPlanRef.current,
+      monthlyPlans: monthlyPlansRef.current,
+      yearlyPlans: yearlyPlansRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
@@ -970,9 +1015,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const p2 = parts[1];
 
     if (p1 === 'planning') {
-      const sub = (p2 === 'weekly' || p2 === 'matrix' || p2 === 'three_year' || p2 === '3year')
-        ? (p2 === '3year' ? 'three_year' : (p2 as PlanningSubTab))
-        : 'daily';
+      const sub: PlanningSubTab =
+        p2 === 'weekly' || p2 === 'monthly' || p2 === 'yearly' || p2 === 'matrix'
+          ? (p2 as PlanningSubTab)
+          : p2 === 'three_year' || p2 === '3year'
+          ? 'yearly'
+          : 'daily';
       return { main: 'planning', planningSub: sub, reviewSub: 'daily' };
     }
     if (p1 === 'matrix' || p1 === 'spreadsheet') {
@@ -1370,10 +1418,60 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
-  const saveThreeYearPlan = (plan: ThreeYearPlan) => {
-    commitThreeYearPlan({
-      ...plan,
+  const normalizeMonthlyPlanEntry = (monthKey: string, p?: Partial<MonthlyPlan>): MonthlyPlan => ({
+    id: p?.id || monthKey,
+    monthKey: p?.monthKey || monthKey,
+    focusTheme: p?.focusTheme || '',
+    notes: p?.notes || '',
+    tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+    updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+  });
+
+  const normalizeYearlyPlanEntry = (yearKey: string, p?: Partial<YearlyPlan>): YearlyPlan => ({
+    id: p?.id || yearKey,
+    yearKey: p?.yearKey || yearKey,
+    focusTheme: p?.focusTheme || '',
+    notes: p?.notes || '',
+    tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+    updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+  });
+
+  const getMonthlyPlan = (monthKey: string): MonthlyPlan => {
+    if (monthlyPlans[monthKey]) {
+      return normalizeMonthlyPlanEntry(monthKey, monthlyPlans[monthKey]);
+    }
+    return normalizeMonthlyPlanEntry(monthKey);
+  };
+
+  const saveMonthlyPlan = (plan: MonthlyPlan) => {
+    const key = plan.monthKey || plan.id;
+    const saved = {
+      ...normalizeMonthlyPlanEntry(key, plan),
       updatedAt: new Date().toISOString()
+    };
+    commitMonthlyPlans({
+      ...monthlyPlansRef.current,
+      [key]: saved
+    });
+    markLocalMutation();
+  };
+
+  const getYearlyPlan = (yearKey: string): YearlyPlan => {
+    if (yearlyPlans[yearKey]) {
+      return normalizeYearlyPlanEntry(yearKey, yearlyPlans[yearKey]);
+    }
+    return normalizeYearlyPlanEntry(yearKey);
+  };
+
+  const saveYearlyPlan = (plan: YearlyPlan) => {
+    const key = plan.yearKey || plan.id;
+    const saved = {
+      ...normalizeYearlyPlanEntry(key, plan),
+      updatedAt: new Date().toISOString()
+    };
+    commitYearlyPlans({
+      ...yearlyPlansRef.current,
+      [key]: saved
     });
     markLocalMutation();
   };
@@ -1438,7 +1536,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       dailyEntries: dailyEntriesRef.current,
       gwsSessions: gwsSessionsRef.current,
       weeklyPlans: weeklyPlansRef.current,
-      threeYearPlan: threeYearPlanRef.current,
+      monthlyPlans: monthlyPlansRef.current,
+      yearlyPlans: yearlyPlansRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
@@ -1460,7 +1559,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       if (parsed.gwsSessions) commitGwsSessions(parsed.gwsSessions);
       if (parsed.weeklyPlans) commitWeeklyPlans(ensureContinuousWeeks(parsed.weeklyPlans, getTodayDateString()));
-      if (parsed.threeYearPlan) commitThreeYearPlan(parsed.threeYearPlan);
+      if (parsed.monthlyPlans && typeof parsed.monthlyPlans === 'object') {
+        const cleanedM: Record<string, MonthlyPlan> = {};
+        Object.entries(parsed.monthlyPlans).forEach(([k, p]) => {
+          cleanedM[k] = normalizeMonthlyPlanEntry(k, p as MonthlyPlan);
+        });
+        commitMonthlyPlans(cleanedM);
+      }
+      if (parsed.yearlyPlans && typeof parsed.yearlyPlans === 'object') {
+        const cleanedY: Record<string, YearlyPlan> = {};
+        Object.entries(parsed.yearlyPlans).forEach(([k, p]) => {
+          cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
+        });
+        commitYearlyPlans(cleanedY);
+      }
       if (parsed.reviews) commitReviews(parsed.reviews);
       if (Array.isArray(parsed.checklistCategories)) commitChecklistCategories(parsed.checklistCategories);
       if (Array.isArray(parsed.checklistItems)) commitChecklistItems(parsed.checklistItems);
@@ -1487,7 +1599,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitDailyEntries(cleanedInitial);
     commitGwsSessions(INITIAL_GWS_SESSIONS);
     commitWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr, '2026-10-12'));
-    commitThreeYearPlan(INITIAL_THREE_YEAR_PLAN);
+    commitMonthlyPlans(INITIAL_MONTHLY_PLANS);
+    commitYearlyPlans(INITIAL_YEARLY_PLANS);
     commitReviews([]);
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
@@ -1525,14 +1638,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           updatedAt: EMPTY_WEEK_TIMESTAMP
         }
       } as Record<string, WeeklyPlan>,
-      threeYearPlan: {
-        id: 'plan_3yr_core',
-        vision: '',
-        targetHorizon: '2026 — 2029',
-        strategyCore: '',
-        pillars: [],
-        updatedAt: new Date().toISOString()
-      } as ThreeYearPlan,
+      monthlyPlans: {} as Record<string, MonthlyPlan>,
+      yearlyPlans: {} as Record<string, YearlyPlan>,
       reviews: [] as ReviewEntry[],
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
@@ -1548,7 +1655,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitDailyEntries(fresh.dailyEntries);
     commitGwsSessions(fresh.gwsSessions);
     commitWeeklyPlans(fresh.weeklyPlans);
-    commitThreeYearPlan(fresh.threeYearPlan);
+    commitMonthlyPlans(fresh.monthlyPlans);
+    commitYearlyPlans(fresh.yearlyPlans);
     commitReviews(fresh.reviews);
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
@@ -1670,7 +1778,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (state.weeklyPlans) {
       commitWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch));
     }
-    if (state.threeYearPlan) commitThreeYearPlan(state.threeYearPlan);
+    if (state.monthlyPlans && typeof state.monthlyPlans === 'object') {
+      const cleanedM: Record<string, MonthlyPlan> = {};
+      Object.entries(state.monthlyPlans).forEach(([k, p]) => {
+        cleanedM[k] = normalizeMonthlyPlanEntry(k, p as MonthlyPlan);
+      });
+      commitMonthlyPlans(cleanedM);
+    }
+    if (state.yearlyPlans && typeof state.yearlyPlans === 'object') {
+      const cleanedY: Record<string, YearlyPlan> = {};
+      Object.entries(state.yearlyPlans).forEach(([k, p]) => {
+        cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
+      });
+      commitYearlyPlans(cleanedY);
+    }
     if (Array.isArray(state.reviews)) commitReviews(state.reviews);
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
@@ -1787,14 +1908,73 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     });
 
-    // 3. Merge threeYearPlan by updatedAt
-    const local3YTime = Date.parse(local.threeYearPlan?.updatedAt || '') || 0;
-    const cloud3YTime = Date.parse(cloudState?.threeYearPlan?.updatedAt || '') || 0;
-    const mergedThreeYearPlan =
-      !cloudState?.threeYearPlan || local3YTime > cloud3YTime || (localIsNewer && local3YTime >= cloud3YTime)
-        ? local.threeYearPlan
-        : cloudState.threeYearPlan;
-    if (local3YTime > cloud3YTime) needsCloudPush = true;
+    // 3. Merge monthlyPlans & yearlyPlans per periodKey (prefer content over empty placeholders, otherwise newer updatedAt)
+    const mergePeriodPlanMap = <T extends MonthlyPlan | YearlyPlan>(
+      localMap: Record<string, T>,
+      cloudMapRaw: any,
+      normalizeFn: (k: string, p?: Partial<T>) => T
+    ): Record<string, T> => {
+      const merged: Record<string, T> = {};
+      const cloudMap = (cloudMapRaw && typeof cloudMapRaw === 'object' ? cloudMapRaw : {}) as Record<string, T>;
+      const allKeys = new Set([...Object.keys(localMap), ...Object.keys(cloudMap)]);
+      const hasContent = (p?: T) =>
+        !!(p && (p.tasks.length > 0 || p.focusTheme.trim().length > 0 || p.notes.trim().length > 0));
+
+      allKeys.forEach(k => {
+        const lRaw = localMap[k];
+        const cRaw = cloudMap[k];
+        if (lRaw && !cRaw) {
+          const l = normalizeFn(k, lRaw);
+          merged[k] = l;
+          if (hasContent(l)) needsCloudPush = true;
+        } else if (cRaw && !lRaw) {
+          merged[k] = normalizeFn(k, cRaw);
+        } else if (lRaw && cRaw) {
+          const l = normalizeFn(k, lRaw);
+          const c = normalizeFn(k, cRaw);
+          const lHasContent = hasContent(l);
+          const cHasContent = hasContent(c);
+          const lTime = Date.parse(l.updatedAt || '') || 0;
+          const cTime = Date.parse(c.updatedAt || '') || 0;
+
+          if (lHasContent && !cHasContent) {
+            if (cTime > lTime && c.updatedAt !== EMPTY_WEEK_TIMESTAMP && !hasPendingPush && cloudMs > localMs) {
+              merged[k] = c;
+            } else {
+              merged[k] = l;
+              needsCloudPush = true;
+            }
+          } else if (cHasContent && !lHasContent) {
+            if (hasPendingPush && lTime > cTime && l.updatedAt !== EMPTY_WEEK_TIMESTAMP) {
+              merged[k] = l;
+              needsCloudPush = true;
+            } else {
+              merged[k] = c;
+            }
+          } else if (lTime > cTime) {
+            merged[k] = l;
+            needsCloudPush = true;
+          } else if (cTime > lTime) {
+            merged[k] = c;
+          } else {
+            merged[k] = hasPendingPush ? l : c;
+          }
+        }
+      });
+
+      return merged;
+    };
+
+    const mergedMonthlyPlans = mergePeriodPlanMap(
+      local.monthlyPlans,
+      cloudState?.monthlyPlans,
+      normalizeMonthlyPlanEntry
+    );
+    const mergedYearlyPlans = mergePeriodPlanMap(
+      local.yearlyPlans,
+      cloudState?.yearlyPlans,
+      normalizeYearlyPlanEntry
+    );
 
     // 4. Merge reviews per id (respecting local deletions if localIsNewer)
     const mergedReviews = localIsNewer || !Array.isArray(cloudState?.reviews)
@@ -1828,7 +2008,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       dailyEntries: mergedDailyEntries,
       gwsSessions: localIsNewer || !Array.isArray(cloudState?.gwsSessions) ? local.gwsSessions : cloudState.gwsSessions,
       weeklyPlans: mergedWeeklyPlans,
-      threeYearPlan: mergedThreeYearPlan,
+      monthlyPlans: mergedMonthlyPlans,
+      yearlyPlans: mergedYearlyPlans,
       reviews: mergedReviews,
       checklistCategories:
         localIsNewer || !Array.isArray(cloudState?.checklistCategories)
@@ -2081,7 +2262,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         dailyEntries,
         gwsSessions,
         weeklyPlans,
-        threeYearPlan,
+        monthlyPlans,
+        yearlyPlans,
         reviews,
         checklistCategories,
         checklistItems,
@@ -2121,7 +2303,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         deleteGWSSession,
         getWeeklyPlan,
         saveWeeklyPlan,
-        saveThreeYearPlan,
+        getMonthlyPlan,
+        saveMonthlyPlan,
+        getYearlyPlan,
+        saveYearlyPlan,
         saveTemplate,
         deleteTemplate,
         resetTemplatesToDefault,
