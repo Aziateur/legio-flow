@@ -281,14 +281,34 @@ export const SpreadsheetMatrixView: React.FC = () => {
                                 </span>
                               </div>
 
-                              <div className={`flex items-center space-x-1 text-[10px] font-mono ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
-                                <Timer className="w-3 h-3 shrink-0" />
-                                <span className="truncate">
-                                  {dayGws.length > 0
-                                    ? `${dayGws.length} GWS (${dayGwsMinutes}m)`
-                                    : '0 GWS'}
-                                </span>
-                              </div>
+                              {(() => {
+                                const tasksDone = entry?.mainTasksCompleted || 0;
+                                const tasksPlanned = entry?.mainTasksTotal || 3;
+                                return (
+                                  <div className="flex items-center justify-between gap-1.5 text-[10px] font-mono">
+                                    <div className={`flex items-center space-x-1 min-w-0 ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
+                                      <Timer className="w-3 h-3 shrink-0" />
+                                      <span className="truncate">
+                                        {dayGws.length > 0
+                                          ? `${dayGws.length} GWS (${dayGwsMinutes}m)`
+                                          : '0 GWS'}
+                                      </span>
+                                    </div>
+                                    <span
+                                      className={`shrink-0 font-bold ${
+                                        tasksPlanned > 0 && tasksDone >= tasksPlanned
+                                          ? 'text-emerald-400'
+                                          : tasksDone > 0
+                                          ? 'text-amber-300'
+                                          : 'text-slate-500'
+                                      }`}
+                                      title="Tasks done out of planned target"
+                                    >
+                                      {tasksDone}/{tasksPlanned} tasks
+                                    </span>
+                                  </div>
+                                );
+                              })()}
 
                               {/* Daily Checklist Done/Not Done Indicator (always visible) */}
                               <div

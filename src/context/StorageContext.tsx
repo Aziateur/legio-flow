@@ -286,7 +286,7 @@ const normalizeDailyEntryFields = (date: string, entry: DailyEntry): DailyEntry 
       priorityItems: cleanItems,
       planNotes: formatPriorityItemsToPlanNotes(cleanItems),
       mainTasksCompleted: cleanItems.filter(i => i.completed).length,
-      mainTasksTotal: Math.max(3, cleanItems.length)
+      mainTasksTotal: Math.max(entry.mainTasksTotal || 3, cleanItems.length)
     };
   }
   return {
