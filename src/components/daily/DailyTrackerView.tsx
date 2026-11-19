@@ -3,6 +3,7 @@ import {
   useStorage,
   getCurrentWeekRange,
   getWeekNumberForDate,
+  findBestWeeklyPlanForDate,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
   computeWeeklyAchievedScore
@@ -53,9 +54,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   const currentWeekRange = getCurrentWeekRange(selectedDate);
   const currentWeekNum = getWeekNumberForDate(selectedDate);
   const activeWeeklyPlan =
-    Object.values(weeklyPlans).find(
-      p => p.startDate <= selectedDate && selectedDate <= p.endDate
-    ) ||
+    findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId] || {
       id: `week_${currentWeekNum}`,
       weekNumber: currentWeekNum,
@@ -166,75 +165,28 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     if (actionName === 'open_gws') {
       onOpenGWS();
     } else if (actionName === 'sync_daily_priorities' && payload) {
-      // 1. Sync Main Tasks Completed, Total & structured priorityItems (preserving IDs)
+      const priorityItems = Array.isArray(payload.priorityItems) ? payload.priorityItems : [];
+      const planNotes =
+        typeof payload.formattedPlanNotes === 'string'
+          ? payload.formattedPlanNotes
+          : formatPriorityItemsToPlanNotes(priorityItems);
       saveDailyEntry(selectedDate, {
+        planNotes,
+        priorityItems,
         mainTasksCompleted: payload.completedCount,
-        mainTasksTotal: payload.totalCount,
-        ...(Array.isArray(payload.priorityItems) ? { priorityItems: payload.priorityItems } : {})
+        mainTasksTotal: payload.totalCount
       });
-
-      // 2. Two-way ID-first sync with Weekly Goal or Sub-Goal (+ auto-complete parent goal when all sub-goals are done)
-      const toggledItem = payload.toggledItem;
-      const normalizedToggled = (payload.toggledText || '').toLowerCase().trim();
-      if ((toggledItem || normalizedToggled) && activeWeeklyPlan && activeWeeklyPlan.tasks.length > 0) {
-        let matched = false;
-        const updatedTasks = activeWeeklyPlan.tasks.map(t => {
-          let nextTask = t;
-
-          // Match parent weekly goal by ID first, fallback to text
-          const isDirectGoalMatch =
-            (toggledItem?.weeklyTaskId && !toggledItem?.subTaskId && t.id === toggledItem.weeklyTaskId) ||
-            (!toggledItem?.weeklyTaskId && normalizedToggled && t.text.toLowerCase().trim() === normalizedToggled);
-
-          if (isDirectGoalMatch) {
-            matched = true;
-            nextTask = { ...nextTask, completed: !!payload.isCompleted };
-          }
-
-          if (t.subTasks && t.subTasks.length > 0) {
-            let subMatched = false;
-            const updatedSubs = t.subTasks.map(sub => {
-              const isSubMatch =
-                (toggledItem?.subTaskId && sub.id === toggledItem.subTaskId) ||
-                (!toggledItem?.subTaskId && normalizedToggled && sub.text.toLowerCase().trim() === normalizedToggled);
-              if (isSubMatch) {
-                matched = true;
-                subMatched = true;
-                return { ...sub, completed: !!payload.isCompleted };
-              }
-              return sub;
-            });
-            if (subMatched) {
-              const allSubsDone = updatedSubs.length > 0 && updatedSubs.every(s => s.completed);
-              nextTask = {
-                ...nextTask,
-                subTasks: updatedSubs,
-                completed: allSubsDone
-              };
-            }
-          }
-          return nextTask;
-        });
-
-        if (matched) {
-          const nextScore = computeWeeklyAchievedScore(updatedTasks);
-          saveWeeklyPlan({
-            ...activeWeeklyPlan,
-            tasks: updatedTasks,
-            achievedScore: nextScore
-          });
-        }
-      }
     }
   };
 
-  // Helper to check if a weekly goal/sub-goal is already in today's priorities (by ID first, then text)
+  // Helper to check if a weekly goal/sub-goal is already in today's priorities (by ID first, then exact normalized text)
   const isGoalInTodayPlan = (goalText: string, weeklyTaskId?: string, subTaskId?: string): boolean => {
     const items = getPriorityItemsForEntry(currentEntry);
     if (subTaskId && items.some(p => p.subTaskId === subTaskId)) return true;
     if (weeklyTaskId && !subTaskId && items.some(p => p.weeklyTaskId === weeklyTaskId && !p.subTaskId)) return true;
-    if (!currentEntry.planNotes) return false;
-    return currentEntry.planNotes.toLowerCase().includes(goalText.toLowerCase().trim());
+    const norm = goalText.toLowerCase().trim();
+    if (!norm) return false;
+    return items.some(p => p.text.toLowerCase().trim() === norm);
   };
 
   // Pull a weekly goal or sub-goal into the next available numbered priority slot with persistent ID linkage
@@ -367,7 +319,40 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   };
 
   const handleApplyParsedPlan = (tasksText: string) => {
-    handlePullGoalToDay(tasksText);
+    const existingItems = getPriorityItemsForEntry(currentEntry);
+    const seenTexts = new Set(existingItems.map(i => i.text.trim().toLowerCase()));
+    const additions = tasksText
+      .split('\n')
+      .map(line => line.replace(/^[0-9]+[\.\)\s]+/, '').trim())
+      .map(line => {
+        let completed = false;
+        let text = line;
+        if (text.startsWith('[x] ') || text.startsWith('[X] ')) {
+          completed = true;
+          text = text.slice(4).trim();
+        } else if (text.startsWith('[ ] ')) {
+          text = text.slice(4).trim();
+        }
+        return { text, completed };
+      })
+      .filter(item => item.text.length > 0 && !seenTexts.has(item.text.toLowerCase()))
+      .map((item, idx) => {
+        seenTexts.add(item.text.toLowerCase());
+        return {
+          id: `prio_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          text: item.text,
+          completed: item.completed
+        };
+      });
+
+    if (additions.length === 0) return;
+    const updatedItems = [...existingItems, ...additions];
+    saveDailyEntry(selectedDate, {
+      planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+      priorityItems: updatedItems,
+      mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+      mainTasksTotal: Math.max(3, updatedItems.length)
+    });
   };
 
   const isSelectedToday = selectedDate === todayDate;

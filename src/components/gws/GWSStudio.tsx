@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import {
   useStorage,
   getPriorityItemsForEntry,
-  formatPriorityItemsToPlanNotes
+  formatPriorityItemsToPlanNotes,
+  findBestWeeklyPlanForDate,
+  computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { GWSSession } from '../../types/schema';
 import { 
@@ -43,7 +45,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   const currentDailyEntry = getEntryForDate(selectedDate);
   const todayPriorities = getPriorityItemsForEntry(currentDailyEntry).filter(p => p.text.trim().length > 0);
   const activeWeeklyPlan =
-    Object.values(weeklyPlans).find(p => p.startDate <= selectedDate && selectedDate <= p.endDate) ||
+    findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId];
 
   // Active session state
@@ -200,7 +202,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
           saveWeeklyPlan({
             ...activeWeeklyPlan,
             tasks: updatedTasks,
-            achievedScore: updatedTasks.filter(t => t.completed).reduce((acc, t) => acc + (t.score || 0), 0)
+            achievedScore: computeWeeklyAchievedScore(updatedTasks)
           });
         }
       }

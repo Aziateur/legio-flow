@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TemplateField } from '../../types/schema';
 import { 
   CheckCircle2, 
@@ -14,6 +14,69 @@ import {
   Trash2
 } from 'lucide-react';
 
+interface PriorityRow {
+  id: string;
+  text: string;
+  completed: boolean;
+  weeklyTaskId?: string;
+  subTaskId?: string;
+}
+
+const parsePriorityValueToNonEmptyRows = (rawVal: any): PriorityRow[] => {
+  const parsed: PriorityRow[] = [];
+  if (Array.isArray(rawVal)) {
+    rawVal.forEach((item, idx) => {
+      if (typeof item === 'string') {
+        if (item.trim().length > 0) {
+          parsed.push({ id: `prio_${idx}`, text: item, completed: false });
+        }
+      } else if (item && typeof item === 'object' && typeof item.text === 'string' && item.text.trim().length > 0) {
+        parsed.push({
+          id: item.id || `prio_${idx}`,
+          text: item.text,
+          completed: !!item.completed,
+          weeklyTaskId: item.weeklyTaskId,
+          subTaskId: item.subTaskId
+        });
+      }
+    });
+  } else if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
+    const lines = rawVal.split('\n');
+    lines.forEach((line, idx) => {
+      let cleaned = line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
+      let completed = false;
+      if (cleaned.startsWith('[x] ') || cleaned.startsWith('[X] ')) {
+        completed = true;
+        cleaned = cleaned.slice(4).trim();
+      } else if (cleaned.startsWith('[ ] ')) {
+        cleaned = cleaned.slice(4).trim();
+      }
+      if (cleaned.length > 0) {
+        parsed.push({ id: `prio_${idx}`, text: cleaned, completed });
+      }
+    });
+  }
+  return parsed;
+};
+
+const padPriorityRows = (nonEmptyRows: PriorityRow[], minSlots = 3): PriorityRow[] => {
+  const rows = [...nonEmptyRows];
+  while (rows.length < minSlots) {
+    rows.push({
+      id: `prio_slot_${rows.length}_${Math.random().toString(36).slice(2, 6)}`,
+      text: '',
+      completed: false
+    });
+  }
+  return rows;
+};
+
+const getPriorityCanonicalSig = (rows: PriorityRow[]): string =>
+  rows
+    .filter(r => r.text.trim().length > 0)
+    .map(r => `${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}`)
+    .join('\n');
+
 interface ModularCardProps {
   field: TemplateField;
   value: any;
@@ -23,7 +86,24 @@ interface ModularCardProps {
 }
 
 export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange, onAction }) => {
-  const [extraEmptySlots, setExtraEmptySlots] = useState(0);
+  const [localPriorityRows, setLocalPriorityRows] = useState<PriorityRow[]>(() =>
+    field.type === 'numbered_list' ? padPriorityRows(parsePriorityValueToNonEmptyRows(value), 3) : []
+  );
+  const localPriorityRowsRef = useRef<PriorityRow[]>(localPriorityRows);
+  localPriorityRowsRef.current = localPriorityRows;
+
+  // Keep numbered_list rows synced when external actions occur (Pull Goal, Carry Over, Date switch, Cloud Sync)
+  useEffect(() => {
+    if (field.type !== 'numbered_list') return;
+    const incomingNonEmpty = parsePriorityValueToNonEmptyRows(value);
+    const incomingSig = getPriorityCanonicalSig(incomingNonEmpty);
+    const currentSig = getPriorityCanonicalSig(localPriorityRowsRef.current);
+    if (incomingSig !== currentSig) {
+      const nextPadded = padPriorityRows(incomingNonEmpty, 3);
+      localPriorityRowsRef.current = nextPadded;
+      setLocalPriorityRows(nextPadded);
+    }
+  }, [field.type, value]);
 
   // Shape container styling
   const getShapeClasses = () => {
@@ -206,11 +286,23 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
 
       // 5. Textarea (Reflexions, Notes, Plans)
       case 'textarea': {
+        const textareaVal = Array.isArray(value)
+          ? value
+              .map((item: any, idx: number) =>
+                typeof item === 'string'
+                  ? item
+                  : `${idx + 1} ${item?.completed ? '[x] ' : ''}${item?.text || ''}`.trim()
+              )
+              .filter(Boolean)
+              .join('\n')
+          : typeof value === 'string'
+          ? value
+          : '';
         return (
           <div className="space-y-2">
             <textarea
               rows={4}
-              value={typeof value === 'string' ? value : ''}
+              value={textareaVal}
               onChange={(e) => onChange(e.target.value)}
               placeholder={field.placeholder || 'Type here...'}
               className="w-full bg-slate-950/90 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-3 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none transition-all resize-y leading-relaxed"
@@ -221,92 +313,31 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
 
       // 5b. Numbered List (1, 2, 3 discrete priority items with ID-linked weekly sync & completion checkboxes)
       case 'numbered_list': {
-        interface PriorityRow {
-          id: string;
-          text: string;
-          completed: boolean;
-          weeklyTaskId?: string;
-          subTaskId?: string;
-        }
-
-        const parseValueToRows = (rawVal: any): PriorityRow[] => {
-          const parsed: PriorityRow[] = [];
-          if (Array.isArray(rawVal)) {
-            rawVal.forEach((item, idx) => {
-              if (typeof item === 'string') {
-                parsed.push({ id: `prio_${idx}`, text: item, completed: false });
-              } else if (item && typeof item === 'object') {
-                parsed.push({
-                  id: item.id || `prio_${idx}`,
-                  text: item.text || '',
-                  completed: !!item.completed,
-                  weeklyTaskId: item.weeklyTaskId,
-                  subTaskId: item.subTaskId
-                });
-              }
-            });
-          } else if (typeof rawVal === 'string' && rawVal.trim().length > 0) {
-            const lines = rawVal.split('\n');
-            lines.forEach((line, idx) => {
-              let cleaned = line.replace(/^[0-9]+[\.\)\s]+/, '').trim();
-              let completed = false;
-              if (cleaned.startsWith('[x] ') || cleaned.startsWith('[X] ')) {
-                completed = true;
-                cleaned = cleaned.slice(4).trim();
-              } else if (cleaned.startsWith('[ ] ')) {
-                cleaned = cleaned.slice(4).trim();
-              }
-              parsed.push({ id: `prio_${idx}`, text: cleaned, completed });
-            });
-          }
-          while (parsed.length < 3) {
-            parsed.push({ id: `prio_slot_${parsed.length}`, text: '', completed: false });
-          }
-          return parsed;
-        };
-
-        const rows = parseValueToRows(value);
-
-        // Reset extra empty slots if value has grown to fill them
-        const displayRows = [...rows];
-        for (let i = 0; i < extraEmptySlots; i++) {
-          displayRows.push({
-            id: `prio_extra_${rows.length + i}`,
-            text: '',
-            completed: false
-          });
-        }
+        const displayRows = localPriorityRows;
 
         const serializeAndSync = (nextRows: PriorityRow[], toggledRow?: PriorityRow) => {
-          let lastNonEmptyIdx = -1;
-          nextRows.forEach((r, i) => {
-            if (r.text.trim().length > 0) lastNonEmptyIdx = i;
-          });
-          const effectiveRows = lastNonEmptyIdx >= 0 ? nextRows.slice(0, Math.max(3, lastNonEmptyIdx + 1)) : nextRows.slice(0, 3);
+          const filledRows = nextRows
+            .filter(r => r.text.trim().length > 0)
+            .map(r => ({ ...r, text: r.text.trim() }));
 
-          const formatted = effectiveRows
-            .map((r, idx) => {
-              const txt = r.text.trim();
-              if (!txt) return '';
-              return `${idx + 1} ${r.completed ? '[x] ' : ''}${txt}`;
-            })
+          const formatted = filledRows
+            .map((r, idx) => `${idx + 1} ${r.completed ? '[x] ' : ''}${r.text}`)
             .join('\n');
 
-          // Emit both formatted string and structured items so ID links never break on text edits
-          onChange(formatted);
-
           if (onAction) {
-            const filledRows = nextRows.filter(r => r.text.trim().length > 0);
             const completedCount = filledRows.filter(r => r.completed).length;
             const totalCount = Math.max(3, filledRows.length);
             onAction('sync_daily_priorities', {
               completedCount,
               totalCount,
-              priorityItems: effectiveRows,
+              priorityItems: filledRows,
+              formattedPlanNotes: formatted,
               toggledItem: toggledRow,
               toggledText: toggledRow?.text?.trim(),
               isCompleted: toggledRow?.completed
             });
+          } else {
+            onChange(formatted);
           }
         };
 
@@ -316,15 +347,15 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
               ? {
                   ...r,
                   text,
-                  // Only clear weekly link if user completely clears the row text
+                  // Clear link & completed flag only when the user completely clears the row text
+                  completed: text.trim() ? r.completed : false,
                   weeklyTaskId: text.trim() ? r.weeklyTaskId : undefined,
                   subTaskId: text.trim() ? r.subTaskId : undefined
                 }
               : r
           );
-          if (index >= rows.length && text.trim().length > 0) {
-            setExtraEmptySlots(prev => Math.max(0, prev - 1));
-          }
+          localPriorityRowsRef.current = next;
+          setLocalPriorityRows(next);
           serializeAndSync(next);
         };
 
@@ -332,21 +363,33 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
           const target = displayRows[index];
           if (!target || !target.text.trim()) return;
           const updatedRow = { ...target, completed: !target.completed };
-          const next = displayRows.map((r, i) => i === index ? updatedRow : r);
+          const next = displayRows.map((r, i) => (i === index ? updatedRow : r));
+          localPriorityRowsRef.current = next;
+          setLocalPriorityRows(next);
           serializeAndSync(next, updatedRow);
         };
 
         const handleAddItem = () => {
-          setExtraEmptySlots(prev => prev + 1);
+          const next = [
+            ...displayRows,
+            {
+              id: `prio_slot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              text: '',
+              completed: false
+            }
+          ];
+          localPriorityRowsRef.current = next;
+          setLocalPriorityRows(next);
         };
 
         const handleRemoveItem = (index: number) => {
-          if (index >= rows.length) {
-            setExtraEmptySlots(prev => Math.max(0, prev - 1));
-            return;
-          }
+          const removed = displayRows[index];
           const next = displayRows.filter((_, i) => i !== index);
-          serializeAndSync(next);
+          localPriorityRowsRef.current = next;
+          setLocalPriorityRows(next);
+          if (removed && removed.text.trim().length > 0) {
+            serializeAndSync(next);
+          }
         };
 
         return (

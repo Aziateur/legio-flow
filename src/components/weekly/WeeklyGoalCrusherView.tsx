@@ -83,15 +83,16 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     });
   };
 
-  // Check if a goal or sub-goal is already in a given day's plan (by ID first, then text)
+  // Check if a goal or sub-goal is already in a given day's plan (by ID first, then exact normalized text)
   const isGoalInDay = (dateStr: string, goalText: string, weeklyTaskId?: string, subTaskId?: string): boolean => {
     const entry = dailyEntries[dateStr];
     if (!entry) return false;
     const items = getPriorityItemsForEntry(entry);
     if (subTaskId && items.some(p => p.subTaskId === subTaskId)) return true;
     if (weeklyTaskId && !subTaskId && items.some(p => p.weeklyTaskId === weeklyTaskId && !p.subTaskId)) return true;
-    if (!entry.planNotes) return false;
-    return entry.planNotes.toLowerCase().includes(goalText.toLowerCase().trim());
+    const norm = goalText.toLowerCase().trim();
+    if (!norm) return false;
+    return items.some(p => p.text.toLowerCase().trim() === norm);
   };
 
   // Toggle goal done + two-way sync with any day in this week that has this goal
