@@ -15,20 +15,41 @@ import {
   Sparkles,
   Shield,
   AlertTriangle,
-  Download
+  Download,
+  Upload,
+  Sliders,
+  Database,
+  Settings,
+  Bell
 } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenAdminConsole?: () => void;
+  onOpenTemplates?: () => void;
+  onExportBackup?: () => void;
+  onOpenImportBackup?: () => void;
+  onOpenSupabaseSettings?: () => void;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdminConsole }) => {
+export const AuthModal: React.FC<AuthModalProps> = ({
+  isOpen,
+  onClose,
+  onOpenAdminConsole,
+  onOpenTemplates,
+  onExportBackup,
+  onOpenImportBackup,
+  onOpenSupabaseSettings
+}) => {
   const {
     authUser,
     isAdmin,
     todayDate,
+    systemLevel,
+    setSystemLevel,
+    browserNotificationsEnabled,
+    enableBrowserNotifications,
     rememberDevice,
     setRememberDevice,
     syncStatus,
@@ -41,6 +62,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
     startFreshWorkspace
   } = useStorage();
 
+  const [profileTab, setProfileTab] = useState<'account' | 'parameters'>('account');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -122,242 +144,401 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
           </div>
         </div>
 
-        {/* Logged-in View */}
+        {/* Logged-in View with Profile / Parameters Tabs */}
         {authUser ? (
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Signed in as</span>
-                <span
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border flex items-center space-x-1 ${
-                    syncStatus === 'synced'
-                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                      : syncStatus === 'syncing'
-                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                      : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
-                  }`}
-                >
-                  <Cloud className="w-3 h-3" />
-                  <span>
-                    {syncStatus === 'synced'
-                      ? 'Cloud Synced'
-                      : syncStatus === 'syncing'
-                      ? 'Syncing...'
-                      : syncStatus === 'error'
-                      ? 'Sync Error'
-                      : 'Ready'}
-                  </span>
-                </span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="text-sm font-bold text-slate-100">
-                  {authUser.displayName || authUser.email}
-                </div>
+            {/* Profile vs Parameters Tab Bar */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setProfileTab('account')}
+                className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all ${
+                  profileTab === 'account'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>Profile</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProfileTab('parameters')}
+                className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all ${
+                  profileTab === 'parameters'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>Parameters</span>
                 {isAdmin && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wider">
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                      profileTab === 'parameters'
+                        ? 'bg-slate-950/20 text-slate-950'
+                        : 'bg-amber-500/20 text-amber-300'
+                    }`}
+                  >
                     Admin
                   </span>
                 )}
-              </div>
-              <div className="text-xs font-mono text-slate-400">{authUser.email}</div>
-
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                <label className="flex items-center space-x-2 text-emerald-400 font-semibold cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={rememberDevice}
-                    onChange={(e) => setRememberDevice(e.target.checked)}
-                    className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
-                  />
-                  <span>Remember this computer & stay signed in</span>
-                </label>
-              </div>
+              </button>
             </div>
 
-            {syncError && (
-              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
-                <div className="flex items-center space-x-1.5 font-bold">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Cloud Sync Notice</span>
+            {profileTab === 'account' ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Signed in as</span>
+                    <span
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full border flex items-center space-x-1 ${
+                        syncStatus === 'synced'
+                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                          : syncStatus === 'syncing'
+                          ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                          : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                      }`}
+                    >
+                      <Cloud className="w-3 h-3" />
+                      <span>
+                        {syncStatus === 'synced'
+                          ? 'Cloud Synced'
+                          : syncStatus === 'syncing'
+                          ? 'Syncing...'
+                          : syncStatus === 'error'
+                          ? 'Sync Error'
+                          : 'Ready'}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="text-sm font-bold text-slate-100">
+                      {authUser.displayName || authUser.email}
+                    </div>
+                    {isAdmin && (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wider">
+                        Admin
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs font-mono text-slate-400">{authUser.email}</div>
+
+                  <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                    <label className="flex items-center space-x-2 text-emerald-400 font-semibold cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={rememberDevice}
+                        onChange={(e) => setRememberDevice(e.target.checked)}
+                        className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span>Remember this computer & stay signed in</span>
+                    </label>
+                  </div>
                 </div>
-                <p>{syncError}</p>
-                {isAdmin && (
-                  <p className="text-[11px] text-slate-400">
-                    Make sure the Supabase project is active and the <code>legio_user_state</code> table SQL has been run in Supabase SQL Editor.
-                  </p>
+
+                {syncError && (
+                  <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-2">
+                    <div className="flex items-center space-x-1.5 font-bold">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Cloud Sync Notice</span>
+                    </div>
+                    <p>{syncError}</p>
+                    {isAdmin && (
+                      <p className="text-[11px] text-slate-400">
+                        Make sure the Supabase project is active and the <code>legio_user_state</code> table SQL has been run in Supabase SQL Editor.
+                      </p>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
 
-            {isAdmin && onOpenAdminConsole && (
-              <button
-                type="button"
-                onClick={onOpenAdminConsole}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-extrabold transition-colors"
-              >
-                <Shield className="w-4 h-4" />
-                <span>Open Admin Console (Templates & All-Users Backups)</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={syncNow}
-              className="w-full flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-              <span>Sync Now</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={async () => {
-                await signOut();
-                onClose();
-              }}
-              className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-bold transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Sign Out</span>
-            </button>
-
-            {/* Admin-Only Danger Zone with 2-Layer Confirmation for Start Fresh */}
-            {isAdmin && (
-              <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowDangerZone(!showDangerZone);
-                    setWipeStep(0);
-                    setWipeConfirmInput('');
-                    setBackupDownloadedBeforeWipe(false);
-                  }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-rose-400 transition-colors"
+                  onClick={syncNow}
+                  className="w-full flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
                 >
-                  <span className="flex items-center space-x-1.5">
-                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400/80" />
-                    <span>Danger Zone (Wipe / Start Fresh)</span>
-                  </span>
-                  <span className="font-mono text-[10px]">{showDangerZone ? 'Hide' : 'Show'}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                  <span>Sync Now</span>
                 </button>
 
-                {showDangerZone && wipeStep === 0 && (
-                  <div className="p-3.5 rounded-2xl bg-rose-500/5 border border-rose-500/25 space-y-2.5">
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      <strong>Start Fresh</strong> permanently wipes all daily plans, weekly/monthly/yearly plans, GWS sprints, reviews, and checklists on this account. Requires 2 confirmation steps.
-                    </p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await signOut();
+                    onClose();
+                  }}
+                  className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-bold transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            ) : (
+              /* PARAMETERS TAB */
+              <div className="space-y-4">
+                {/* General Workspace Parameters */}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                    Workspace Preferences
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300 font-semibold">App Complexity Level</span>
+                      <span className="font-mono text-amber-400 font-bold">LVL {systemLevel}</span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {([1, 2, 3, 4, 5] as const).map(lvl => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => setSystemLevel(lvl)}
+                          className={`py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                            systemLevel === lvl
+                              ? 'bg-amber-500 text-slate-950 shadow-sm'
+                              : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
+                          }`}
+                        >
+                          L{lvl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-xs text-slate-300">
+                      <Bell className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Browser Plan Reminders</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={enableBrowserNotifications}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-full border transition-colors ${
+                        browserNotificationsEnabled
+                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-700'
+                      }`}
+                    >
+                      {browserNotificationsEnabled ? 'ON' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Admin-Only Tools & Backup Parameters (moved off Navbar so top bar stays clean) */}
+                {isAdmin && (
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/25 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400 flex items-center space-x-1.5">
+                        <Shield className="w-3.5 h-3.5" />
+                        <span>Admin Parameters & Tools</span>
+                      </span>
+                    </div>
+
+                    {onOpenAdminConsole && (
+                      <button
+                        type="button"
+                        onClick={onOpenAdminConsole}
+                        className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-extrabold transition-colors"
+                      >
+                        <span className="flex items-center space-x-2">
+                          <Shield className="w-4 h-4 shrink-0" />
+                          <span>Admin Console (All-Users Backups)</span>
+                        </span>
+                        <span className="text-[10px] opacity-80">Open →</span>
+                      </button>
+                    )}
+
+                    {onOpenTemplates && (
+                      <button
+                        type="button"
+                        onClick={onOpenTemplates}
+                        className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-800 text-xs font-bold transition-colors"
+                      >
+                        <span className="flex items-center space-x-2">
+                          <Sliders className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>Template & Layout Customizer</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400">Open →</span>
+                      </button>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {onExportBackup && (
+                        <button
+                          type="button"
+                          onClick={onExportBackup}
+                          className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-bold transition-colors"
+                        >
+                          <Download className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Download .json</span>
+                        </button>
+                      )}
+                      {onOpenImportBackup && (
+                        <button
+                          type="button"
+                          onClick={onOpenImportBackup}
+                          className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-bold transition-colors"
+                        >
+                          <Upload className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Upload .json</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {onOpenSupabaseSettings && (
+                      <button
+                        type="button"
+                        onClick={onOpenSupabaseSettings}
+                        className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-800 text-xs font-bold transition-colors"
+                      >
+                        <span className="flex items-center space-x-2">
+                          <Database className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>Supabase Cloud Sync Config</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400">Configure →</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Admin-Only Danger Zone with 2-Layer Confirmation for Start Fresh */}
+                {isAdmin && (
+                  <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
                     <button
                       type="button"
                       onClick={() => {
-                        setWipeStep(1);
+                        setShowDangerZone(!showDangerZone);
+                        setWipeStep(0);
                         setWipeConfirmInput('');
                         setBackupDownloadedBeforeWipe(false);
                       }}
-                      className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 text-xs font-bold transition-colors"
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-rose-400 transition-colors"
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Start Fresh (Step 1 of 2)...</span>
-                    </button>
-                  </div>
-                )}
-
-                {showDangerZone && wipeStep === 1 && (
-                  <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/40 space-y-3">
-                    <div className="flex items-start space-x-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <div className="text-xs font-extrabold text-rose-300">
-                          Are you sure? (Layer 1 of 2)
-                        </div>
-                        <p className="text-[11px] text-slate-300 leading-relaxed">
-                          This will erase <strong>ALL data in {authUser.email}</strong> and overwrite your cloud save with a blank workspace. Download a safety backup first if you might ever want it back.
-                        </p>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const json = exportData();
-                        const blob = new Blob([json], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `legio_SAFETY_backup_${todayDate}.json`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                        setBackupDownloadedBeforeWipe(true);
-                      }}
-                      className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-bold"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>
-                        {backupDownloadedBeforeWipe
-                          ? 'Safety Backup Downloaded ✓'
-                          : 'Download Safety Backup (.json) First'}
+                      <span className="flex items-center space-x-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-400/80" />
+                        <span>Danger Zone (Wipe / Start Fresh)</span>
                       </span>
+                      <span className="font-mono text-[10px]">{showDangerZone ? 'Hide' : 'Show'}</span>
                     </button>
 
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => setWipeStep(0)}
-                        className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setWipeStep(2)}
-                        className="flex-1 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 border border-rose-500/40 text-xs font-extrabold"
-                      >
-                        Continue to Layer 2 →
-                      </button>
-                    </div>
-                  </div>
-                )}
+                    {showDangerZone && wipeStep === 0 && (
+                      <div className="p-3.5 rounded-2xl bg-rose-500/5 border border-rose-500/25 space-y-2.5">
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          <strong>Start Fresh</strong> permanently wipes all daily plans, weekly/monthly/yearly plans, GWS sprints, reviews, and checklists on this account. Requires 2 confirmation steps.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWipeStep(1);
+                            setWipeConfirmInput('');
+                            setBackupDownloadedBeforeWipe(false);
+                          }}
+                          className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 text-xs font-bold transition-colors"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Start Fresh (Step 1 of 2)...</span>
+                        </button>
+                      </div>
+                    )}
 
-                {showDangerZone && wipeStep === 2 && (
-                  <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/50 space-y-3">
-                    <div className="text-xs font-extrabold text-rose-300">
-                      Final Confirmation (Layer 2 of 2)
-                    </div>
-                    <p className="text-[11px] text-slate-300">
-                      Type <code className="px-1.5 py-0.5 rounded bg-slate-950 text-rose-300 font-bold">WIPE MY ACCOUNT</code> below to permanently erase this workspace:
-                    </p>
-                    <input
-                      type="text"
-                      value={wipeConfirmInput}
-                      onChange={(e) => setWipeConfirmInput(e.target.value)}
-                      placeholder="WIPE MY ACCOUNT"
-                      className="w-full bg-slate-950 border border-rose-500/40 focus:border-rose-400 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none"
-                    />
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWipeStep(0);
-                          setWipeConfirmInput('');
-                        }}
-                        className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        disabled={wipeConfirmInput.trim().toUpperCase() !== 'WIPE MY ACCOUNT'}
-                        onClick={() => {
-                          startFreshWorkspace();
-                          setWipeStep(0);
-                          setWipeConfirmInput('');
-                          setShowDangerZone(false);
-                          onClose();
-                        }}
-                        className="flex-1 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 text-xs font-extrabold"
-                      >
-                        Permanently Wipe
-                      </button>
-                    </div>
+                    {showDangerZone && wipeStep === 1 && (
+                      <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/40 space-y-3">
+                        <div className="flex items-start space-x-2">
+                          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                          <div className="space-y-1">
+                            <div className="text-xs font-extrabold text-rose-300">
+                              Are you sure? (Layer 1 of 2)
+                            </div>
+                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                              This will erase <strong>ALL data in {authUser.email}</strong> and overwrite your cloud save with a blank workspace. Download a safety backup first if you might ever want it back.
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const json = exportData();
+                            const blob = new Blob([json], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `legio_SAFETY_backup_${todayDate}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            setBackupDownloadedBeforeWipe(true);
+                          }}
+                          className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-bold"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>
+                            {backupDownloadedBeforeWipe
+                              ? 'Safety Backup Downloaded ✓'
+                              : 'Download Safety Backup (.json) First'}
+                          </span>
+                        </button>
+
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setWipeStep(0)}
+                            className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setWipeStep(2)}
+                            className="flex-1 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 border border-rose-500/40 text-xs font-extrabold"
+                          >
+                            Continue to Layer 2 →
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {showDangerZone && wipeStep === 2 && (
+                      <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/50 space-y-3">
+                        <div className="text-xs font-extrabold text-rose-300">
+                          Final Confirmation (Layer 2 of 2)
+                        </div>
+                        <p className="text-[11px] text-slate-300">
+                          Type <code className="px-1.5 py-0.5 rounded bg-slate-950 text-rose-300 font-bold">WIPE MY ACCOUNT</code> below to permanently erase this workspace:
+                        </p>
+                        <input
+                          type="text"
+                          value={wipeConfirmInput}
+                          onChange={(e) => setWipeConfirmInput(e.target.value)}
+                          placeholder="WIPE MY ACCOUNT"
+                          className="w-full bg-slate-950 border border-rose-500/40 focus:border-rose-400 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none"
+                        />
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setWipeStep(0);
+                              setWipeConfirmInput('');
+                            }}
+                            className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={wipeConfirmInput.trim().toUpperCase() !== 'WIPE MY ACCOUNT'}
+                            onClick={() => {
+                              startFreshWorkspace();
+                              setWipeStep(0);
+                              setWipeConfirmInput('');
+                              setShowDangerZone(false);
+                              onClose();
+                            }}
+                            className="flex-1 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 text-xs font-extrabold"
+                          >
+                            Permanently Wipe
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

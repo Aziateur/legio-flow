@@ -5,18 +5,14 @@ import {
   Target, 
   TrendingUp, 
   Compass,
-  Download, 
   Upload, 
   Flame,
   CheckCircle2,
   Menu,
   X,
-  Database,
   Bell,
   User,
   ArrowRight,
-  Shield,
-  Sliders,
   FileJson
 } from 'lucide-react';
 import { SupabaseSyncModal } from './SupabaseSyncModal';
@@ -375,20 +371,20 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 )}
               </div>
 
-              {/* Account / Supabase Auth Button */}
+              {/* Profile / Account & Parameters Button */}
               <button
                 onClick={() => setShowAuthModal(true)}
-                title={authUser ? `Signed in as ${authUser.email}${isAdmin ? ' (Admin)' : ''}` : 'Sign In / Create Account'}
-                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                title={authUser ? `${authUser.email} — Open Profile & Parameters` : 'Sign In / Create Account'}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors whitespace-nowrap ${
                   authUser
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
                     : 'bg-slate-800/80 text-slate-200 border-slate-700 hover:border-amber-500/40'
                 }`}
               >
-                <User className="w-3.5 h-3.5" />
-                <span className="max-w-[140px] truncate">
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span className="max-w-[110px] truncate">
                   {authUser
-                    ? `Signed in (${authUser.displayName || authUser.email.split('@')[0]})`
+                    ? authUser.displayName || authUser.email.split('@')[0]
                     : 'Sign In'}
                 </span>
                 {isAdmin && (
@@ -398,7 +394,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 )}
                 {authUser && (
                   <span
-                    className={`w-1.5 h-1.5 rounded-full ${
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                       syncStatus === 'synced'
                         ? 'bg-emerald-400'
                         : syncStatus === 'syncing'
@@ -408,52 +404,6 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   />
                 )}
               </button>
-
-              {/* Admin-Only Toolbar: Admin Console, Templates, Single-File Backup/Restore & Supabase DB */}
-              {isAdmin && (
-                <div className="flex items-center space-x-1 pl-2 border-l border-slate-800">
-                  <button
-                    onClick={() => setShowAdminModal(true)}
-                    title="Admin Console (All-Users Backups, Restore, Templates & Reset)"
-                    className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-extrabold transition-colors whitespace-nowrap"
-                  >
-                    <Shield className="w-3.5 h-3.5" />
-                    <span>Admin</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('templates')}
-                    title="Template Manager (Admin Only)"
-                    className={`p-2 rounded-lg transition-colors ${
-                      activeTab === 'templates'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                        : 'text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10'
-                    }`}
-                  >
-                    <Sliders className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleExport}
-                    title="Download My Account Backup (.json File)"
-                    className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setShowImportModal(true)}
-                    title="Upload / Restore Account Backup (.json File)"
-                    className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-                  >
-                    <Upload className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setShowSupabaseModal(true)}
-                    title="Supabase Cloud Sync (Admin Only)"
-                    className="p-2 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
-                  >
-                    <Database className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Mobile menu trigger */}
@@ -521,46 +471,18 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 </button>
               );
             })}
-            {isAdmin && (
-              <>
-                <button
-                  onClick={() => {
-                    setActiveTab('templates');
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium ${
-                    activeTab === 'templates' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-300 hover:bg-slate-800'
-                  }`}
-                >
-                  <Sliders className="w-5 h-5" />
-                  <span>Template Manager (Admin)</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAdminModal(true);
-                    setMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-bold text-amber-300 bg-amber-500/10 border border-amber-500/25 hover:bg-amber-500/20"
-                >
-                  <Shield className="w-5 h-5" />
-                  <span>Admin Console (All-Users Backups)</span>
-                </button>
-                <div className="pt-2 flex items-center justify-between border-t border-slate-800 text-xs text-slate-400">
-                  <button onClick={handleExport} className="flex items-center space-x-1 p-2 hover:text-slate-200">
-                    <Download className="w-4 h-4" /> <span>Export .json</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowImportModal(true);
-                      setMobileMenuOpen(false);
-                    }}
-                    className="flex items-center space-x-1 p-2 hover:text-slate-200"
-                  >
-                    <Upload className="w-4 h-4" /> <span>Upload .json</span>
-                  </button>
-                </div>
-              </>
-            )}
+            <div className="pt-2 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setShowAuthModal(true);
+                }}
+                className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                <User className="w-5 h-5 text-emerald-400" />
+                <span>Profile & Parameters</span>
+              </button>
+            </div>
           </div>
         )}
       </header>
@@ -583,13 +505,26 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
         />
       )}
 
-      {/* Account Auth Modal */}
+      {/* Account & Parameters Modal */}
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
         onOpenAdminConsole={() => {
           setShowAuthModal(false);
           setShowAdminModal(true);
+        }}
+        onOpenTemplates={() => {
+          setShowAuthModal(false);
+          setActiveTab('templates');
+        }}
+        onExportBackup={handleExport}
+        onOpenImportBackup={() => {
+          setShowAuthModal(false);
+          setShowImportModal(true);
+        }}
+        onOpenSupabaseSettings={() => {
+          setShowAuthModal(false);
+          setShowSupabaseModal(true);
         }}
       />
 
