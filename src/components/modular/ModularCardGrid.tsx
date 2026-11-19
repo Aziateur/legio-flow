@@ -15,9 +15,11 @@ export const ModularCardGrid: React.FC<ModularCardGridProps> = ({
   onChange,
   onAction
 }) => {
+  const visibleFields = template.fields.filter(f => !f.hidden);
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
-      {template.fields.map((field) => {
+      {visibleFields.map((field) => {
         const val = values[field.id] !== undefined ? values[field.id] : field.defaultValue;
         return (
           <ModularCard

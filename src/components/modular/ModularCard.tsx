@@ -741,8 +741,24 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
     }
   };
 
+  const getWidthClasses = () => {
+    switch (field.width) {
+      case 'col-span-3':
+        return 'col-span-1 md:col-span-3';
+      case 'col-span-4':
+        return 'col-span-1 md:col-span-4';
+      case 'col-span-6':
+        return 'col-span-1 md:col-span-6';
+      case 'col-span-8':
+        return 'col-span-1 md:col-span-8';
+      case 'col-span-12':
+      default:
+        return 'col-span-1 md:col-span-12';
+    }
+  };
+
   return (
-    <div className={`${field.width || 'col-span-12'} ${getShapeClasses()} flex flex-col justify-between transition-all duration-200`}>
+    <div className={`${getWidthClasses()} ${getShapeClasses()} flex flex-col justify-between transition-all duration-200`}>
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div>

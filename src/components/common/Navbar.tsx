@@ -175,22 +175,12 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
             
             {/* Brand Logo & Title */}
             <div className="flex items-center space-x-2.5 cursor-pointer shrink-0 group" onClick={() => setActiveTab('planning')}>
-              <div className="h-9 w-9 rounded-xl bg-slate-950 border border-amber-500/40 flex items-center justify-center shadow-lg shadow-amber-500/10 group-hover:border-amber-400 transition-colors">
-                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path
-                    d="M12 2.5L20 6.5V12.5C20 17.2 16.6 20.6 12 22C7.4 20.6 4 17.2 4 12.5V6.5L12 2.5Z"
-                    stroke="#F59E0B"
-                    strokeWidth="1.8"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M8.5 8.5V15.5H15.5"
-                    stroke="#FBBF24"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+              <div className="h-10 w-10 rounded-xl bg-slate-950 border border-amber-500/40 flex items-center justify-center p-1 shadow-lg shadow-amber-500/15 group-hover:border-amber-400 group-hover:shadow-amber-500/25 transition-all">
+                <img
+                  src="/legio-logo.png"
+                  alt="LEGIO Aquila Emblem"
+                  className="w-full h-full object-contain drop-shadow-[0_0_6px_rgba(245,158,11,0.35)]"
+                />
               </div>
               <span className="font-extrabold text-xl tracking-[0.18em] text-slate-100 uppercase whitespace-nowrap">
                 LEGIO

@@ -23,6 +23,7 @@ export interface TemplateField {
   width: CardWidth;
   shape: CardShape;
   required?: boolean;
+  hidden?: boolean;
   min?: number;
   max?: number;
   placeholder?: string;
