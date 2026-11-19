@@ -304,6 +304,100 @@ const normalizeDailyEntryFields = (date: string, entry: DailyEntry): DailyEntry 
   };
 };
 
+export type DailyChecklistDayState = 'done' | 'missed' | 'pending_today' | 'untracked' | 'upcoming';
+
+export function getChecklistTrackingStartDate(
+  checklistItems: ChecklistItem[],
+  dailyEntries: Record<string, DailyEntry>,
+  todayDate: string
+): string {
+  const candidates: string[] = [];
+  checklistItems
+    .filter(i => i.recurrence === 'daily')
+    .forEach(item => {
+      if (item.createdAt && /^\d{4}-\d{2}-\d{2}$/.test(item.createdAt)) {
+        candidates.push(item.createdAt);
+      }
+      (item.completedPeriods || []).forEach(p => {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(p)) candidates.push(p);
+      });
+    });
+  Object.values(dailyEntries).forEach(entry => {
+    if (entry?.automaticTasksCompleted && /^\d{4}-\d{2}-\d{2}$/.test(entry.date)) {
+      candidates.push(entry.date);
+    }
+  });
+  if (candidates.length === 0) return todayDate;
+  return candidates.sort()[0];
+}
+
+export function getEffectiveDailyItemStartDate(
+  item: ChecklistItem,
+  fallbackStartDate: string
+): string {
+  const dates: string[] = [];
+  if (item.createdAt && /^\d{4}-\d{2}-\d{2}$/.test(item.createdAt)) {
+    dates.push(item.createdAt);
+  }
+  (item.completedPeriods || []).forEach(p => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(p)) dates.push(p);
+  });
+  if (dates.length > 0) return dates.sort()[0];
+  return fallbackStartDate;
+}
+
+export function getActiveDailyChecklistItemsForDate(
+  dateStr: string,
+  checklistItems: ChecklistItem[],
+  dailyEntries: Record<string, DailyEntry>,
+  todayDate: string
+): ChecklistItem[] {
+  const dailyItems = checklistItems.filter(i => i.recurrence === 'daily');
+  const fallbackStart = getChecklistTrackingStartDate(checklistItems, dailyEntries, todayDate);
+  return dailyItems.filter(item => {
+    const start = getEffectiveDailyItemStartDate(item, fallbackStart);
+    return start <= dateStr || (item.completedPeriods || []).includes(dateStr);
+  });
+}
+
+export function getDailyChecklistStatusForDate(
+  dateStr: string,
+  checklistItems: ChecklistItem[],
+  dailyEntries: Record<string, DailyEntry>,
+  todayDate: string
+): {
+  state: DailyChecklistDayState;
+  done: boolean;
+  completedCount: number;
+  activeTotal: number;
+} {
+  const activeItems = getActiveDailyChecklistItemsForDate(
+    dateStr,
+    checklistItems,
+    dailyEntries,
+    todayDate
+  );
+  const activeTotal = activeItems.length;
+  const completedCount = activeItems.filter(i => (i.completedPeriods || []).includes(dateStr)).length;
+  const allActiveDone = activeTotal > 0 && completedCount === activeTotal;
+  const manualDone = Boolean(dailyEntries[dateStr]?.automaticTasksCompleted);
+  const done = allActiveDone || manualDone;
+
+  if (done) {
+    return { state: 'done', done: true, completedCount, activeTotal };
+  }
+  if (dateStr > todayDate) {
+    return { state: 'upcoming', done: false, completedCount, activeTotal };
+  }
+  if (activeTotal === 0) {
+    return { state: 'untracked', done: false, completedCount: 0, activeTotal: 0 };
+  }
+  if (dateStr === todayDate) {
+    return { state: 'pending_today', done: false, completedCount, activeTotal };
+  }
+  return { state: 'missed', done: false, completedCount, activeTotal };
+}
+
 export interface MissingPlanAlert {
   id: 'missing_daily' | 'missing_weekly';
   title: string;
@@ -1677,10 +1771,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const saveChecklistItems = (items: ChecklistItem[]) => {
     commitChecklistItems(items);
 
-    const dailyItems = items.filter(i => i.recurrence === 'daily');
-    if (dailyItems.length > 0) {
-      const curDate = selectedDateRef.current;
-      const allDailyDone = dailyItems.every(i => (i.completedPeriods || []).includes(curDate));
+    const curDate = selectedDateRef.current;
+    const realToday = getTodayDateString();
+    const activeDailyForDate = getActiveDailyChecklistItemsForDate(
+      curDate,
+      items,
+      dailyEntriesRef.current,
+      realToday
+    );
+    if (activeDailyForDate.length > 0) {
+      const allDailyDone = activeDailyForDate.every(i => (i.completedPeriods || []).includes(curDate));
       const existing = dailyEntriesRef.current[curDate];
       if (!existing || existing.automaticTasksCompleted !== allDailyDone) {
         applyDailyEntryUpdate(curDate, { automaticTasksCompleted: allDailyDone });

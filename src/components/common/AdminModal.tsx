@@ -140,6 +140,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [pendingSingle, setPendingSingle] = useState<PendingSingleUpload | null>(null);
   const [pendingAllUsers, setPendingAllUsers] = useState<PendingAllUsersUpload | null>(null);
 
+  // 2-layer confirmation for Reset Sample Data
+  const [resetStep, setResetStep] = useState<0 | 1 | 2>(0);
+  const [resetConfirmInput, setResetConfirmInput] = useState('');
+
   // Hidden file inputs
   const selfFileInputRef = useRef<HTMLInputElement | null>(null);
   const allUsersFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -532,10 +536,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (confirm('Reset YOUR current account to initial sample data?')) {
-                resetAllData();
-                setStatusMessage({ type: 'success', text: 'Your local workspace was reset to sample data.' });
-              }
+              setResetStep(1);
+              setResetConfirmInput('');
             }}
             className="flex items-center space-x-3 p-4 rounded-2xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 hover:border-rose-500/40 text-left transition-all"
           >
@@ -544,10 +546,102 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </div>
             <div>
               <div className="text-xs font-extrabold text-slate-100">Reset Sample Data</div>
-              <div className="text-[11px] text-slate-400">Restore demo dataset on this account</div>
+              <div className="text-[11px] text-slate-400">2-step protected reset on this account</div>
             </div>
           </button>
         </div>
+
+        {/* 2-Layer Confirmation for Reset Sample Data */}
+        {resetStep === 1 && (
+          <div className="p-5 rounded-2xl bg-rose-500/10 border border-rose-500/40 space-y-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start space-x-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs font-extrabold text-rose-300 uppercase tracking-wider">
+                    Reset Sample Data — Are You Sure? (Layer 1 of 2)
+                  </div>
+                  <p className="text-xs text-slate-300 mt-1">
+                    This will overwrite YOUR account ({authUser?.email}) with the demo sample dataset. Download a safety backup first before continuing.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetStep(0)}
+                className="p-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadSelfBackup}
+                className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-bold"
+              >
+                Download Safety Backup (.json)
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetStep(0)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetStep(2)}
+                className="px-4 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 border border-rose-500/40 text-xs font-extrabold"
+              >
+                Continue to Layer 2 →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {resetStep === 2 && (
+          <div className="p-5 rounded-2xl bg-rose-500/15 border border-rose-500/50 space-y-3">
+            <div className="text-xs font-extrabold text-rose-300 uppercase tracking-wider">
+              Final Confirmation (Layer 2 of 2)
+            </div>
+            <p className="text-xs text-slate-300">
+              Type <code className="px-1.5 py-0.5 rounded bg-slate-950 text-rose-300 font-bold">RESET SAMPLE</code> below to overwrite your workspace with sample data:
+            </p>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <input
+                type="text"
+                value={resetConfirmInput}
+                onChange={e => setResetConfirmInput(e.target.value)}
+                placeholder="RESET SAMPLE"
+                className="flex-1 bg-slate-950 border border-rose-500/40 focus:border-rose-400 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setResetStep(0);
+                  setResetConfirmInput('');
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={resetConfirmInput.trim().toUpperCase() !== 'RESET SAMPLE'}
+                onClick={() => {
+                  resetAllData();
+                  setResetStep(0);
+                  setResetConfirmInput('');
+                  setStatusMessage({ type: 'success', text: 'Your workspace was reset to sample data.' });
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 text-xs font-extrabold"
+              >
+                Confirm Reset
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Pending Single-Account Upload Preview & Confirmation */}
         {pendingSingle && (

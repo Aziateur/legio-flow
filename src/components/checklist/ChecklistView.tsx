@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { useStorage } from '../../context/StorageContext';
+import {
+  useStorage,
+  getActiveDailyChecklistItemsForDate
+} from '../../context/StorageContext';
 import { ChecklistItem, ChecklistRecurrence } from '../../types/schema';
 import { CheckCircle2, Circle, Flame, ListChecks, Plus, Repeat, Trash2 } from 'lucide-react';
 
@@ -131,6 +134,8 @@ export const ChecklistView: React.FC = () => {
   const {
     checklistItems,
     saveChecklistItems,
+    dailyEntries,
+    todayDate,
     selectedDate,
     selectedWeekId,
     saveDailyEntry
@@ -156,9 +161,14 @@ export const ChecklistView: React.FC = () => {
   };
 
   const syncDailyAutomaticHabits = (items: ChecklistItem[]) => {
-    const dailyItems = items.filter((i) => i.recurrence === 'daily');
-    if (dailyItems.length > 0) {
-      const allDailyDone = dailyItems.every((i) => (i.completedPeriods || []).includes(selectedDate));
+    const activeDailyItems = getActiveDailyChecklistItemsForDate(
+      selectedDate,
+      items,
+      dailyEntries,
+      todayDate
+    );
+    if (activeDailyItems.length > 0) {
+      const allDailyDone = activeDailyItems.every((i) => (i.completedPeriods || []).includes(selectedDate));
       saveDailyEntry(selectedDate, { automaticTasksCompleted: allDailyDone });
     }
   };
@@ -192,7 +202,8 @@ export const ChecklistView: React.FC = () => {
       text,
       recurrence,
       completed: false,
-      completedPeriods: []
+      completedPeriods: [],
+      createdAt: todayDate
     };
 
     const updated = [...checklistItems, newItem];
@@ -213,7 +224,8 @@ export const ChecklistView: React.FC = () => {
         ? {
             ...item,
             recurrence,
-            categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring'
+            categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring',
+            ...(recurrence === 'daily' && item.recurrence !== 'daily' ? { createdAt: todayDate } : {})
           }
         : item
     );

@@ -13,7 +13,9 @@ import {
   Copy,
   X,
   Sparkles,
-  Shield
+  Shield,
+  AlertTriangle,
+  Download
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -26,6 +28,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
   const {
     authUser,
     isAdmin,
+    todayDate,
     rememberDevice,
     setRememberDevice,
     syncStatus,
@@ -34,6 +37,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
     signUp,
     signOut,
     syncNow,
+    exportData,
     startFreshWorkspace
   } = useStorage();
 
@@ -47,6 +51,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
   const [copiedSql, setCopiedSql] = useState(false);
+
+  // 2-layer safety gate for Start Fresh (0 = closed, 1 = warning + backup prompt, 2 = typed confirmation)
+  const [showDangerZone, setShowDangerZone] = useState(false);
+  const [wipeStep, setWipeStep] = useState<0 | 1 | 2>(0);
+  const [wipeConfirmInput, setWipeConfirmInput] = useState('');
+  const [backupDownloadedBeforeWipe, setBackupDownloadedBeforeWipe] = useState(false);
 
   if (!isOpen) return null;
 
@@ -190,31 +200,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
               </button>
             )}
 
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={syncNow}
-                className="flex-1 flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                <span>Sync Now</span>
-              </button>
-
-              {isAdmin && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm('Clear sample data and start a completely blank workspace?')) {
-                      startFreshWorkspace();
-                    }
-                  }}
-                  className="flex-1 flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-amber-400 border border-slate-800 text-xs font-bold transition-colors"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Start Fresh</span>
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={syncNow}
+              className="w-full flex items-center justify-center space-x-1.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+              <span>Sync Now</span>
+            </button>
 
             <button
               type="button"
@@ -227,6 +220,148 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onOpenAdm
               <LogOut className="w-4 h-4" />
               <span>Sign Out</span>
             </button>
+
+            {/* Admin-Only Danger Zone with 2-Layer Confirmation for Start Fresh */}
+            {isAdmin && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDangerZone(!showDangerZone);
+                    setWipeStep(0);
+                    setWipeConfirmInput('');
+                    setBackupDownloadedBeforeWipe(false);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-rose-400 transition-colors"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400/80" />
+                    <span>Danger Zone (Wipe / Start Fresh)</span>
+                  </span>
+                  <span className="font-mono text-[10px]">{showDangerZone ? 'Hide' : 'Show'}</span>
+                </button>
+
+                {showDangerZone && wipeStep === 0 && (
+                  <div className="p-3.5 rounded-2xl bg-rose-500/5 border border-rose-500/25 space-y-2.5">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      <strong>Start Fresh</strong> permanently wipes all daily plans, weekly/monthly/yearly plans, GWS sprints, reviews, and checklists on this account. Requires 2 confirmation steps.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWipeStep(1);
+                        setWipeConfirmInput('');
+                        setBackupDownloadedBeforeWipe(false);
+                      }}
+                      className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 text-xs font-bold transition-colors"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Start Fresh (Step 1 of 2)...</span>
+                    </button>
+                  </div>
+                )}
+
+                {showDangerZone && wipeStep === 1 && (
+                  <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/40 space-y-3">
+                    <div className="flex items-start space-x-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="text-xs font-extrabold text-rose-300">
+                          Are you sure? (Layer 1 of 2)
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          This will erase <strong>ALL data in {authUser.email}</strong> and overwrite your cloud save with a blank workspace. Download a safety backup first if you might ever want it back.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const json = exportData();
+                        const blob = new Blob([json], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `legio_SAFETY_backup_${todayDate}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setBackupDownloadedBeforeWipe(true);
+                      }}
+                      className="w-full flex items-center justify-center space-x-1.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-bold"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>
+                        {backupDownloadedBeforeWipe
+                          ? 'Safety Backup Downloaded ✓'
+                          : 'Download Safety Backup (.json) First'}
+                      </span>
+                    </button>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setWipeStep(0)}
+                        className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWipeStep(2)}
+                        className="flex-1 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 border border-rose-500/40 text-xs font-extrabold"
+                      >
+                        Continue to Layer 2 →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {showDangerZone && wipeStep === 2 && (
+                  <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/50 space-y-3">
+                    <div className="text-xs font-extrabold text-rose-300">
+                      Final Confirmation (Layer 2 of 2)
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      Type <code className="px-1.5 py-0.5 rounded bg-slate-950 text-rose-300 font-bold">WIPE MY ACCOUNT</code> below to permanently erase this workspace:
+                    </p>
+                    <input
+                      type="text"
+                      value={wipeConfirmInput}
+                      onChange={(e) => setWipeConfirmInput(e.target.value)}
+                      placeholder="WIPE MY ACCOUNT"
+                      className="w-full bg-slate-950 border border-rose-500/40 focus:border-rose-400 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none"
+                    />
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWipeStep(0);
+                          setWipeConfirmInput('');
+                        }}
+                        className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={wipeConfirmInput.trim().toUpperCase() !== 'WIPE MY ACCOUNT'}
+                        onClick={() => {
+                          startFreshWorkspace();
+                          setWipeStep(0);
+                          setWipeConfirmInput('');
+                          setShowDangerZone(false);
+                          onClose();
+                        }}
+                        className="flex-1 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 text-xs font-extrabold"
+                      >
+                        Permanently Wipe
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           /* Logged-out Sign In / Sign Up Form */

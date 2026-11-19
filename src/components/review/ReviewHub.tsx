@@ -5,7 +5,8 @@ import {
   getCurrentWeekRange,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
-  computeWeeklyAchievedScore
+  computeWeeklyAchievedScore,
+  getActiveDailyChecklistItemsForDate
 } from '../../context/StorageContext';
 import { WeeklyPlan, ReviewEntry } from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
@@ -177,6 +178,7 @@ export const ReviewHub: React.FC = () => {
   const { 
     reviewSubTab, 
     setReviewSubTab,
+    todayDate,
     selectedDate, 
     setSelectedDate, 
     goToPreviousDay, 
@@ -1868,7 +1870,13 @@ export const ReviewHub: React.FC = () => {
 
               {/* Automatic Habits / Daily Checklist Card (Single Source of Truth) */}
               {(() => {
-                const dailyChecklist = checklistItems.filter(i => i.recurrence === 'daily');
+                const dailyChecklist = getActiveDailyChecklistItemsForDate(
+                  selectedDate,
+                  checklistItems,
+                  dailyEntries,
+                  todayDate
+                );
+                const activeIds = new Set(dailyChecklist.map(i => i.id));
                 const dailyDoneCount = dailyChecklist.filter(i =>
                   (i.completedPeriods || []).includes(selectedDate)
                 ).length;
@@ -1890,7 +1898,7 @@ export const ReviewHub: React.FC = () => {
                 const toggleAllDailyChecklistItems = () => {
                   const markDone = !allDailyChecklistDone;
                   const updated = checklistItems.map(item => {
-                    if (item.recurrence !== 'daily') return item;
+                    if (!activeIds.has(item.id)) return item;
                     const periods = item.completedPeriods || [];
                     const hasDate = periods.includes(selectedDate);
                     if (markDone && !hasDate) {
@@ -1909,10 +1917,10 @@ export const ReviewHub: React.FC = () => {
                     <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between gap-3">
                       <div>
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-100 block">
-                          Automatic Habits Completed?
+                          Daily Checklist ({selectedDate})
                         </span>
                         <span className="text-[11px] text-slate-400">
-                          No daily items in Checklist yet — toggle manually or add routines in Checklist.
+                          No daily checklist items were active on {selectedDate} (won&apos;t count as missed).
                         </span>
                       </div>
                       <button
@@ -1928,7 +1936,7 @@ export const ReviewHub: React.FC = () => {
                             : 'bg-slate-800 text-slate-400 border-slate-700'
                         }`}
                       >
-                        {currentDailyEntry.automaticTasksCompleted ? 'Yes (Locked In)' : 'No (Pending)'}
+                        {currentDailyEntry.automaticTasksCompleted ? 'Done' : 'Not Tracked'}
                       </button>
                     </div>
                   );

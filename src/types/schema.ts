@@ -193,4 +193,5 @@ export interface ChecklistItem {
   recurrence: ChecklistRecurrence;
   completed: boolean; // Used when recurrence === 'none'
   completedPeriods?: string[]; // Stores 'YYYY-MM-DD' for daily, 'week_N' for weekly, 'YYYY-MM' for monthly
+  createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }
