@@ -21,7 +21,8 @@ import {
   Sparkles,
   Award,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  X
 } from 'lucide-react';
 
 interface GWSStudioProps {
@@ -99,12 +100,14 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     return () => clearInterval(interval);
   }, [isTimerRunning]);
 
-  // Keep actualMinutes synced with persistent timer whenever timer advances
+  // Keep actualMinutes synced with persistent timer whenever timer advances or is canceled
   useEffect(() => {
     if (timerSeconds > 0) {
       setActualMinutes(Math.max(1, Math.round(timerSeconds / 60)));
+    } else if (!activeGwsTimer) {
+      setActualMinutes(0);
     }
-  }, [timerSeconds]);
+  }, [timerSeconds, activeGwsTimer]);
 
   // Sync task/priority/plannedMinutes edits into active persistent timer if one is active
   useEffect(() => {
@@ -165,6 +168,13 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   const handleResetTimer = () => {
     clearActiveGwsTimer();
     setActualMinutes(0);
+  };
+
+  const handleCancelSprint = () => {
+    clearActiveGwsTimer();
+    setActualMinutes(0);
+    setTaskName('');
+    setLinkedPriorityId(null);
   };
 
   const getScoreBadge = (score: number) => {
@@ -443,7 +453,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                       className="flex-1 flex items-center justify-center space-x-1 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-bold transition-colors"
                     >
                       <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Start Timer</span>
+                      <span>{timerSeconds > 0 ? 'Resume' : 'Start Timer'}</span>
                     </button>
                   ) : (
                     <button
@@ -455,14 +465,26 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                       <span>Pause</span>
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={handleResetTimer}
-                    title="Reset Stopwatch"
-                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                  </button>
+                  {(isTimerRunning || timerSeconds > 0) ? (
+                    <button
+                      type="button"
+                      onClick={handleCancelSprint}
+                      title="Cancel & discard this GWS sprint"
+                      className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/35 text-xs font-bold transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Cancel</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleResetTimer}
+                      title="Reset Stopwatch"
+                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

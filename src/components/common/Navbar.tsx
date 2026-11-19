@@ -29,6 +29,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     selectedDate, 
     gwsSessions, 
     activeGwsTimer,
+    clearActiveGwsTimer,
     dailyEntries,
     systemLevel,
     setSystemLevel,
@@ -267,39 +268,59 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 </span>
               </div>
 
-              {/* Start GWS / Live Active Timer Button */}
-              <button
-                onClick={onOpenQuickGWS}
-                title={
-                  hasActiveGwsTimer
-                    ? `${isGwsRunning ? 'Live Sprint' : 'Paused Sprint'}: ${activeGwsTimer?.taskName || 'Active GWS'} (click to open)`
-                    : 'Start a GWS deep work sprint'
-                }
-                className={`flex items-center space-x-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap ${
-                  isGwsRunning
-                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25'
-                    : hasActiveGwsTimer
-                    ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow-amber-500/10'
-                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20'
-                }`}
-              >
-                {isGwsRunning ? (
-                  <span className="w-2 h-2 rounded-full bg-slate-950 animate-pulse shrink-0" />
-                ) : (
+              {/* Start GWS / Live Active Timer Button (with 1-click Cancel X when active) */}
+              {hasActiveGwsTimer ? (
+                <div
+                  className={`flex items-center rounded-lg font-bold text-xs uppercase tracking-wider shadow-md whitespace-nowrap overflow-hidden ${
+                    isGwsRunning
+                      ? 'bg-emerald-500 text-slate-950 shadow-emerald-500/25'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-amber-500/10'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={onOpenQuickGWS}
+                    title={`${isGwsRunning ? 'Live Sprint' : 'Paused Sprint'}: ${activeGwsTimer?.taskName || 'Active GWS'} (click to open)`}
+                    className={`flex items-center space-x-1.5 pl-2.5 pr-2 py-1.5 transition-colors ${
+                      isGwsRunning ? 'hover:bg-emerald-400' : 'hover:bg-amber-500/20'
+                    }`}
+                  >
+                    {isGwsRunning ? (
+                      <span className="w-2 h-2 rounded-full bg-slate-950 animate-pulse shrink-0" />
+                    ) : (
+                      <Timer className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span className="font-mono">
+                      {isGwsRunning
+                        ? `GWS ${formatShortTimer(activeGwsSeconds)}`
+                        : `Paused ${formatShortTimer(activeGwsSeconds)}`}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => clearActiveGwsTimer()}
+                    title="Cancel & discard this GWS sprint"
+                    className={`px-2 py-1.5 border-l transition-colors ${
+                      isGwsRunning
+                        ? 'border-slate-950/20 hover:bg-rose-500 hover:text-white'
+                        : 'border-amber-500/30 hover:bg-rose-500/30 hover:text-rose-200'
+                    }`}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={onOpenQuickGWS}
+                  title="Start a GWS deep work sprint"
+                  className="flex items-center space-x-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20"
+                >
                   <Timer className="w-3.5 h-3.5 shrink-0" />
-                )}
-                <span className={hasActiveGwsTimer ? 'font-mono' : ''}>
-                  {isGwsRunning ? (
-                    `GWS ${formatShortTimer(activeGwsSeconds)}`
-                  ) : hasActiveGwsTimer ? (
-                    `Paused ${formatShortTimer(activeGwsSeconds)}`
-                  ) : (
-                    <>
-                      + GWS<span className="hidden xl:inline"> Sprint</span>
-                    </>
-                  )}
-                </span>
-              </button>
+                  <span>
+                    + GWS<span className="hidden xl:inline"> Sprint</span>
+                  </span>
+                </button>
+              )}
 
               {/* Notification Bell (Missing Day / Week Plan Alerts) */}
               <div className="relative">
@@ -439,22 +460,44 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   {authUser ? authUser.displayName || authUser.email.split('@')[0] : 'Sign In'}
                 </span>
               </button>
-              <button
-                onClick={onOpenQuickGWS}
-                className={`px-2.5 py-1.5 rounded-lg font-bold text-xs whitespace-nowrap ${
-                  isGwsRunning
-                    ? 'bg-emerald-500 text-slate-950 font-mono'
-                    : hasActiveGwsTimer
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono'
-                    : 'bg-amber-500 text-slate-950'
-                }`}
-              >
-                {isGwsRunning
-                  ? formatShortTimer(activeGwsSeconds)
-                  : hasActiveGwsTimer
-                  ? `⏸ ${formatShortTimer(activeGwsSeconds)}`
-                  : '+ GWS'}
-              </button>
+              {hasActiveGwsTimer ? (
+                <div
+                  className={`flex items-center rounded-lg font-bold text-xs whitespace-nowrap overflow-hidden ${
+                    isGwsRunning
+                      ? 'bg-emerald-500 text-slate-950 font-mono'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={onOpenQuickGWS}
+                    className="pl-2 pr-1.5 py-1.5"
+                  >
+                    {isGwsRunning
+                      ? formatShortTimer(activeGwsSeconds)
+                      : `⏸ ${formatShortTimer(activeGwsSeconds)}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => clearActiveGwsTimer()}
+                    title="Cancel GWS sprint"
+                    className={`px-1.5 py-1.5 border-l ${
+                      isGwsRunning
+                        ? 'border-slate-950/20 hover:bg-rose-500 hover:text-white'
+                        : 'border-amber-500/30 hover:bg-rose-500/30 hover:text-rose-200'
+                    }`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={onOpenQuickGWS}
+                  className="px-2.5 py-1.5 rounded-lg font-bold text-xs whitespace-nowrap bg-amber-500 text-slate-950"
+                >
+                  + GWS
+                </button>
+              )}
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="p-1.5 text-slate-400 hover:text-slate-100"
