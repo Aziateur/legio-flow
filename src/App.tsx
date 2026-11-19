@@ -8,10 +8,10 @@ import { ReviewHub } from './components/review/ReviewHub';
 import { TemplateManager } from './components/templates/TemplateManager';
 import { SpreadsheetMatrixView } from './components/matrix/SpreadsheetMatrixView';
 import { ChecklistView } from './components/checklist/ChecklistView';
-import { X } from 'lucide-react';
+import { X, Shield } from 'lucide-react';
 
 const MainContent: React.FC = () => {
-  const { activeTab, setActiveTab, setPlanningSubTab } = useStorage();
+  const { activeTab, setActiveTab, setPlanningSubTab, isAdmin } = useStorage();
   const [isQuickGWSOpen, setIsQuickGWSOpen] = useState(false);
 
   const recoverToDaily = () => {
@@ -59,7 +59,28 @@ const MainContent: React.FC = () => {
         )}
         {activeTab === 'templates' && (
           <ErrorBoundary key="templates" label="Template Manager" onReset={recoverToDaily}>
-            <TemplateManager />
+            {isAdmin ? (
+              <TemplateManager />
+            ) : (
+              <div className="max-w-xl mx-auto px-4 py-16">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-2xl">
+                  <div className="mx-auto w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                    <Shield className="w-6 h-6" />
+                  </div>
+                  <h2 className="text-lg font-extrabold text-slate-100">Admin Access Required</h2>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Template customization is restricted to the workspace administrator. Sign in with the admin account to edit card templates.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={recoverToDaily}
+                    className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs transition-colors"
+                  >
+                    Return to Daily Plan
+                  </button>
+                </div>
+              </div>
+            )}
           </ErrorBoundary>
         )}
       </main>

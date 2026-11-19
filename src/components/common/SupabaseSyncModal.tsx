@@ -141,7 +141,7 @@ export const SupabaseSyncModal: React.FC<SupabaseSyncModalProps> = ({ isOpen, on
             </button>
           </div>
           <p className="text-[11px] text-slate-500">
-            Copy the SQL script and paste it into your <strong>Supabase SQL Editor</strong> to create the 6 modular tables with Row Level Security enabled.
+            Copy the SQL script and paste it into your <strong>Supabase SQL Editor</strong> to set up <code>legio_user_state</code> with Row Level Security and the Admin-only all-users backup/restore functions.
           </p>
         </div>
 

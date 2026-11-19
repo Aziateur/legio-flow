@@ -45,7 +45,8 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     saveWeeklyPlan,
     setPlanningSubTab,
     systemLevel,
-    templates
+    templates,
+    isAdmin
   } = useStorage();
 
   const [quickWeekGoalInput, setQuickWeekGoalInput] = useState('');
@@ -451,14 +452,16 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
             <span className="hidden md:inline text-[11px] font-mono font-bold text-amber-400">
               Week {activeWeeklyPlan.weekNumber} ({activeWeeklyPlan.startDate.slice(5)} → {activeWeeklyPlan.endDate.slice(5)})
             </span>
-            <button
-              onClick={onCustomizeTemplate}
-              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors"
-              title="Change cards, order, size and shape"
-            >
-              <Sliders className="w-3.5 h-3.5 text-amber-400" />
-              <span>Customize Cards</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={onCustomizeTemplate}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 transition-colors"
+                title="Change cards, order, size and shape (Admin Only)"
+              >
+                <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                <span>Customize Cards</span>
+              </button>
+            )}
           </div>
         </div>
 

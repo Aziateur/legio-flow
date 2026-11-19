@@ -29,7 +29,9 @@ import {
   getSupabaseCredentials,
   getRememberDevicePreference,
   setRememberDevicePreference,
-  REMEMBERED_USER_CACHE_KEY
+  REMEMBERED_USER_CACHE_KEY,
+  isAdminEmail,
+  AdminUserStateRow
 } from '../lib/supabase';
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
@@ -344,6 +346,7 @@ interface StorageContextType {
 
   // Auth & Cloud Sync (Supabase)
   authUser: AuthUser | null;
+  isAdmin: boolean;
   rememberDevice: boolean;
   setRememberDevice: (remember: boolean) => void;
   syncStatus: SyncStatus;
@@ -353,6 +356,26 @@ interface StorageContextType {
   signOut: () => Promise<void>;
   syncNow: () => Promise<void>;
   startFreshWorkspace: () => void;
+
+  // Admin-only cloud backup & restore
+  adminListAllUsers: () => Promise<{
+    ok: boolean;
+    users: AdminUserStateRow[];
+    error?: string;
+    needsSqlSetup?: boolean;
+  }>;
+  adminRestoreUserState: (params: {
+    userId?: string;
+    email?: string;
+    displayName?: string;
+    state: Record<string, any>;
+  }) => Promise<{
+    ok: boolean;
+    restoredUserId?: string;
+    restoredEmail?: string;
+    error?: string;
+    needsSqlSetup?: boolean;
+  }>;
 
   // Navigation
   setSelectedDate: (date: string) => void;
@@ -615,6 +638,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const authUserRef = useRef<AuthUser | null>(authUser);
+  const isAdmin = Boolean(authUser?.email && isAdminEmail(authUser.email));
   const accessTokenRef = useRef<string | null>(readStoredAccessToken());
   const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPushingRef = useRef(false);
@@ -1667,7 +1691,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const exportData = (): string => {
+    const user = authUserRef.current;
     const data = {
+      backupType: 'single_account' as const,
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      accountEmail: user?.email || '',
+      displayName: user?.displayName || '',
+      userId: user?.id || '',
+      onboardingStartDate: getEffectiveEpochMonday(weeklyPlansRef.current),
+      systemLevel: systemLevelRef.current,
       templates: templatesRef.current,
       dailyEntries: dailyEntriesRef.current,
       gwsSessions: gwsSessionsRef.current,
@@ -1676,8 +1709,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       yearlyPlans: yearlyPlansRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
-      checklistItems: checklistItemsRef.current,
-      exportedAt: new Date().toISOString()
+      checklistItems: checklistItemsRef.current
     };
     return JSON.stringify(data, null, 2);
   };
@@ -1685,33 +1717,70 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const importData = (jsonStr: string): boolean => {
     try {
       const parsed = JSON.parse(jsonStr);
-      if (parsed.templates) commitTemplates(parsed.templates);
-      if (parsed.dailyEntries) {
+      if (!parsed || typeof parsed !== 'object') return false;
+      if (parsed.backupType === 'all_users' && Array.isArray(parsed.users)) {
+        return false;
+      }
+
+      // Support both flat single-account backups and wrapped { state: {...} } user backups
+      const src =
+        parsed.state && typeof parsed.state === 'object' && !Array.isArray(parsed.state)
+          ? parsed.state
+          : parsed;
+
+      const hasRecognizedField =
+        Array.isArray(src.templates) ||
+        (src.dailyEntries && typeof src.dailyEntries === 'object') ||
+        Array.isArray(src.gwsSessions) ||
+        (src.weeklyPlans && typeof src.weeklyPlans === 'object') ||
+        (src.monthlyPlans && typeof src.monthlyPlans === 'object') ||
+        (src.yearlyPlans && typeof src.yearlyPlans === 'object') ||
+        Array.isArray(src.reviews) ||
+        Array.isArray(src.checklistItems);
+
+      if (!hasRecognizedField) return false;
+
+      const epoch = src.onboardingStartDate || src.weeklyPlans?.['week_1']?.startDate;
+      if (epoch && typeof epoch === 'string') {
+        try {
+          localStorage.setItem(ONBOARDING_EPOCH_KEY, epoch);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (Array.isArray(src.templates)) commitTemplates(src.templates);
+      if (src.dailyEntries && typeof src.dailyEntries === 'object') {
         const cleaned: Record<string, DailyEntry> = {};
-        Object.entries(parsed.dailyEntries).forEach(([d, entry]) => {
+        Object.entries(src.dailyEntries).forEach(([d, entry]) => {
           cleaned[d] = normalizeDailyEntryFields(d, entry as DailyEntry);
         });
         commitDailyEntries(cleaned);
       }
-      if (parsed.gwsSessions) commitGwsSessions(parsed.gwsSessions);
-      if (parsed.weeklyPlans) commitWeeklyPlans(ensureContinuousWeeks(parsed.weeklyPlans, getTodayDateString()));
-      if (parsed.monthlyPlans && typeof parsed.monthlyPlans === 'object') {
+      if (Array.isArray(src.gwsSessions)) commitGwsSessions(src.gwsSessions);
+      if (src.weeklyPlans && typeof src.weeklyPlans === 'object') {
+        commitWeeklyPlans(ensureContinuousWeeks(src.weeklyPlans, getTodayDateString(), epoch));
+      }
+      if (src.monthlyPlans && typeof src.monthlyPlans === 'object') {
         const cleanedM: Record<string, MonthlyPlan> = {};
-        Object.entries(parsed.monthlyPlans).forEach(([k, p]) => {
+        Object.entries(src.monthlyPlans).forEach(([k, p]) => {
           cleanedM[k] = normalizeMonthlyPlanEntry(k, p as MonthlyPlan);
         });
         commitMonthlyPlans(cleanedM);
       }
-      if (parsed.yearlyPlans && typeof parsed.yearlyPlans === 'object') {
+      if (src.yearlyPlans && typeof src.yearlyPlans === 'object') {
         const cleanedY: Record<string, YearlyPlan> = {};
-        Object.entries(parsed.yearlyPlans).forEach(([k, p]) => {
+        Object.entries(src.yearlyPlans).forEach(([k, p]) => {
           cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
         });
         commitYearlyPlans(cleanedY);
       }
-      if (parsed.reviews) commitReviews(parsed.reviews);
-      if (Array.isArray(parsed.checklistCategories)) commitChecklistCategories(parsed.checklistCategories);
-      if (Array.isArray(parsed.checklistItems)) commitChecklistItems(parsed.checklistItems);
+      if (Array.isArray(src.reviews)) commitReviews(src.reviews);
+      if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
+      if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
+      if (src.systemLevel >= 1 && src.systemLevel <= 5) {
+        commitSystemLevel(src.systemLevel as SystemLevel);
+      }
       markLocalMutation();
       return true;
     } catch (e) {
@@ -2391,6 +2460,144 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     await loadUserCloudState(user.id);
   };
 
+  const isMissingAdminRpcError = (err: any): boolean => {
+    const msg = String(err?.message || '').toLowerCase();
+    const code = String(err?.code || '');
+    return (
+      code === '42883' ||
+      code === 'PGRST202' ||
+      msg.includes('could not find the function') ||
+      (msg.includes('function') && msg.includes('does not exist'))
+    );
+  };
+
+  const adminListAllUsers = async (): Promise<{
+    ok: boolean;
+    users: AdminUserStateRow[];
+    error?: string;
+    needsSqlSetup?: boolean;
+  }> => {
+    const user = authUserRef.current;
+    if (!user || !isAdminEmail(user.email)) {
+      return { ok: false, users: [], error: 'Admin privileges required.' };
+    }
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return { ok: false, users: [], error: 'Supabase client is not configured.' };
+    }
+    try {
+      const { data, error } = await supabase.rpc('admin_list_all_user_states');
+      if (error) {
+        if (isMissingAdminRpcError(error)) {
+          return {
+            ok: false,
+            users: [],
+            needsSqlSetup: true,
+            error: 'Admin database functions are not installed on Supabase yet. Run the Admin SQL setup once in Supabase SQL Editor.'
+          };
+        }
+        return { ok: false, users: [], error: formatSupabaseError(error.message) };
+      }
+      const rows: AdminUserStateRow[] = Array.isArray(data)
+        ? data.map((row: any) => ({
+            user_id: String(row.user_id || ''),
+            email: String(row.email || ''),
+            display_name: String(row.display_name || row.email || ''),
+            created_at: row.created_at || null,
+            last_sign_in_at: row.last_sign_in_at || null,
+            updated_at: row.updated_at || null,
+            state: row.state && typeof row.state === 'object' ? row.state : {}
+          }))
+        : [];
+      return { ok: true, users: rows };
+    } catch (err: any) {
+      return { ok: false, users: [], error: formatSupabaseError(err?.message) };
+    }
+  };
+
+  const adminRestoreUserState = async (params: {
+    userId?: string;
+    email?: string;
+    displayName?: string;
+    state: Record<string, any>;
+  }): Promise<{
+    ok: boolean;
+    restoredUserId?: string;
+    restoredEmail?: string;
+    error?: string;
+    needsSqlSetup?: boolean;
+  }> => {
+    const user = authUserRef.current;
+    if (!user || !isAdminEmail(user.email)) {
+      return { ok: false, error: 'Admin privileges required.' };
+    }
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return { ok: false, error: 'Supabase client is not configured.' };
+    }
+
+    // Unwrap if caller passed a single_account export object or a wrapped { state } object
+    const raw = params.state || {};
+    const statePayload =
+      raw.state && typeof raw.state === 'object' && !Array.isArray(raw.state)
+        ? raw.state
+        : {
+            onboardingStartDate: raw.onboardingStartDate,
+            templates: raw.templates,
+            dailyEntries: raw.dailyEntries,
+            gwsSessions: raw.gwsSessions,
+            weeklyPlans: raw.weeklyPlans,
+            monthlyPlans: raw.monthlyPlans,
+            yearlyPlans: raw.yearlyPlans,
+            reviews: raw.reviews,
+            checklistCategories: raw.checklistCategories,
+            checklistItems: raw.checklistItems,
+            systemLevel: raw.systemLevel
+          };
+
+    try {
+      const { data, error } = await supabase.rpc('admin_restore_user_state', {
+        target_user_id: params.userId || null,
+        target_email: params.email || null,
+        new_state: statePayload,
+        new_display_name: params.displayName || null
+      });
+      if (error) {
+        if (isMissingAdminRpcError(error)) {
+          return {
+            ok: false,
+            needsSqlSetup: true,
+            error: 'Admin database functions are not installed on Supabase yet. Run the Admin SQL setup once in Supabase SQL Editor.'
+          };
+        }
+        return { ok: false, error: formatSupabaseError(error.message) };
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      const restoredUid = row?.restored_user_id || params.userId;
+      const restoredEmail = row?.restored_email || params.email;
+
+      // If admin restored their own currently active account, immediately hydrate local state too
+      if (restoredUid && authUserRef.current?.id === restoredUid) {
+        applyCloudPayload(statePayload);
+        try {
+          localStorage.setItem(LAST_MUTATION_AT_KEY, new Date().toISOString());
+          localStorage.setItem(PENDING_CLOUD_PUSH_KEY, 'false');
+        } catch {
+          // ignore
+        }
+      }
+
+      return {
+        ok: true,
+        restoredUserId: restoredUid,
+        restoredEmail
+      };
+    } catch (err: any) {
+      return { ok: false, error: formatSupabaseError(err?.message) };
+    }
+  };
+
   return (
     <StorageContext.Provider
       value={{
@@ -2415,6 +2622,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         browserNotificationsEnabled,
         enableBrowserNotifications,
         authUser,
+        isAdmin,
         rememberDevice,
         setRememberDevice,
         syncStatus,
@@ -2424,6 +2632,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         signOut,
         syncNow,
         startFreshWorkspace,
+        adminListAllUsers,
+        adminRestoreUserState,
         setSelectedDate,
         setSelectedWeekId,
         setActiveTab,
