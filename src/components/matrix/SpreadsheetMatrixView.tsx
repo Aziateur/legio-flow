@@ -183,16 +183,22 @@ export const SpreadsheetMatrixView: React.FC = () => {
                       const dayGws = gwsSessions.filter(s => s.date === dateStr);
                       const dayGwsMinutes = dayGws.reduce((a, b) => a + (b.actualMinutes || 0), 0);
                       const checklistStatus = isDailyChecklistDone(dateStr);
+                      const hasPlan = Boolean(
+                        (entry?.planNotes && entry.planNotes.trim().length > 0) ||
+                        (entry?.priorityItems && entry.priorityItems.some(p => p.text.trim().length > 0))
+                      );
+                      const hasReview = Boolean(
+                        entry &&
+                        (entry.executionScore > 0 ||
+                          (entry.reviewNotes && entry.reviewNotes.trim().length > 0) ||
+                          (entry.problemsEncountered && entry.problemsEncountered.trim().length > 0))
+                      );
                       const hasData = Boolean(
-                        (entry &&
-                          (entry.executionScore > 0 ||
-                            (entry.planNotes && entry.planNotes.trim().length > 0) ||
-                            entry.mainTasksCompleted > 0 ||
-                            entry.automaticTasksCompleted ||
-                            (entry.reviewNotes && entry.reviewNotes.trim().length > 0))) ||
+                        hasPlan ||
+                        hasReview ||
+                        (entry && (entry.mainTasksCompleted > 0 || entry.automaticTasksCompleted)) ||
                         dayGws.length > 0 ||
-                        checklistStatus.done ||
-                        checklistStatus.completedCount > 0
+                        checklistStatus.done
                       );
 
                       const isTodayCell = dateStr === todayDate;
@@ -251,34 +257,38 @@ export const SpreadsheetMatrixView: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Content Snippet, GWS & Checklist Dot Badge */}
+                            {/* Plan Made, Review Made, GWS & Checklist Dot Badges */}
                             <div className="my-1.5 space-y-1.5">
-                              {hasData ? (
-                                <>
-                                  {entry?.planNotes ? (
-                                    <div className="text-[11px] text-slate-300 line-clamp-2 font-medium leading-tight">
-                                      {entry.planNotes}
-                                    </div>
-                                  ) : (
-                                    <div className="text-[10px] text-slate-500 italic">
-                                      No written plan
-                                    </div>
-                                  )}
+                              <div className="flex flex-col space-y-1">
+                                <span
+                                  className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                    hasPlan
+                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                                      : 'bg-slate-950/80 text-slate-500 border-slate-800'
+                                  }`}
+                                >
+                                  {hasPlan ? '✓ Plan Made' : '○ No Plan'}
+                                </span>
 
-                                  <div className={`flex items-center space-x-1 text-[10px] font-mono ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
-                                    <Timer className="w-3 h-3 shrink-0" />
-                                    <span className="truncate">
-                                      {dayGws.length > 0
-                                        ? `${dayGws.length} GWS (${dayGwsMinutes}m)${dayGws[0]?.taskName ? ` • ${dayGws[0].taskName}` : ''}`
-                                        : '0 GWS'}
-                                    </span>
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="py-1 text-[10px] text-slate-600 italic">
-                                  No GWS / plan
-                                </div>
-                              )}
+                                <span
+                                  className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                    hasReview
+                                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                      : 'bg-slate-950/80 text-slate-500 border-slate-800'
+                                  }`}
+                                >
+                                  {hasReview ? '✓ Review Made' : '○ No Review'}
+                                </span>
+                              </div>
+
+                              <div className={`flex items-center space-x-1 text-[10px] font-mono ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
+                                <Timer className="w-3 h-3 shrink-0" />
+                                <span className="truncate">
+                                  {dayGws.length > 0
+                                    ? `${dayGws.length} GWS (${dayGwsMinutes}m)`
+                                    : '0 GWS'}
+                                </span>
+                              </div>
 
                               {/* Daily Checklist Done/Not Done Indicator (always visible) */}
                               <div
@@ -299,9 +309,6 @@ export const SpreadsheetMatrixView: React.FC = () => {
                                     : isFuture
                                     ? 'Upcoming'
                                     : 'Not Done'}
-                                  {checklistStatus.totalDaily > 0
-                                    ? ` (${checklistStatus.completedCount}/${checklistStatus.totalDaily})`
-                                    : ''}
                                 </span>
                               </div>
                             </div>
