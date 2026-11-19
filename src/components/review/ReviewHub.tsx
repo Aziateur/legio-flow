@@ -191,13 +191,20 @@ export const ReviewHub: React.FC = () => {
     selectedWeekId,
     setSelectedWeekId,
     saveWeeklyPlan,
+    monthlyPlans,
+    getMonthlyPlan,
+    saveMonthlyPlan,
     yearlyPlans,
     getYearlyPlan,
     saveYearlyPlan,
+    checklistItems,
+    saveChecklistItems,
     reviews,
     systemLevel,
     saveReview,
     deleteReview,
+    setActiveTab,
+    setPlanningSubTab,
     setSelectedDate: selectDateGlobal,
     setSelectedWeekId: selectWeekGlobal
   } = useStorage();
@@ -389,6 +396,10 @@ export const ReviewHub: React.FC = () => {
   const compileMonthData = (monthKey: string) => {
     const info = getMonthInfo(monthKey);
     const saved = getSavedMonthlyReview(monthKey);
+    const monthPlan = getMonthlyPlan(monthKey);
+    const monthGoals = monthPlan.tasks || [];
+    const completedMonthGoals = monthGoals.filter(g => g.completed).length;
+    const totalMonthGoals = monthGoals.length;
 
     // 1. Anchor each week strictly to the single Month containing its Monday startDate (prevents boundary double-counting)
     const weeks = Object.values(weeklyPlans)
@@ -459,6 +470,7 @@ export const ReviewHub: React.FC = () => {
     );
 
     const rolledUpWins = dedupeLines([
+      ...monthGoals.filter(g => g.completed).map(g => `• [${info.label} Monthly Goal] ${g.text}`),
       ...weeksWithWins.map(w => `• [Week ${w.weekNumber}] ${w.winsNotes!.trim()}`),
       ...weeks.flatMap(w =>
         w.tasks.filter(t => t.completed).map(t => `• [Week ${w.weekNumber} Goal] ${t.text} (${t.score}pts)`)
@@ -515,6 +527,10 @@ export const ReviewHub: React.FC = () => {
     return {
       info,
       saved,
+      monthPlan,
+      monthGoals,
+      completedMonthGoals,
+      totalMonthGoals,
       weeks,
       weeklyPointsAchieved,
       weeklyPointsPossible,
@@ -657,6 +673,7 @@ export const ReviewHub: React.FC = () => {
     new Set([
       selectedDate.slice(0, 7),
       selectedMonth,
+      ...Object.keys(monthlyPlans),
       ...Object.keys(dailyEntries).map(d => d.slice(0, 7)),
       ...gwsSessions.map(s => s.date.slice(0, 7)),
       ...Object.values(weeklyPlans)
@@ -967,6 +984,8 @@ export const ReviewHub: React.FC = () => {
       const mData = compileMonthData(mKey);
       const hasActivity =
         !!mData.saved ||
+        mData.monthGoals.length > 0 ||
+        mData.monthPlan.focusTheme.trim().length > 0 ||
         mData.weeks.length > 0 ||
         mData.days.length > 0 ||
         mData.gws.length > 0;
@@ -1000,7 +1019,7 @@ export const ReviewHub: React.FC = () => {
             ? `Month ${mData.saved.score}/10`
             : `Weeks ${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts`,
         scoreNumber: mData.saved?.score || mData.weeklyPointsAchieved,
-        plannedOrContext: `Smaller-Scale Rollup (${mData.info.label}):\n• Weekly Reviews: ${mData.weeks.length} weeks (${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts, ${mData.weeklyTasksDone}/${mData.weeklyTasksTotal} goals done)\n• Daily Reviews: ${mData.days.length} days logged (Avg Discipline: ${mData.avgDailyScore}/10, Tasks: ${mData.dailyTasksDone}/${mData.dailyTasksTotal}, Habits: ${mData.habitRatePct}%)\n• GWS Sprints: ${mData.gws.length} sessions (${mData.gwsHours}h deep work, Avg Score: ${mData.avgGwsTotal}/15)`,
+        plannedOrContext: `Monthly Focus (${mData.info.label}): ${mData.monthPlan.focusTheme || 'Not set'}\n• Monthly Goals: ${mData.completedMonthGoals}/${mData.totalMonthGoals} completed\n• Weekly Reviews: ${mData.weeks.length} weeks (${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts, ${mData.weeklyTasksDone}/${mData.weeklyTasksTotal} goals done)\n• Daily Reviews: ${mData.days.length} days logged (Avg Discipline: ${mData.avgDailyScore}/10, Tasks: ${mData.dailyTasksDone}/${mData.dailyTasksTotal}, Habits: ${mData.habitRatePct}%)\n• GWS Sprints: ${mData.gws.length} sessions (${mData.gwsHours}h deep work, Avg Score: ${mData.avgGwsTotal}/15)`,
         reviewContent:
           structuredMonthlyReview ||
           autoRollupFallback ||
@@ -1847,26 +1866,156 @@ export const ReviewHub: React.FC = () => {
                 );
               })()}
 
-              {/* Automatic Tasks Completed Toggle Card */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-100 block">
-                    Automatic Habits Completed?
-                  </span>
-                  <span className="text-[11px] text-slate-400">Routines, hydration, boot camp, backups</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => saveDailyEntry(selectedDate, { automaticTasksCompleted: !currentDailyEntry.automaticTasksCompleted })}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
-                    currentDailyEntry.automaticTasksCompleted
-                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                      : 'bg-slate-800 text-slate-400 border-slate-700'
-                  }`}
-                >
-                  {currentDailyEntry.automaticTasksCompleted ? 'Yes (Locked In)' : 'No (Pending)'}
-                </button>
-              </div>
+              {/* Automatic Habits / Daily Checklist Card (Single Source of Truth) */}
+              {(() => {
+                const dailyChecklist = checklistItems.filter(i => i.recurrence === 'daily');
+                const dailyDoneCount = dailyChecklist.filter(i =>
+                  (i.completedPeriods || []).includes(selectedDate)
+                ).length;
+                const allDailyChecklistDone =
+                  dailyChecklist.length > 0 && dailyDoneCount === dailyChecklist.length;
+
+                const toggleDailyChecklistItem = (itemId: string) => {
+                  const updated = checklistItems.map(item => {
+                    if (item.id !== itemId) return item;
+                    const periods = item.completedPeriods || [];
+                    const nextPeriods = periods.includes(selectedDate)
+                      ? periods.filter(p => p !== selectedDate)
+                      : [...periods, selectedDate];
+                    return { ...item, completedPeriods: nextPeriods };
+                  });
+                  saveChecklistItems(updated);
+                };
+
+                const toggleAllDailyChecklistItems = () => {
+                  const markDone = !allDailyChecklistDone;
+                  const updated = checklistItems.map(item => {
+                    if (item.recurrence !== 'daily') return item;
+                    const periods = item.completedPeriods || [];
+                    const hasDate = periods.includes(selectedDate);
+                    if (markDone && !hasDate) {
+                      return { ...item, completedPeriods: [...periods, selectedDate] };
+                    }
+                    if (!markDone && hasDate) {
+                      return { ...item, completedPeriods: periods.filter(p => p !== selectedDate) };
+                    }
+                    return item;
+                  });
+                  saveChecklistItems(updated);
+                };
+
+                if (dailyChecklist.length === 0) {
+                  return (
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-100 block">
+                          Automatic Habits Completed?
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          No daily items in Checklist yet — toggle manually or add routines in Checklist.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          saveDailyEntry(selectedDate, {
+                            automaticTasksCompleted: !currentDailyEntry.automaticTasksCompleted
+                          })
+                        }
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all shrink-0 ${
+                          currentDailyEntry.automaticTasksCompleted
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        {currentDailyEntry.automaticTasksCompleted ? 'Yes (Locked In)' : 'No (Pending)'}
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              allDailyChecklistDone
+                                ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.75)]'
+                                : 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]'
+                            }`}
+                          />
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-100">
+                            Daily Checklist ({selectedDate})
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 block mt-0.5">
+                          Synced live with Checklist streaks & Weeks Matrix dot
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <span
+                          className={`text-xs font-mono font-bold ${
+                            allDailyChecklistDone ? 'text-emerald-400' : 'text-slate-300'
+                          }`}
+                        >
+                          {dailyDoneCount}/{dailyChecklist.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={toggleAllDailyChecklistItems}
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all ${
+                            allDailyChecklistDone
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-emerald-500/40 hover:text-emerald-300'
+                          }`}
+                        >
+                          {allDailyChecklistDone ? 'All Locked In' : 'Lock All'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {dailyChecklist.map(item => {
+                        const checked = (item.completedPeriods || []).includes(selectedDate);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => toggleDailyChecklistItem(item.id)}
+                            className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl border text-left text-xs transition-all ${
+                              checked
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                                : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                            }`}
+                          >
+                            {checked ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            ) : (
+                              <Circle className="w-4 h-4 text-slate-500 shrink-0" />
+                            )}
+                            <span className={checked ? 'line-through text-slate-400' : 'font-medium'}>
+                              {item.text}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('checklist')}
+                        className="text-[11px] font-bold text-slate-400 hover:text-amber-400 transition-colors"
+                      >
+                        Edit routines in Checklist →
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Interactive Day Plan Recap */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
@@ -2658,8 +2807,17 @@ export const ReviewHub: React.FC = () => {
         const monthProblems = mData.saved?.blockers || '';
         const monthCorrections = mData.saved?.courseCorrections || '';
 
+        const handleToggleMonthlyGoalInReview = (goalId: string) => {
+          const updatedTasks = mData.monthGoals.map(g =>
+            g.id === goalId ? { ...g, completed: !g.completed } : g
+          );
+          saveMonthlyPlan({ ...mData.monthPlan, tasks: updatedTasks });
+        };
+
         const handleCopyMonthlyPlain = () => {
           let text = `${mData.info.label} (${mData.info.monthKey}) — Monthly Review\n\n`;
+          text += `Monthly Focus: ${mData.monthPlan.focusTheme || 'Not set'}\n`;
+          text += `Monthly Goals: ${mData.completedMonthGoals}/${mData.totalMonthGoals} completed\n`;
           text += `Monthly Score: ${monthScore > 0 ? `${monthScore}/10` : 'Unscored'}\n`;
           text += `Weekly Points: ${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts across ${mData.weeks.length} weeks (Avg ${mData.avgWeeklyScore}/10)\n`;
           text += `Daily Execution: ${mData.days.length} days logged • Avg Discipline ${mData.avgDailyScore}/10 • Tasks ${mData.dailyTasksDone}/${mData.dailyTasksTotal} • Habits ${mData.habitRatePct}%\n`;
@@ -2815,6 +2973,85 @@ export const ReviewHub: React.FC = () => {
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* Monthly Plan Alignment Card */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                    Monthly Plan Alignment ({mData.info.label})
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Monthly Focus, Notes & Deliverables Audit
+                  </h2>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs font-mono text-purple-300 font-bold">
+                    {mData.completedMonthGoals} / {mData.totalMonthGoals} goals done
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('planning');
+                      setPlanningSubTab('monthly');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-purple-300 border border-slate-800 text-xs font-bold transition-colors"
+                  >
+                    Open Monthly Plan →
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-400 block">
+                    Monthly Focus & Main Outcome
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {mData.monthPlan.focusTheme || 'Define your Monthly Focus in Planning Hub → Monthly Plan.'}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
+                    Monthly Strategy & Notes
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {mData.monthPlan.notes || 'Define your Monthly Notes in Planning Hub → Monthly Plan.'}
+                  </p>
+                </div>
+              </div>
+
+              {mData.monthGoals.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                  No Monthly goals logged for {mData.info.label} yet. Add them in Planning Hub → Monthly Plan.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {mData.monthGoals.map(goal => (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      onClick={() => handleToggleMonthlyGoalInReview(goal.id)}
+                      className={`w-full flex items-start space-x-2.5 p-3 rounded-2xl border text-left text-xs transition-colors ${
+                        goal.completed
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                          : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-purple-500/40'
+                      }`}
+                    >
+                      {goal.completed ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      )}
+                      <span className={goal.completed ? 'line-through text-slate-400' : ''}>
+                        {goal.text}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Smaller Time-Scale Reviews Container (Weekly + Daily + GWS) */}

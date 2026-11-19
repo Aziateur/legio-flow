@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStorage } from '../../context/StorageContext';
 import { 
   Timer, 
@@ -31,6 +31,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     setSelectedDate,
     selectedDate, 
     gwsSessions, 
+    activeGwsTimer,
     dailyEntries,
     systemLevel,
     setSystemLevel,
@@ -54,6 +55,27 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
   const [copiedAllSuccess, setCopiedAllSuccess] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
   const [importError, setImportError] = useState('');
+  const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+
+  const isGwsRunning = Boolean(activeGwsTimer?.startedAt);
+  const activeGwsSeconds = activeGwsTimer
+    ? activeGwsTimer.accumulatedSeconds +
+      (activeGwsTimer.startedAt ? Math.max(0, Math.floor((timerNowMs - activeGwsTimer.startedAt) / 1000)) : 0)
+    : 0;
+  const hasActiveGwsTimer = Boolean(activeGwsTimer && (isGwsRunning || activeGwsSeconds > 0));
+
+  useEffect(() => {
+    if (!isGwsRunning) return;
+    setTimerNowMs(Date.now());
+    const id = setInterval(() => setTimerNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isGwsRunning]);
+
+  const formatShortTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
 
   const handleCopyAllToClipboard = () => {
     const json = exportData();
@@ -223,13 +245,34 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 </span>
               </div>
 
-              {/* Start GWS Button */}
+              {/* Start GWS / Live Active Timer Button */}
               <button
                 onClick={onOpenQuickGWS}
-                className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider transition-all shadow-md shadow-amber-500/20 active:scale-95 whitespace-nowrap"
+                title={
+                  hasActiveGwsTimer
+                    ? `${isGwsRunning ? 'Live Sprint' : 'Paused Sprint'}: ${activeGwsTimer?.taskName || 'Active GWS'} (click to open)`
+                    : 'Start a GWS deep work sprint'
+                }
+                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap ${
+                  isGwsRunning
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25'
+                    : hasActiveGwsTimer
+                    ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow-amber-500/10'
+                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20'
+                }`}
               >
-                <Timer className="w-3.5 h-3.5" />
-                <span>+ GWS Sprint</span>
+                {isGwsRunning ? (
+                  <span className="w-2 h-2 rounded-full bg-slate-950 animate-pulse shrink-0" />
+                ) : (
+                  <Timer className="w-3.5 h-3.5" />
+                )}
+                <span className={hasActiveGwsTimer ? 'font-mono' : ''}>
+                  {isGwsRunning
+                    ? `GWS ${formatShortTimer(activeGwsSeconds)}`
+                    : hasActiveGwsTimer
+                    ? `Paused ${formatShortTimer(activeGwsSeconds)}`
+                    : '+ GWS Sprint'}
+                </span>
               </button>
 
               {/* Notification Bell (Missing Day / Week Plan Alerts) */}

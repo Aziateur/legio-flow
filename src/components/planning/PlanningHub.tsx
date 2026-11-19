@@ -115,23 +115,66 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   const activeMonthPlan = getMonthlyPlan(selectedMonthKey);
   const activeYearPlan = getYearlyPlan(selectedYearKey);
 
-  // Pull helpers
-  const isTextInWeeklyPlan = (text: string): boolean => {
+  // Pull helpers (ID-linked first so completion cascades upward across Daily -> Weekly -> Monthly -> Yearly)
+  const isGoalInWeeklyPlan = (
+    text: string,
+    links?: { monthlyTaskId?: string; yearlyTaskId?: string }
+  ): boolean => {
     if (!activeWeeklyPlan) return false;
+    if (links?.monthlyTaskId && activeWeeklyPlan.tasks.some(t => t.monthlyTaskId === links.monthlyTaskId)) {
+      return true;
+    }
+    if (links?.yearlyTaskId && activeWeeklyPlan.tasks.some(t => t.yearlyTaskId === links.yearlyTaskId)) {
+      return true;
+    }
     const norm = text.toLowerCase().trim();
     return !!norm && activeWeeklyPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
   };
 
-  const isTextInMonthlyPlan = (text: string): boolean => {
+  const isGoalInMonthlyPlan = (text: string, yearlyTaskId?: string): boolean => {
+    if (yearlyTaskId && activeMonthPlan.tasks.some(t => t.yearlyTaskId === yearlyTaskId)) {
+      return true;
+    }
     const norm = text.toLowerCase().trim();
     return !!norm && activeMonthPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
   };
 
-  const handlePullGoalToActiveWeek = (text: string) => {
+  const handlePullGoalToActiveWeek = (
+    text: string,
+    links?: { monthlyTaskId?: string; yearlyTaskId?: string }
+  ) => {
     if (!activeWeeklyPlan) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (isTextInWeeklyPlan(trimmed)) {
+    if (isGoalInWeeklyPlan(trimmed, links)) {
+      // Backfill ID linkage if matched by text only
+      const norm = trimmed.toLowerCase();
+      let backfilled = false;
+      const upgradedTasks = activeWeeklyPlan.tasks.map(t => {
+        const matches =
+          (links?.monthlyTaskId && t.monthlyTaskId === links.monthlyTaskId) ||
+          (links?.yearlyTaskId && t.yearlyTaskId === links.yearlyTaskId) ||
+          t.text.toLowerCase().trim() === norm;
+        if (!matches) return t;
+        const nextMonthlyId = t.monthlyTaskId || links?.monthlyTaskId;
+        const nextYearlyId = t.yearlyTaskId || links?.yearlyTaskId;
+        if (nextMonthlyId !== t.monthlyTaskId || nextYearlyId !== t.yearlyTaskId) {
+          backfilled = true;
+          return {
+            ...t,
+            ...(nextMonthlyId ? { monthlyTaskId: nextMonthlyId } : {}),
+            ...(nextYearlyId ? { yearlyTaskId: nextYearlyId } : {})
+          };
+        }
+        return t;
+      });
+      if (backfilled) {
+        saveWeeklyPlan({
+          ...activeWeeklyPlan,
+          tasks: upgradedTasks,
+          achievedScore: computeWeeklyAchievedScore(upgradedTasks)
+        });
+      }
       setSelectedWeekId(activeWeeklyPlan.id);
       setPlanningSubTab('weekly');
       return;
@@ -142,7 +185,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: trimmed,
         score: 2,
-        completed: false
+        completed: false,
+        ...(links?.monthlyTaskId ? { monthlyTaskId: links.monthlyTaskId } : {}),
+        ...(links?.yearlyTaskId ? { yearlyTaskId: links.yearlyTaskId } : {})
       }
     ];
     saveWeeklyPlan({
@@ -152,10 +197,30 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     });
   };
 
-  const handlePullGoalToActiveMonth = (text: string) => {
+  const handlePullGoalToActiveMonth = (text: string, yearlyTaskId?: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (isTextInMonthlyPlan(trimmed)) {
+    if (isGoalInMonthlyPlan(trimmed, yearlyTaskId)) {
+      if (yearlyTaskId) {
+        const norm = trimmed.toLowerCase();
+        let backfilled = false;
+        const upgradedTasks = activeMonthPlan.tasks.map(t => {
+          if (
+            !t.yearlyTaskId &&
+            t.text.toLowerCase().trim() === norm
+          ) {
+            backfilled = true;
+            return { ...t, yearlyTaskId };
+          }
+          return t;
+        });
+        if (backfilled) {
+          saveMonthlyPlan({
+            ...activeMonthPlan,
+            tasks: upgradedTasks
+          });
+        }
+      }
       setPlanningSubTab('monthly');
       return;
     }
@@ -164,7 +229,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       {
         id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: trimmed,
-        completed: false
+        completed: false,
+        ...(yearlyTaskId ? { yearlyTaskId } : {})
       }
     ];
     saveMonthlyPlan({
@@ -637,7 +703,10 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               ) : (
                 <div className="space-y-2">
                   {activeMonthPlan.tasks.map((task) => {
-                    const inWeek = isTextInWeeklyPlan(task.text);
+                    const inWeek = isGoalInWeeklyPlan(task.text, {
+                      monthlyTaskId: task.id,
+                      yearlyTaskId: task.yearlyTaskId
+                    });
                     return (
                       <div
                         key={task.id}
@@ -674,7 +743,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                           {activeWeeklyPlan && (
                             <button
                               type="button"
-                              onClick={() => handlePullGoalToActiveWeek(task.text)}
+                              onClick={() =>
+                                handlePullGoalToActiveWeek(task.text, {
+                                  monthlyTaskId: task.id,
+                                  yearlyTaskId: task.yearlyTaskId
+                                })
+                              }
                               className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
                                 inWeek
                                   ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
@@ -847,8 +921,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               ) : (
                 <div className="space-y-2">
                   {activeYearPlan.tasks.map((task) => {
-                    const inMonth = isTextInMonthlyPlan(task.text);
-                    const inWeek = isTextInWeeklyPlan(task.text);
+                    const inMonth = isGoalInMonthlyPlan(task.text, task.id);
+                    const inWeek = isGoalInWeeklyPlan(task.text, { yearlyTaskId: task.id });
                     return (
                       <div
                         key={task.id}
@@ -884,7 +958,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
                           <button
                             type="button"
-                            onClick={() => handlePullGoalToActiveMonth(task.text)}
+                            onClick={() => handlePullGoalToActiveMonth(task.text, task.id)}
                             className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
                               inMonth
                                 ? 'bg-purple-500/20 text-purple-300 border-purple-500/35 hover:bg-purple-500/30'
@@ -903,7 +977,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                           {activeWeeklyPlan && (
                             <button
                               type="button"
-                              onClick={() => handlePullGoalToActiveWeek(task.text)}
+                              onClick={() => handlePullGoalToActiveWeek(task.text, { yearlyTaskId: task.id })}
                               className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
                                 inWeek
                                   ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'

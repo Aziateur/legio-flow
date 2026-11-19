@@ -4,6 +4,7 @@ import {
   DailyEntry,
   DailyPriorityItem,
   GWSSession,
+  ActiveGWSTimer,
   WeeklyPlan,
   MonthlyPlan,
   YearlyPlan,
@@ -368,6 +369,11 @@ interface StorageContextType {
   saveDailyEntry: (date: string, updates: Partial<DailyEntry>) => void;
 
   // GWS operations
+  activeGwsTimer: ActiveGWSTimer | null;
+  updateActiveGwsTimer: (
+    updater: ActiveGWSTimer | null | ((prev: ActiveGWSTimer | null) => ActiveGWSTimer | null)
+  ) => void;
+  clearActiveGwsTimer: () => void;
   addGWSSession: (session: Omit<GWSSession, 'id' | 'createdAt'>) => GWSSession;
   updateGWSSession: (id: string, updates: Partial<GWSSession>) => void;
   deleteGWSSession: (id: string) => void;
@@ -414,7 +420,8 @@ const STORAGE_KEYS = {
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
-  SYSTEM_LEVEL: 'legio_system_level_v3'
+  SYSTEM_LEVEL: 'legio_system_level_v3',
+  ACTIVE_GWS_TIMER: 'legio_active_gws_timer_v1'
 };
 
 const StorageContext = createContext<StorageContextType | undefined>(undefined);
@@ -450,6 +457,32 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [gwsSessions, setGwsSessions] = useState<GWSSession[]>(() =>
     readStorageSafe(STORAGE_KEYS.GWS, INITIAL_GWS_SESSIONS)
   );
+
+  const [activeGwsTimer, setActiveGwsTimerState] = useState<ActiveGWSTimer | null>(() =>
+    readStorageSafe<ActiveGWSTimer | null>(STORAGE_KEYS.ACTIVE_GWS_TIMER, null)
+  );
+  const activeGwsTimerRef = useRef<ActiveGWSTimer | null>(activeGwsTimer);
+
+  const updateActiveGwsTimer = (
+    updater: ActiveGWSTimer | null | ((prev: ActiveGWSTimer | null) => ActiveGWSTimer | null)
+  ) => {
+    const next = typeof updater === 'function' ? updater(activeGwsTimerRef.current) : updater;
+    activeGwsTimerRef.current = next;
+    try {
+      if (next) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_GWS_TIMER, JSON.stringify(next));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_GWS_TIMER);
+      }
+    } catch {
+      // ignore
+    }
+    setActiveGwsTimerState(next);
+  };
+
+  const clearActiveGwsTimer = () => {
+    updateActiveGwsTimer(null);
+  };
 
   const [weeklyPlans, setWeeklyPlans] = useState<Record<string, WeeklyPlan>>(() => {
     const base = readStorageSafe<Record<string, WeeklyPlan>>(STORAGE_KEYS.WEEKLY, INITIAL_WEEKLY_PLANS);
@@ -1169,6 +1202,90 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return { prevEntry, nextEntry };
   };
 
+  const syncLinkedYearlyTasks = (toggled: Array<{ yearlyTaskId: string; completed: boolean }>) => {
+    if (toggled.length === 0) return;
+    const curYears = yearlyPlansRef.current;
+    let changed = false;
+    const nextYears: Record<string, YearlyPlan> = { ...curYears };
+    Object.entries(curYears).forEach(([yKey, yPlan]) => {
+      let yChanged = false;
+      const nextTasks = (yPlan.tasks || []).map(yt => {
+        const hit = toggled.find(t => t.yearlyTaskId === yt.id);
+        if (hit && yt.completed !== hit.completed) {
+          yChanged = true;
+          changed = true;
+          return { ...yt, completed: hit.completed };
+        }
+        return yt;
+      });
+      if (yChanged) {
+        nextYears[yKey] = {
+          ...yPlan,
+          tasks: nextTasks,
+          updatedAt: new Date().toISOString()
+        };
+      }
+    });
+    if (changed) {
+      commitYearlyPlans(nextYears);
+    }
+  };
+
+  const propagateWeeklyTaskCompletionUpward = (prevPlan: WeeklyPlan | undefined, savedPlan: WeeklyPlan) => {
+    const prevMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+
+    const monthlyToggles: Array<{ monthlyTaskId: string; completed: boolean }> = [];
+    const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+
+    (savedPlan.tasks || []).forEach(t => {
+      const wasDone = prevMap.get(t.id);
+      const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
+      if (!changed) return;
+      if (t.monthlyTaskId) {
+        monthlyToggles.push({ monthlyTaskId: t.monthlyTaskId, completed: t.completed });
+      }
+      if (t.yearlyTaskId) {
+        yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
+      }
+    });
+
+    if (monthlyToggles.length > 0) {
+      const curMonths = monthlyPlansRef.current;
+      let mAnyChanged = false;
+      const nextMonths: Record<string, MonthlyPlan> = { ...curMonths };
+      Object.entries(curMonths).forEach(([mKey, mPlan]) => {
+        let mChanged = false;
+        const nextTasks = (mPlan.tasks || []).map(mt => {
+          const hit = monthlyToggles.find(t => t.monthlyTaskId === mt.id);
+          if (hit && mt.completed !== hit.completed) {
+            mChanged = true;
+            mAnyChanged = true;
+            if (mt.yearlyTaskId) {
+              yearlyToggles.push({ yearlyTaskId: mt.yearlyTaskId, completed: hit.completed });
+            }
+            return { ...mt, completed: hit.completed };
+          }
+          return mt;
+        });
+        if (mChanged) {
+          nextMonths[mKey] = {
+            ...mPlan,
+            tasks: nextTasks,
+            updatedAt: new Date().toISOString()
+          };
+        }
+      });
+      if (mAnyChanged) {
+        commitMonthlyPlans(nextMonths);
+      }
+    }
+
+    if (yearlyToggles.length > 0) {
+      syncLinkedYearlyTasks(yearlyToggles);
+    }
+  };
+
   const applyWeeklyPlanUpdate = (plan: WeeklyPlan): WeeklyPlan => {
     const computedScore = computeWeeklyAchievedScore(plan.tasks || []);
     const nextPlan: WeeklyPlan = {
@@ -1249,10 +1366,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
 
           if (planChanged) {
-            applyWeeklyPlanUpdate({
+            const savedW = applyWeeklyPlanUpdate({
               ...targetPlan,
               tasks: updatedTasks
             });
+            propagateWeeklyTaskCompletionUpward(targetPlan, savedW);
           }
         }
       }
@@ -1415,6 +1533,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
     }
 
+    propagateWeeklyTaskCompletionUpward(prevPlan, savedPlan);
     markLocalMutation();
   };
 
@@ -1445,6 +1564,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const saveMonthlyPlan = (plan: MonthlyPlan) => {
     const key = plan.monthKey || plan.id;
+    const prevPlan = monthlyPlansRef.current[key];
     const saved = {
       ...normalizeMonthlyPlanEntry(key, plan),
       updatedAt: new Date().toISOString()
@@ -1453,6 +1573,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ...monthlyPlansRef.current,
       [key]: saved
     });
+
+    // Upward ID-linked sync: propagate completed monthly goal to linked yearly goal
+    const prevMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+    const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    saved.tasks.forEach(t => {
+      const wasDone = prevMap.get(t.id);
+      const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
+      if (changed && t.yearlyTaskId) {
+        yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
+      }
+    });
+    if (yearlyToggles.length > 0) {
+      syncLinkedYearlyTasks(yearlyToggles);
+    }
+
     markLocalMutation();
   };
 
@@ -2298,6 +2434,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         goToToday,
         getEntryForDate,
         saveDailyEntry,
+        activeGwsTimer,
+        updateActiveGwsTimer,
+        clearActiveGwsTimer,
         addGWSSession,
         updateGWSSession,
         deleteGWSSession,

@@ -33,6 +33,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   const { 
     selectedDate, 
     gwsSessions, 
+    activeGwsTimer,
+    updateActiveGwsTimer,
+    clearActiveGwsTimer,
     addGWSSession, 
     deleteGWSSession,
     getEntryForDate,
@@ -48,16 +51,26 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId];
 
-  // Active session state
-  const [taskName, setTaskName] = useState('');
-  const [linkedPriorityId, setLinkedPriorityId] = useState<string | null>(null);
+  // Active session state (hydrates from persistent activeGwsTimer so tab switches/reloads never lose a sprint)
+  const [taskName, setTaskName] = useState(() => activeGwsTimer?.taskName || '');
+  const [linkedPriorityId, setLinkedPriorityId] = useState<string | null>(() => activeGwsTimer?.linkedPriorityId || null);
   const [completePriorityOnSave, setCompletePriorityOnSave] = useState(true);
-  const [plannedMinutes, setPlannedMinutes] = useState(50);
-  const [actualMinutes, setActualMinutes] = useState(0);
+  const [plannedMinutes, setPlannedMinutes] = useState(() => activeGwsTimer?.plannedMinutes || 50);
+  const [actualMinutes, setActualMinutes] = useState(() => {
+    if (!activeGwsTimer) return 0;
+    const secs =
+      activeGwsTimer.accumulatedSeconds +
+      (activeGwsTimer.startedAt ? Math.max(0, Math.floor((Date.now() - activeGwsTimer.startedAt) / 1000)) : 0);
+    return secs > 0 ? Math.max(1, Math.round(secs / 60)) : 0;
+  });
 
-  // Live timer state
-  const [timerSeconds, setTimerSeconds] = useState(0);
-  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  // Wall-clock driven live timer state
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const isTimerRunning = Boolean(activeGwsTimer?.startedAt);
+  const timerSeconds = activeGwsTimer
+    ? activeGwsTimer.accumulatedSeconds +
+      (activeGwsTimer.startedAt ? Math.max(0, Math.floor((nowMs - activeGwsTimer.startedAt) / 1000)) : 0)
+    : 0;
 
   // Ratings
   const [focus, setFocus] = useState<number>(4);
@@ -76,24 +89,43 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   // Auto total calculation
   const totalScore = focus + execution + output; // out of 15
 
-  // Timer interval
+  // Keep wall-clock timer ticking accurately (immune to background tab throttling & navigation unmounts)
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
-    if (isTimerRunning) {
-      interval = setInterval(() => {
-        setTimerSeconds(prev => {
-          const next = prev + 1;
-          setActualMinutes(Math.max(1, Math.round(next / 60)));
-          return next;
-        });
-      }, 1000);
-    } else if (interval) {
-      clearInterval(interval);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+    if (!isTimerRunning) return;
+    setNowMs(Date.now());
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+    }, 500);
+    return () => clearInterval(interval);
   }, [isTimerRunning]);
+
+  // Keep actualMinutes synced with persistent timer whenever timer advances
+  useEffect(() => {
+    if (timerSeconds > 0) {
+      setActualMinutes(Math.max(1, Math.round(timerSeconds / 60)));
+    }
+  }, [timerSeconds]);
+
+  // Sync task/priority/plannedMinutes edits into active persistent timer if one is active
+  useEffect(() => {
+    if (!activeGwsTimer) return;
+    if (
+      activeGwsTimer.taskName !== taskName ||
+      activeGwsTimer.linkedPriorityId !== linkedPriorityId ||
+      activeGwsTimer.plannedMinutes !== plannedMinutes
+    ) {
+      updateActiveGwsTimer(prev =>
+        prev
+          ? {
+              ...prev,
+              taskName,
+              linkedPriorityId,
+              plannedMinutes
+            }
+          : prev
+      );
+    }
+  }, [taskName, linkedPriorityId, plannedMinutes]);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -101,11 +133,37 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  const handleStartTimer = () => setIsTimerRunning(true);
-  const handlePauseTimer = () => setIsTimerRunning(false);
+  const handleStartTimer = () => {
+    const startTs = Date.now();
+    setNowMs(startTs);
+    updateActiveGwsTimer(prev => ({
+      taskName,
+      linkedPriorityId,
+      plannedMinutes,
+      startedAt: startTs,
+      accumulatedSeconds: prev?.accumulatedSeconds || 0
+    }));
+  };
+
+  const handlePauseTimer = () => {
+    const pauseTs = Date.now();
+    setNowMs(pauseTs);
+    updateActiveGwsTimer(prev => {
+      if (!prev) return null;
+      const added = prev.startedAt ? Math.max(0, Math.floor((pauseTs - prev.startedAt) / 1000)) : 0;
+      return {
+        ...prev,
+        taskName,
+        linkedPriorityId,
+        plannedMinutes,
+        startedAt: null,
+        accumulatedSeconds: prev.accumulatedSeconds + added
+      };
+    });
+  };
+
   const handleResetTimer = () => {
-    setIsTimerRunning(false);
-    setTimerSeconds(0);
+    clearActiveGwsTimer();
     setActualMinutes(0);
   };
 

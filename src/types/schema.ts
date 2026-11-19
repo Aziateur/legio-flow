@@ -59,6 +59,16 @@ export interface TaskItem {
   score?: number; // Weight in points (for weekly goal crusher)
   notes?: string;
   subTasks?: SubTaskItem[];
+  monthlyTaskId?: string;
+  yearlyTaskId?: string;
+}
+
+export interface ActiveGWSTimer {
+  taskName: string;
+  linkedPriorityId: string | null;
+  plannedMinutes: number;
+  startedAt: number | null; // Epoch ms while actively running; null while paused
+  accumulatedSeconds: number;
 }
 
 export interface RewardTier {

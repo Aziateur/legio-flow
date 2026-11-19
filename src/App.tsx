@@ -1,41 +1,67 @@
 import React, { useState } from 'react';
 import { StorageProvider, useStorage } from './context/StorageContext';
 import { Navbar } from './components/common/Navbar';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { PlanningHub } from './components/planning/PlanningHub';
 import { GWSStudio } from './components/gws/GWSStudio';
 import { ReviewHub } from './components/review/ReviewHub';
 import { TemplateManager } from './components/templates/TemplateManager';
 import { SpreadsheetMatrixView } from './components/matrix/SpreadsheetMatrixView';
 import { ChecklistView } from './components/checklist/ChecklistView';
-import { X, Sparkles, Shield, Heart } from 'lucide-react';
+import { X } from 'lucide-react';
 
 const MainContent: React.FC = () => {
-  const { activeTab, setActiveTab } = useStorage();
+  const { activeTab, setActiveTab, setPlanningSubTab } = useStorage();
   const [isQuickGWSOpen, setIsQuickGWSOpen] = useState(false);
+
+  const recoverToDaily = () => {
+    setPlanningSubTab('daily');
+    setActiveTab('planning');
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
-      
+
       {/* Top Navbar */}
       <Navbar onOpenQuickGWS={() => setIsQuickGWSOpen(true)} />
 
-      {/* Main View Area */}
+      {/* Main View Area (isolated by ErrorBoundary per tab so one error never blanks the app) */}
       <main className="flex-1 pb-16">
         {activeTab === 'planning' && (
-          <PlanningHub 
-            onOpenGWS={() => setIsQuickGWSOpen(true)} 
-            onCustomizeTemplate={() => setActiveTab('templates')}
-          />
+          <ErrorBoundary key="planning" label="Planning Hub" onReset={recoverToDaily}>
+            <PlanningHub
+              onOpenGWS={() => setIsQuickGWSOpen(true)}
+              onCustomizeTemplate={() => setActiveTab('templates')}
+            />
+          </ErrorBoundary>
         )}
-        {activeTab === 'checklist' && <ChecklistView />}
+        {activeTab === 'checklist' && (
+          <ErrorBoundary key="checklist" label="Checklist" onReset={recoverToDaily}>
+            <ChecklistView />
+          </ErrorBoundary>
+        )}
         {activeTab === 'matrix' && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <SpreadsheetMatrixView />
-          </div>
+          <ErrorBoundary key="matrix" label="Weeks Matrix" onReset={recoverToDaily}>
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              <SpreadsheetMatrixView />
+            </div>
+          </ErrorBoundary>
         )}
-        {activeTab === 'gws' && <GWSStudio />}
-        {activeTab === 'review' && <ReviewHub />}
-        {activeTab === 'templates' && <TemplateManager />}
+        {activeTab === 'gws' && (
+          <ErrorBoundary key="gws" label="GWS Studio" onReset={recoverToDaily}>
+            <GWSStudio />
+          </ErrorBoundary>
+        )}
+        {activeTab === 'review' && (
+          <ErrorBoundary key="review" label="Review Hub" onReset={recoverToDaily}>
+            <ReviewHub />
+          </ErrorBoundary>
+        )}
+        {activeTab === 'templates' && (
+          <ErrorBoundary key="templates" label="Template Manager" onReset={recoverToDaily}>
+            <TemplateManager />
+          </ErrorBoundary>
+        )}
       </main>
 
       {/* Quick GWS Sprint Modal - Fixed against flexbox center clipping */}
@@ -49,7 +75,9 @@ const MainContent: React.FC = () => {
             >
               <X className="w-5 h-5" />
             </button>
-            <GWSStudio isModal onClose={() => setIsQuickGWSOpen(false)} />
+            <ErrorBoundary label="Quick GWS Modal" onReset={() => setIsQuickGWSOpen(false)}>
+              <GWSStudio isModal onClose={() => setIsQuickGWSOpen(false)} />
+            </ErrorBoundary>
           </div>
         </div>
       )}
