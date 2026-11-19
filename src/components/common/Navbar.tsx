@@ -165,26 +165,26 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
 
   return (
     <>
-      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between min-h-[64px] py-2 gap-3">
+      <header className="sticky top-0 z-40 w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6">
+          <div className="flex items-center justify-between min-h-[60px] py-2 gap-2">
             
             {/* Brand Logo & Title */}
-            <div className="flex items-center space-x-2.5 cursor-pointer shrink-0 group" onClick={() => setActiveTab('planning')}>
-              <div className="h-10 w-10 rounded-xl bg-slate-950 border border-amber-500/40 flex items-center justify-center p-1 shadow-lg shadow-amber-500/15 group-hover:border-amber-400 group-hover:shadow-amber-500/25 transition-all">
+            <div className="flex items-center space-x-2 cursor-pointer shrink-0 group" onClick={() => setActiveTab('planning')}>
+              <div className="h-9 w-9 rounded-xl bg-slate-950 border border-amber-500/40 flex items-center justify-center p-1 shadow-lg shadow-amber-500/15 group-hover:border-amber-400 group-hover:shadow-amber-500/25 transition-all">
                 <img
                   src="/legio-logo.png"
                   alt="LEGIO Aquila Emblem"
                   className="w-full h-full object-contain drop-shadow-[0_0_6px_rgba(245,158,11,0.35)]"
                 />
               </div>
-              <span className="font-extrabold text-xl tracking-[0.18em] text-slate-100 uppercase whitespace-nowrap">
+              <span className="font-extrabold text-base lg:text-lg tracking-[0.16em] text-slate-100 uppercase whitespace-nowrap">
                 LEGIO
               </span>
             </div>
 
             {/* Desktop Navigation Tabs */}
-            <nav className="hidden md:flex items-center space-x-1">
+            <nav className="hidden md:flex items-center space-x-0.5 lg:space-x-1 min-w-0">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
@@ -192,30 +192,30 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
+                    className={`flex items-center space-x-1.5 px-2 lg:px-2.5 xl:px-3 py-1.5 lg:py-2 rounded-lg text-xs xl:text-sm font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
                       isActive
                         ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                     }`}
                   >
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <Icon className={`w-3.5 h-3.5 xl:w-4 xl:h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
                     <span>{item.label}</span>
                   </button>
                 );
               })}
             </nav>
 
-            {/* Quick Metrics & Actions */}
-            <div className="hidden lg:flex items-center space-x-2.5 shrink-0">
+            {/* Quick Metrics & Actions (strictly fits viewport at all breakpoints) */}
+            <div className="hidden md:flex items-center space-x-1.5 lg:space-x-2 shrink-0">
               
               {/* Level Selector Dropdown Pill */}
-              <div className="relative">
+              <div className="relative hidden lg:block">
                 <button
                   onClick={() => setLevelDropdownOpen(!levelDropdownOpen)}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold transition-all shadow-sm whitespace-nowrap"
+                  className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold transition-all shadow-sm whitespace-nowrap"
                   title="Switch Experience Level"
                 >
-                  <Target className="w-3.5 h-3.5" />
+                  <Target className="w-3.5 h-3.5 shrink-0" />
                   <span>LVL {systemLevel}</span>
                 </button>
 
@@ -246,8 +246,9 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   </div>
                 )}
               </div>
-              {/* Today's live execution telemetry (only shows end-of-day grade once scored) */}
-              <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-300 whitespace-nowrap">
+
+              {/* Today's live execution telemetry (shown only on wide desktop screens so navbar never crowds) */}
+              <div className="hidden 2xl:flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-300 whitespace-nowrap">
                 <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                 <span>
                   Tasks:{' '}
@@ -274,7 +275,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     ? `${isGwsRunning ? 'Live Sprint' : 'Paused Sprint'}: ${activeGwsTimer?.taskName || 'Active GWS'} (click to open)`
                     : 'Start a GWS deep work sprint'
                 }
-                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap ${
+                className={`flex items-center space-x-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap ${
                   isGwsRunning
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25'
                     : hasActiveGwsTimer
@@ -285,14 +286,18 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 {isGwsRunning ? (
                   <span className="w-2 h-2 rounded-full bg-slate-950 animate-pulse shrink-0" />
                 ) : (
-                  <Timer className="w-3.5 h-3.5" />
+                  <Timer className="w-3.5 h-3.5 shrink-0" />
                 )}
                 <span className={hasActiveGwsTimer ? 'font-mono' : ''}>
-                  {isGwsRunning
-                    ? `GWS ${formatShortTimer(activeGwsSeconds)}`
-                    : hasActiveGwsTimer
-                    ? `Paused ${formatShortTimer(activeGwsSeconds)}`
-                    : '+ GWS Sprint'}
+                  {isGwsRunning ? (
+                    `GWS ${formatShortTimer(activeGwsSeconds)}`
+                  ) : hasActiveGwsTimer ? (
+                    `Paused ${formatShortTimer(activeGwsSeconds)}`
+                  ) : (
+                    <>
+                      + GWS<span className="hidden xl:inline"> Sprint</span>
+                    </>
+                  )}
                 </span>
               </button>
 

@@ -20,7 +20,7 @@ const MainContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="min-h-screen w-full overflow-x-clip bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
 
       {/* Top Navbar */}
       <Navbar onOpenQuickGWS={() => setIsQuickGWSOpen(true)} />

@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 @layer base {
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
   body {
     @apply bg-slate-950 text-slate-100 antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
