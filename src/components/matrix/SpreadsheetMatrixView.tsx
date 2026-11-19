@@ -1,51 +1,38 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useStorage, getCurrentWeekRange } from '../../context/StorageContext';
-import { 
-  Table, 
-  Calendar, 
-  CheckCircle2, 
-  Flame, 
-  Timer, 
-  ArrowRight,
-  TrendingUp,
-  Sparkles,
-  ChevronLeft,
-  ChevronRight
+import {
+  Table,
+  Timer,
+  ArrowRight
 } from 'lucide-react';
 
 export const SpreadsheetMatrixView: React.FC = () => {
-  const { 
+  const {
     todayDate,
-    dailyEntries, 
-    weeklyPlans, 
-    gwsSessions, 
-    setSelectedDate, 
-    setActiveTab, 
+    dailyEntries,
+    weeklyPlans,
+    gwsSessions,
+    checklistItems,
+    setSelectedDate,
+    setActiveTab,
     setPlanningSubTab
   } = useStorage();
 
-  // Days of week standard
   const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dailyChecklistItems = checklistItems.filter(i => i.recurrence === 'daily');
 
-  // Helper to generate 7 days from a Monday startDate
-  const getDaysFromStart = (startDateStr: string): string[] => {
-    const start = new Date(`${startDateStr}T12:00:00`);
-    const days: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      days.push(`${yyyy}-${mm}-${dd}`);
-    }
-    return days;
+  const isDailyChecklistDone = (dateStr: string): { done: boolean; completedCount: number; totalDaily: number } => {
+    const totalDaily = dailyChecklistItems.length;
+    const completedCount = dailyChecklistItems.filter(i => (i.completedPeriods || []).includes(dateStr)).length;
+    const allDailyItemsDone = totalDaily > 0 && completedCount === totalDaily;
+    const done = Boolean(dailyEntries[dateStr]?.automaticTasksCompleted || allDailyItemsDone);
+    return { done, completedCount, totalDaily };
   };
 
   // Build dynamic weeks list from all continuous weeklyPlans (including empty weeks)
-  const buildWeeksList = () => {
-    const sortedPlans = Object.values(weeklyPlans).sort((a, b) => a.weekNumber - b.weekNumber);
-    return sortedPlans.map(wp => {
+  const weeksList = Object.values(weeklyPlans)
+    .sort((a, b) => a.weekNumber - b.weekNumber)
+    .map(wp => {
       const range = getCurrentWeekRange(wp.startDate);
       const isEmpty = wp.tasks.length === 0 && !wp.focusTheme.trim();
       const isCurrentWeek = range.days.includes(todayDate);
@@ -60,9 +47,21 @@ export const SpreadsheetMatrixView: React.FC = () => {
         days: range.days
       };
     });
-  };
 
-  const weeksList = buildWeeksList();
+  // Compute overall elapsed daily checklist consistency across the matrix (<= todayDate)
+  const elapsedDaysSet = new Set<string>();
+  weeksList.forEach(week => {
+    week.days.forEach(dStr => {
+      if (dStr <= todayDate) {
+        elapsedDaysSet.add(dStr);
+      }
+    });
+  });
+  const elapsedDays = Array.from(elapsedDaysSet);
+  const elapsedDaysCount = elapsedDays.length;
+  const checklistDoneDaysCount = elapsedDays.filter(d => isDailyChecklistDone(d).done).length;
+  const checklistMissedDaysCount = Math.max(0, elapsedDaysCount - checklistDoneDaysCount);
+  const consistencyPct = elapsedDaysCount > 0 ? Math.round((checklistDoneDaysCount / elapsedDaysCount) * 100) : 0;
 
   const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
@@ -79,11 +78,11 @@ export const SpreadsheetMatrixView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      
+
       {/* Spreadsheet Header Bar */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+          <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
             <Table className="w-5 h-5" />
           </div>
           <div>
@@ -91,18 +90,41 @@ export const SpreadsheetMatrixView: React.FC = () => {
               Macro Spreadsheet Matrix
             </span>
             <h2 className="text-xl font-extrabold text-slate-100">
-              Calendar Grid: Weeks & Days Overview
+              Calendar Grid: Weeks, GWS & Daily Checklist Consistency
             </h2>
             <p className="text-xs text-slate-400">
-              Full spreadsheet matrix with empty slot indicators for unrecorded days. Click any cell to jump or edit.
+              Every day displays a green or red dot so you can scan yearly checklist consistency at a glance. Click any cell to open that day.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          <span className="text-xs text-slate-400 font-mono">Legend:</span>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">Recorded</span>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-slate-950 text-slate-500 border border-slate-800 font-bold">Empty Spot</span>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Consistency Summary Pill */}
+          <div className="flex items-center space-x-3 px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-xs font-mono">
+            <span className="inline-flex items-center space-x-1.5 text-emerald-400 font-bold">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]" />
+              <span>{checklistDoneDaysCount} Done</span>
+            </span>
+            <span className="text-slate-700">|</span>
+            <span className="inline-flex items-center space-x-1.5 text-rose-400 font-bold">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]" />
+              <span>{checklistMissedDaysCount} Missed</span>
+            </span>
+            <span className="text-slate-700">|</span>
+            <span className="text-amber-400 font-extrabold">{consistencyPct}% Consistent</span>
+          </div>
+
+          {/* Dot Legend */}
+          <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
+            <span className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>Checklist Done</span>
+            </span>
+            <span className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/30 font-bold">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <span>Not Done</span>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -110,18 +132,18 @@ export const SpreadsheetMatrixView: React.FC = () => {
       <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
-            
+
             {/* Table Header: Week info + Mon to Sun */}
             <thead>
               <tr className="border-b border-slate-800 bg-slate-950/80 text-xs uppercase font-extrabold text-slate-400 tracking-wider">
                 <th className="py-4 px-4 min-w-[180px]">Week & Target</th>
                 {daysOfWeek.map((dayName, idx) => (
-                  <th key={dayName} className="py-4 px-3 min-w-[130px] text-center border-l border-slate-800/80">
+                  <th key={dayName} className="py-4 px-3 min-w-[140px] text-center border-l border-slate-800/80">
                     <div>{dayName}</div>
                     <div className="text-[10px] font-mono text-slate-500 font-normal">Day {idx + 1}</div>
                   </th>
                 ))}
-                <th className="py-4 px-4 min-w-[110px] text-right border-l border-slate-800">
+                <th className="py-4 px-4 min-w-[135px] text-right border-l border-slate-800">
                   Week Total
                 </th>
               </tr>
@@ -137,13 +159,13 @@ export const SpreadsheetMatrixView: React.FC = () => {
                   s => s.date >= week.startDate && s.date <= week.endDate
                 );
                 const weekGwsMinutes = weekGwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
-                const weekAutoDaysDone = week.days.filter(d => dailyEntries[d]?.automaticTasksCompleted).length;
+                const weekChecklistDoneCount = week.days.filter(d => isDailyChecklistDone(d).done).length;
 
                 return (
                   <tr key={week.id} className="hover:bg-slate-850/40 transition-colors">
-                    
+
                     {/* Week Focus & Number Cell */}
-                    <td className="py-4 px-4 bg-slate-950/40">
+                    <td className="py-4 px-4 bg-slate-950/40 align-top">
                       <div className="font-extrabold text-slate-200 text-sm flex items-center space-x-1.5">
                         <span className="text-amber-400 font-mono">{week.title}</span>
                       </div>
@@ -160,7 +182,7 @@ export const SpreadsheetMatrixView: React.FC = () => {
                       const entry = dailyEntries[dateStr];
                       const dayGws = gwsSessions.filter(s => s.date === dateStr);
                       const dayGwsMinutes = dayGws.reduce((a, b) => a + (b.actualMinutes || 0), 0);
-                      const autoDone = !!entry?.automaticTasksCompleted;
+                      const checklistStatus = isDailyChecklistDone(dateStr);
                       const hasData = Boolean(
                         (entry &&
                           (entry.executionScore > 0 ||
@@ -168,16 +190,19 @@ export const SpreadsheetMatrixView: React.FC = () => {
                             entry.mainTasksCompleted > 0 ||
                             entry.automaticTasksCompleted ||
                             (entry.reviewNotes && entry.reviewNotes.trim().length > 0))) ||
-                        dayGws.length > 0
+                        dayGws.length > 0 ||
+                        checklistStatus.done ||
+                        checklistStatus.completedCount > 0
                       );
 
                       const isTodayCell = dateStr === todayDate;
+                      const isFuture = dateStr > todayDate;
 
                       return (
-                        <td 
+                        <td
                           key={dateStr}
                           onClick={() => handleDayClick(dateStr)}
-                          className={`py-3 px-2 border-l border-slate-800/80 cursor-pointer transition-all hover:bg-slate-800/60 ${
+                          className={`group py-3 px-2 border-l border-slate-800/80 cursor-pointer transition-all hover:bg-slate-800/60 align-top ${
                             isTodayCell
                               ? 'bg-amber-500/10 ring-1 ring-inset ring-amber-500/40'
                               : !hasData
@@ -185,31 +210,48 @@ export const SpreadsheetMatrixView: React.FC = () => {
                               : 'bg-slate-900/50'
                           }`}
                         >
-                          <div className="flex flex-col h-full min-h-[104px] justify-between p-2 rounded-2xl border border-transparent hover:border-amber-500/30">
-                            
-                            {/* Date + Status */}
+                          <div className="flex flex-col h-full min-h-[112px] justify-between p-2 rounded-2xl border border-transparent hover:border-amber-500/30">
+
+                            {/* Date + Green/Red Consistency Dot + Score/Tasks */}
                             <div className="flex items-center justify-between text-[11px] gap-1">
-                              <span className={`font-mono font-bold ${isTodayCell ? 'text-amber-400' : 'text-slate-300'}`}>
-                                {dateStr.slice(5)} {isTodayCell ? '• TODAY' : ''}
-                              </span>
+                              <div className="flex items-center space-x-1.5 min-w-0">
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                    checklistStatus.done
+                                      ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.75)]'
+                                      : 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]'
+                                  }`}
+                                  title={
+                                    checklistStatus.done
+                                      ? `Daily Checklist Done (${dateStr})`
+                                      : isFuture
+                                      ? `Daily Checklist Upcoming (${dateStr})`
+                                      : `Daily Checklist Missed (${dateStr})`
+                                  }
+                                />
+                                <span className={`font-mono font-bold truncate ${isTodayCell ? 'text-amber-400' : 'text-slate-300'}`}>
+                                  {dateStr.slice(5)} {isTodayCell ? '• TODAY' : ''}
+                                </span>
+                              </div>
+
                               {hasData ? (
                                 entry && entry.executionScore > 0 ? (
-                                  <span className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${getScoreColor(entry.executionScore)}`}>
+                                  <span className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded border shrink-0 ${getScoreColor(entry.executionScore)}`}>
                                     {entry.executionScore}/10
                                   </span>
                                 ) : (
-                                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-700 bg-slate-950 text-slate-300">
+                                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-700 bg-slate-950 text-slate-300 shrink-0">
                                     {entry?.mainTasksCompleted || 0}/{entry?.mainTasksTotal || 3} tasks
                                   </span>
                                 )
                               ) : (
-                                <span className="text-[10px] font-mono text-slate-600 bg-slate-950 px-1 py-0.5 rounded border border-slate-800/80">
+                                <span className="text-[10px] font-mono text-slate-600 bg-slate-950 px-1 py-0.5 rounded border border-slate-800/80 shrink-0">
                                   Empty
                                 </span>
                               )}
                             </div>
 
-                            {/* Content Snippet, GWS & Automatic Tasks */}
+                            {/* Content Snippet, GWS & Checklist Dot Badge */}
                             <div className="my-1.5 space-y-1.5">
                               {hasData ? (
                                 <>
@@ -223,7 +265,6 @@ export const SpreadsheetMatrixView: React.FC = () => {
                                     </div>
                                   )}
 
-                                  {/* GWork Sessions (GWS) indicator */}
                                   <div className={`flex items-center space-x-1 text-[10px] font-mono ${dayGws.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
                                     <Timer className="w-3 h-3 shrink-0" />
                                     <span className="truncate">
@@ -232,23 +273,37 @@ export const SpreadsheetMatrixView: React.FC = () => {
                                         : '0 GWS'}
                                     </span>
                                   </div>
-
-                                  {/* Automatic Tasks Done indicator */}
-                                  <div
-                                    className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
-                                      autoDone
-                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                                        : 'bg-slate-950 text-slate-500 border-slate-800'
-                                    }`}
-                                  >
-                                    <span>{autoDone ? '✓ Auto Tasks Done' : '○ Auto Tasks Pending'}</span>
-                                  </div>
                                 </>
                               ) : (
-                                <div className="text-center py-2 text-[11px] text-slate-600 italic">
-                                  — No record —
+                                <div className="py-1 text-[10px] text-slate-600 italic">
+                                  No GWS / plan
                                 </div>
                               )}
+
+                              {/* Daily Checklist Done/Not Done Indicator (always visible) */}
+                              <div
+                                className={`inline-flex items-center space-x-1.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                  checklistStatus.done
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                    : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                                }`}
+                              >
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    checklistStatus.done ? 'bg-emerald-400' : 'bg-rose-500'
+                                  }`}
+                                />
+                                <span>
+                                  {checklistStatus.done
+                                    ? 'Checklist Done'
+                                    : isFuture
+                                    ? 'Upcoming'
+                                    : 'Not Done'}
+                                  {checklistStatus.totalDaily > 0
+                                    ? ` (${checklistStatus.completedCount}/${checklistStatus.totalDaily})`
+                                    : ''}
+                                </span>
+                              </div>
                             </div>
 
                             {/* Quick CTA */}
@@ -262,7 +317,7 @@ export const SpreadsheetMatrixView: React.FC = () => {
                       );
                     })}
 
-                    {/* Week Total Column */}
+                    {/* Week Total Column with 7-Dot Consistency Strip */}
                     <td className="py-4 px-4 text-right border-l border-slate-800 bg-slate-950/40 space-y-1.5 align-top">
                       <div className="text-sm font-extrabold font-mono text-amber-400">
                         {achievedScore} <span className="text-slate-500 text-xs">/ {totalPoints} Pts</span>
@@ -274,8 +329,23 @@ export const SpreadsheetMatrixView: React.FC = () => {
                         <div className={weekGwsSessions.length > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}>
                           GWS: {weekGwsSessions.length} ({(weekGwsMinutes / 60).toFixed(1)}h)
                         </div>
-                        <div className={weekAutoDaysDone > 0 ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
-                          Auto Tasks: {weekAutoDaysDone}/7d
+                        <div className={weekChecklistDoneCount > 0 ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                          Checklist: {weekChecklistDoneCount}/7d
+                        </div>
+                        <div
+                          className="flex items-center justify-end space-x-1 pt-0.5"
+                          title="Mon–Sun Daily Checklist Consistency"
+                        >
+                          {week.days.map((dStr, idx) => {
+                            const done = isDailyChecklistDone(dStr).done;
+                            return (
+                              <span
+                                key={dStr}
+                                className={`w-2 h-2 rounded-full ${done ? 'bg-emerald-400' : 'bg-rose-500'}`}
+                                title={`${daysOfWeek[idx]} (${dStr}): ${done ? 'Daily Checklist Done' : 'Not Done'}`}
+                              />
+                            );
+                          })}
                         </div>
                       </div>
                     </td>
