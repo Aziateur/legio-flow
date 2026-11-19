@@ -438,7 +438,7 @@ export const ChecklistView: React.FC = () => {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+    <div className="w-full max-w-[1680px] mx-auto space-y-6 px-4 sm:px-6 lg:px-8 py-6">
       {/* Top Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/80 p-4">
         <div className="space-y-1">

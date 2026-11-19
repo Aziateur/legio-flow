@@ -42,7 +42,7 @@ const MainContent: React.FC = () => {
         )}
         {activeTab === 'matrix' && (
           <ErrorBoundary key="matrix" label="Weeks Matrix" onReset={recoverToDaily}>
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
               <SpreadsheetMatrixView />
             </div>
           </ErrorBoundary>
@@ -105,7 +105,7 @@ const MainContent: React.FC = () => {
 
       {/* Minimal Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
             <span className="font-extrabold text-slate-400 uppercase tracking-widest text-[10px]">
               LEGIO

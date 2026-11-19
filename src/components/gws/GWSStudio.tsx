@@ -288,7 +288,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   );
 
   return (
-    <div className={`space-y-8 ${isModal ? 'p-2' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'}`}>
+    <div className={`space-y-8 ${isModal ? 'p-2' : 'w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-8'}`}>
       
       {/* Header */}
       {!isModal && (

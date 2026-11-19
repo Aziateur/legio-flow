@@ -1291,7 +1291,7 @@ export const ReviewHub: React.FC = () => {
     <div className="space-y-6">
       
       {/* Top Unified Review Window Switcher Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-2 sm:p-2.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
           
           <div className="flex items-center space-x-3 px-3">
@@ -1447,7 +1447,7 @@ export const ReviewHub: React.FC = () => {
       {/* SUB-TAB 0: ALL REVIEWS VAULT (WHERE ALL REVIEWS LIVE)                     */}
       {/* ========================================================================= */}
       {reviewSubTab === 'vault' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-6">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-6">
           
           {/* Header Banner & Filter Strip */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
@@ -1744,7 +1744,7 @@ export const ReviewHub: React.FC = () => {
       {/* SUB-TAB 1: DAILY REVIEW                                                  */}
       {/* ========================================================================= */}
       {reviewSubTab === 'daily' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
           
           {/* Day Navigation Bar */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
@@ -2216,7 +2216,7 @@ export const ReviewHub: React.FC = () => {
       {/* SUB-TAB 2: GWS SPRINT REVIEW                                             */}
       {/* ========================================================================= */}
       {reviewSubTab === 'gws' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
           
           {/* Key Sprint Stats Banner */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -2430,7 +2430,7 @@ export const ReviewHub: React.FC = () => {
       {/* SUB-TAB 3: WEEKLY REVIEW                                                 */}
       {/* ========================================================================= */}
       {reviewSubTab === 'weekly' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
           
           {/* Week Selector Bar with Clear "+ Create New Week to Review" button */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
@@ -2850,7 +2850,7 @@ export const ReviewHub: React.FC = () => {
         const prevMonthCorrection = getSavedMonthlyReview(prevMonthKey)?.courseCorrections?.trim();
 
         return (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Month Navigation & Quick Switcher Bar */}
             <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
               <div className="flex items-center space-x-3">
@@ -3457,7 +3457,7 @@ export const ReviewHub: React.FC = () => {
         const prevQuarterCorrection = getSavedQuarterlyReview(prevQuarterKey)?.courseCorrections?.trim();
 
         return (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Quarter Navigation & Quick Switcher Bar */}
             <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
               <div className="flex items-center space-x-3">
@@ -4007,7 +4007,7 @@ export const ReviewHub: React.FC = () => {
         const prevYearCorrection = getSavedYearlyReview(prevYearKey)?.courseCorrections?.trim();
 
         return (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
+          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Year Navigation & Switcher Bar */}
             <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
               <div className="flex items-center space-x-3">

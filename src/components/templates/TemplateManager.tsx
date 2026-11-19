@@ -731,7 +731,7 @@ export const TemplateManager: React.FC = () => {
   const visibleCount = activeTemplate.fields.filter(f => !f.hidden).length;
 
   return (
-    <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
       {/* Top Studio Header */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">

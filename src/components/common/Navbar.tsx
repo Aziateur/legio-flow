@@ -166,8 +166,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
   return (
     <>
       <header className="sticky top-0 z-40 w-full bg-slate-900/95 backdrop-blur-md border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6">
-          <div className="flex items-center justify-between min-h-[60px] py-2 gap-2">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between min-h-[60px] py-2 gap-3">
             
             {/* Brand Logo & Title */}
             <div className="flex items-center space-x-2 cursor-pointer shrink-0 group" onClick={() => setActiveTab('planning')}>
@@ -183,8 +183,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               </span>
             </div>
 
-            {/* Desktop Navigation Tabs */}
-            <nav className="hidden md:flex items-center space-x-0.5 lg:space-x-1 min-w-0">
+            {/* Desktop Navigation Tabs (shrink-0 prevents any overlap with right controls) */}
+            <nav className="hidden lg:flex items-center space-x-1 shrink-0">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
@@ -192,21 +192,21 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`flex items-center space-x-1.5 px-2 lg:px-2.5 xl:px-3 py-1.5 lg:py-2 rounded-lg text-xs xl:text-sm font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
+                    className={`flex items-center space-x-1.5 px-2.5 xl:px-3 py-2 rounded-lg text-xs xl:text-sm font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
                       isActive
                         ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                     }`}
                   >
-                    <Icon className={`w-3.5 h-3.5 xl:w-4 xl:h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
                     <span>{item.label}</span>
                   </button>
                 );
               })}
             </nav>
 
-            {/* Quick Metrics & Actions (strictly fits viewport at all breakpoints) */}
-            <div className="hidden md:flex items-center space-x-1.5 lg:space-x-2 shrink-0">
+            {/* Quick Metrics & Actions (adapts smoothly to window width without ever overlapping) */}
+            <div className="hidden lg:flex items-center space-x-2 shrink-0">
               
               {/* Level Selector Dropdown Pill */}
               <div className="relative hidden lg:block">
@@ -411,8 +411,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               </button>
             </div>
 
-            {/* Mobile menu trigger */}
-            <div className="flex md:hidden items-center space-x-2">
+            {/* Compact Tablet / Mobile menu trigger (< 1024px) */}
+            <div className="flex lg:hidden items-center space-x-2 shrink-0">
               <button
                 onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
                 className="relative p-1.5 rounded-lg bg-slate-800 text-amber-400"
@@ -432,31 +432,44 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                     : 'bg-slate-800 text-slate-200'
                 }`}
-                title="Account"
+                title="Profile & Parameters"
               >
                 <User className="w-3.5 h-3.5" />
-                <span>{authUser ? 'Signed in' : 'Sign In'}</span>
+                <span className="max-w-[72px] truncate">
+                  {authUser ? authUser.displayName || authUser.email.split('@')[0] : 'Sign In'}
+                </span>
               </button>
               <button
                 onClick={onOpenQuickGWS}
-                className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 font-bold text-xs"
+                className={`px-2.5 py-1.5 rounded-lg font-bold text-xs whitespace-nowrap ${
+                  isGwsRunning
+                    ? 'bg-emerald-500 text-slate-950 font-mono'
+                    : hasActiveGwsTimer
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono'
+                    : 'bg-amber-500 text-slate-950'
+                }`}
               >
-                + GWS
+                {isGwsRunning
+                  ? formatShortTimer(activeGwsSeconds)
+                  : hasActiveGwsTimer
+                  ? `⏸ ${formatShortTimer(activeGwsSeconds)}`
+                  : '+ GWS'}
               </button>
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="p-2 text-slate-400 hover:text-slate-100"
+                className="p-1.5 text-slate-400 hover:text-slate-100"
+                title="Navigation Menu"
               >
-                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
             </div>
 
           </div>
         </div>
 
-        {/* Mobile menu dropdown */}
+        {/* Compact Tablet / Mobile menu dropdown */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-800 bg-slate-900 px-4 pt-2 pb-4 space-y-1">
+          <div className="lg:hidden border-t border-slate-800 bg-slate-900 px-4 pt-2 pb-4 space-y-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;

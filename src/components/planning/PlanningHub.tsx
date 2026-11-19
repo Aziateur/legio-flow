@@ -433,7 +433,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     <div className="space-y-6">
 
       {/* Top Unified Planning Window Switcher Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-2 sm:p-2.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
 
           <div className="flex items-center space-x-3 px-3">
@@ -550,7 +550,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* Missing Plan Notification Banner (Day / Week Plan Reminder) */}
       {!dismissedAlerts && missingPlanAlerts.length > 0 && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
             <div className="flex items-start sm:items-center space-x-3">
               <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
@@ -608,7 +608,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* VIEW 3: MONTHLY PLANNING */}
       {planningSubTab === 'monthly' && (
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
 
           {/* Month Selector & Switcher */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
@@ -828,7 +828,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* VIEW 4: YEARLY PLANNING */}
       {planningSubTab === 'yearly' && (
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
 
           {/* Year Selector & Switcher */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
@@ -1055,7 +1055,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* VIEW 5: WEEKS MATRIX */}
       {planningSubTab === 'matrix' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
           <SpreadsheetMatrixView />
         </div>
       )}
