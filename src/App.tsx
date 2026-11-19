@@ -6,6 +6,7 @@ import { GWSStudio } from './components/gws/GWSStudio';
 import { ReviewHub } from './components/review/ReviewHub';
 import { TemplateManager } from './components/templates/TemplateManager';
 import { SpreadsheetMatrixView } from './components/matrix/SpreadsheetMatrixView';
+import { ChecklistView } from './components/checklist/ChecklistView';
 import { X, Sparkles, Shield, Heart } from 'lucide-react';
 
 const MainContent: React.FC = () => {
@@ -26,6 +27,7 @@ const MainContent: React.FC = () => {
             onCustomizeTemplate={() => setActiveTab('templates')}
           />
         )}
+        {activeTab === 'checklist' && <ChecklistView />}
         {activeTab === 'matrix' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <SpreadsheetMatrixView />

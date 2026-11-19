@@ -1,11 +1,25 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Template, DailyEntry, DailyPriorityItem, GWSSession, WeeklyPlan, TaskItem, ReviewEntry, ThreeYearPlan, SystemLevel } from '../types/schema';
+import {
+  Template,
+  DailyEntry,
+  DailyPriorityItem,
+  GWSSession,
+  WeeklyPlan,
+  TaskItem,
+  ReviewEntry,
+  ThreeYearPlan,
+  SystemLevel,
+  ChecklistCategory,
+  ChecklistItem
+} from '../types/schema';
 import { 
   DEFAULT_TEMPLATES, 
   INITIAL_DAILY_ENTRIES, 
   INITIAL_GWS_SESSIONS, 
   INITIAL_WEEKLY_PLANS,
-  INITIAL_THREE_YEAR_PLAN
+  INITIAL_THREE_YEAR_PLAN,
+  INITIAL_CHECKLIST_CATEGORIES,
+  INITIAL_CHECKLIST_ITEMS
 } from '../types/defaults';
 import {
   getSupabaseClient,
@@ -14,7 +28,7 @@ import {
   REMEMBERED_USER_CACHE_KEY
 } from '../lib/supabase';
 
-export type MainTab = 'planning' | 'matrix' | 'gws' | 'review' | 'templates';
+export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'matrix' | 'three_year';
 export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
@@ -192,6 +206,8 @@ interface StorageContextType {
   weeklyPlans: Record<string, WeeklyPlan>;
   threeYearPlan: ThreeYearPlan;
   reviews: ReviewEntry[];
+  checklistCategories: ChecklistCategory[];
+  checklistItems: ChecklistItem[];
   todayDate: string;
   selectedDate: string;
   selectedWeekId: string;
@@ -253,6 +269,10 @@ interface StorageContextType {
   saveReview: (review: ReviewEntry) => void;
   deleteReview: (id: string) => void;
 
+  // Checklist operations
+  saveChecklistCategories: (cats: ChecklistCategory[]) => void;
+  saveChecklistItems: (items: ChecklistItem[]) => void;
+
   // Data portability
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
@@ -266,6 +286,8 @@ const STORAGE_KEYS = {
   WEEKLY: 'legio_weekly_v1',
   THREE_YEAR: 'legio_three_year_v1',
   REVIEWS: 'legio_reviews_v1',
+  CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
+  CHECKLIST_ITEMS: 'legio_checklist_items_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
   SYSTEM_LEVEL: 'legio_system_level_v3',
 };
@@ -326,6 +348,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
+    }
+  });
+
+  const [checklistCategories, setChecklistCategories] = useState<ChecklistCategory[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CHECKLIST_CATEGORIES);
+      return saved ? JSON.parse(saved) : INITIAL_CHECKLIST_CATEGORIES;
+    } catch {
+      return INITIAL_CHECKLIST_CATEGORIES;
+    }
+  });
+
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CHECKLIST_ITEMS);
+      return saved ? JSON.parse(saved) : INITIAL_CHECKLIST_ITEMS;
+    } catch {
+      return INITIAL_CHECKLIST_ITEMS;
     }
   });
 
@@ -490,6 +530,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         : 'vault';
       return { main: 'review', planningSub: 'daily', reviewSub: sub };
     }
+    if (p1 === 'checklist') return { main: 'checklist', planningSub: 'daily', reviewSub: 'daily' };
     if (p1 === 'gws') return { main: 'gws', planningSub: 'daily', reviewSub: 'daily' };
     if (p1 === 'templates') return { main: 'templates', planningSub: 'daily', reviewSub: 'daily' };
     
@@ -589,6 +630,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('Failed to save reviews', e);
     }
   }, [reviews]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CHECKLIST_CATEGORIES, JSON.stringify(checklistCategories));
+    } catch (e) {
+      console.error('Failed to save checklist categories', e);
+    }
+  }, [checklistCategories]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CHECKLIST_ITEMS, JSON.stringify(checklistItems));
+    } catch (e) {
+      console.error('Failed to save checklist items', e);
+    }
+  }, [checklistItems]);
 
   useEffect(() => {
     try {
@@ -774,6 +831,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setReviews(prev => prev.filter(r => r.id !== id));
   };
 
+  const saveChecklistCategories = (cats: ChecklistCategory[]) => {
+    setChecklistCategories(cats);
+  };
+
+  const saveChecklistItems = (items: ChecklistItem[]) => {
+    setChecklistItems(items);
+  };
+
   const exportData = (): string => {
     const data = {
       templates,
@@ -782,6 +847,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       weeklyPlans,
       threeYearPlan,
       reviews,
+      checklistCategories,
+      checklistItems,
       exportedAt: new Date().toISOString()
     };
     return JSON.stringify(data, null, 2);
@@ -796,6 +863,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (parsed.weeklyPlans) setWeeklyPlans(parsed.weeklyPlans);
       if (parsed.threeYearPlan) setThreeYearPlan(parsed.threeYearPlan);
       if (parsed.reviews) setReviews(parsed.reviews);
+      if (Array.isArray(parsed.checklistCategories)) setChecklistCategories(parsed.checklistCategories);
+      if (Array.isArray(parsed.checklistItems)) setChecklistItems(parsed.checklistItems);
       return true;
     } catch (e) {
       console.error('Import failed', e);
@@ -816,6 +885,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr, '2026-10-12'));
     setThreeYearPlan(INITIAL_THREE_YEAR_PLAN);
     setReviews([]);
+    setChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
+    setChecklistItems(INITIAL_CHECKLIST_ITEMS);
     setTodayDate(nowStr);
     setSelectedDateState(nowStr);
   };
@@ -859,6 +930,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updatedAt: new Date().toISOString()
       } as ThreeYearPlan,
       reviews: [] as ReviewEntry[],
+      checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
+      checklistItems: [] as ChecklistItem[],
       systemLevel: 5 as SystemLevel
     };
   };
@@ -874,6 +947,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setWeeklyPlans(fresh.weeklyPlans);
     setThreeYearPlan(fresh.threeYearPlan);
     setReviews(fresh.reviews);
+    setChecklistCategories(fresh.checklistCategories);
+    setChecklistItems(fresh.checklistItems);
     setTodayDate(nowStr);
     setSelectedDateState(nowStr);
     setSelectedWeekIdState(freshWeekId);
@@ -1001,6 +1076,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     weeklyPlans,
     threeYearPlan,
     reviews,
+    checklistCategories,
+    checklistItems,
     systemLevel
   });
 
@@ -1019,6 +1096,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (state.weeklyPlans) setWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch));
     if (state.threeYearPlan) setThreeYearPlan(state.threeYearPlan);
     if (Array.isArray(state.reviews)) setReviews(state.reviews);
+    if (Array.isArray(state.checklistCategories)) setChecklistCategories(state.checklistCategories);
+    if (Array.isArray(state.checklistItems)) setChecklistItems(state.checklistItems);
     if (state.systemLevel >= 1 && state.systemLevel <= 5) {
       // Auto-upgrade legacy defaults 3 or 4 to 5 so Yearly Review & 3-Year Plan are unlocked automatically
       const nextLvl =
@@ -1151,7 +1230,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }, 1200);
 
     return () => clearTimeout(timer);
-  }, [authUser, templates, dailyEntries, gwsSessions, weeklyPlans, threeYearPlan, reviews, systemLevel]);
+  }, [authUser, templates, dailyEntries, gwsSessions, weeklyPlans, threeYearPlan, reviews, checklistCategories, checklistItems, systemLevel]);
 
   const formatSupabaseError = (msg?: string): string => {
     if (!msg) return 'Could not reach Supabase.';
@@ -1239,6 +1318,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         weeklyPlans,
         threeYearPlan,
         reviews,
+        checklistCategories,
+        checklistItems,
         todayDate,
         selectedDate,
         selectedWeekId,
@@ -1281,6 +1362,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         resetTemplatesToDefault,
         saveReview,
         deleteReview,
+        saveChecklistCategories,
+        saveChecklistItems,
         exportData,
         importData,
         resetAllData

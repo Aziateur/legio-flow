@@ -95,6 +95,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
   // Filter nav tabs according to selected progressive system level (1 to 5)
   const allNavItems = [
     { id: 'planning' as const, label: 'Planning Hub', icon: Compass, minLevel: 1 },
+    { id: 'checklist' as const, label: 'Checklist', icon: CheckCircle2, minLevel: 1 },
     { id: 'gws' as const, label: 'GWS Studio', icon: Timer, minLevel: 2 },
     { id: 'review' as const, label: 'Review Hub', icon: TrendingUp, minLevel: 1 },
   ];

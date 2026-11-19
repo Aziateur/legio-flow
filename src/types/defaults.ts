@@ -1,4 +1,13 @@
-import { Template, DailyEntry, GWSSession, WeeklyPlan, ReviewEntry, ThreeYearPlan } from './schema';
+import {
+  Template,
+  DailyEntry,
+  GWSSession,
+  WeeklyPlan,
+  ReviewEntry,
+  ThreeYearPlan,
+  ChecklistCategory,
+  ChecklistItem
+} from './schema';
 
 export const DEFAULT_TEMPLATES: Template[] = [
   {
@@ -475,4 +484,60 @@ export const INITIAL_THREE_YEAR_PLAN: ThreeYearPlan = {
     }
   ]
 };
+
+export const INITIAL_CHECKLIST_CATEGORIES: ChecklistCategory[] = [
+  { id: 'cat_routine', name: 'Daily Routine & Habits' },
+  { id: 'cat_trading', name: 'Trading' },
+  { id: 'cat_business', name: 'Legio & Business' }
+];
+
+export const INITIAL_CHECKLIST_ITEMS: ChecklistItem[] = [
+  {
+    id: 'chk_1',
+    categoryId: 'cat_routine',
+    text: 'Morning Bootcamp / Workout',
+    recurrence: 'daily',
+    completed: false,
+    completedPeriods: []
+  },
+  {
+    id: 'chk_2',
+    categoryId: 'cat_routine',
+    text: 'Hydration + Sleep schedule check',
+    recurrence: 'daily',
+    completed: false,
+    completedPeriods: []
+  },
+  {
+    id: 'chk_3',
+    categoryId: 'cat_trading',
+    text: 'Pre-market Miro boundaries & checklist',
+    recurrence: 'daily',
+    completed: false,
+    completedPeriods: []
+  },
+  {
+    id: 'chk_4',
+    categoryId: 'cat_trading',
+    text: 'Weekly trade audit & setup review',
+    recurrence: 'weekly',
+    completed: false,
+    completedPeriods: []
+  },
+  {
+    id: 'chk_5',
+    categoryId: 'cat_business',
+    text: 'Monthly tools & software budget check',
+    recurrence: 'monthly',
+    completed: false,
+    completedPeriods: []
+  },
+  {
+    id: 'chk_6',
+    categoryId: 'cat_business',
+    text: 'Send Legio onboarding checklist to cohort',
+    recurrence: 'none',
+    completed: false
+  }
+];
 

@@ -171,3 +171,19 @@ export interface ReviewEntry {
   createdAt: string;
   updatedAt?: string;
 }
+
+export type ChecklistRecurrence = 'daily' | 'weekly' | 'monthly' | 'none';
+
+export interface ChecklistCategory {
+  id: string;
+  name: string;
+}
+
+export interface ChecklistItem {
+  id: string;
+  categoryId: string;
+  text: string;
+  recurrence: ChecklistRecurrence;
+  completed: boolean; // Used when recurrence === 'none'
+  completedPeriods?: string[]; // Stores 'YYYY-MM-DD' for daily, 'week_N' for weekly, 'YYYY-MM' for monthly
+}
