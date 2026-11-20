@@ -8,8 +8,15 @@ import {
   computeWeeklyAchievedScore,
   getActiveDailyChecklistItemsForDate
 } from '../../context/StorageContext';
-import { WeeklyPlan, ReviewEntry } from '../../types/schema';
+import { WeeklyPlan, ReviewEntry, ProblemCategory } from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
+import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
+import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
+import {
+  formatProblemsForReviewText,
+  problemOccurredInRange,
+  problemOccurredOnDate
+} from '../../lib/problems';
 import { 
   FileText, 
   Timer, 
@@ -201,6 +208,9 @@ export const ReviewHub: React.FC = () => {
     saveYearlyPlan,
     checklistItems,
     saveChecklistItems,
+    problems,
+    addProblem,
+    recordProblemRecurrence,
     reviews,
     systemLevel,
     saveReview,
@@ -213,6 +223,12 @@ export const ReviewHub: React.FC = () => {
 
   const currentDailyEntry = getEntryForDate(selectedDate);
   const currentWeeklyPlan = weeklyPlans[selectedWeekId] || weeklyPlans['week_1'] || Object.values(weeklyPlans)[0];
+
+  // Modal-specific draft state for compact ProblemLoggerPanel inside Create Review modal
+  const [modalProblemCategory, setModalProblemCategory] = useState<ProblemCategory>('mindset');
+  const [modalProblemTags, setModalProblemTags] = useState<string[]>([]);
+
+  const activeProblemCount = problems.filter(p => p.status !== 'solved').length;
 
   // Create Review Modal state
   const [showCreateReviewModal, setShowCreateReviewModal] = useState(false);
@@ -242,7 +258,7 @@ export const ReviewHub: React.FC = () => {
 
   const [reviewTitle, setReviewTitle] = useState(`Week ${targetPlanForReview.weekNumber} Retrospective & Course Correction`);
   const [winsText, setWinsText] = useState(targetPlanForReview.winsNotes || '');
-  const [blockersText, setBlockersText] = useState(targetPlanForReview.problemsEncountered || '');
+  const [blockersText, setBlockersText] = useState('');
   const [courseCorrectionsText, setCourseCorrectionsText] = useState(
     targetPlanForReview.courseCorrectionNotes || targetPlanForReview.reviewNotes || ''
   );
@@ -284,7 +300,7 @@ export const ReviewHub: React.FC = () => {
     const plan = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
     setReviewTitle(`Week ${plan.weekNumber} Retrospective${plan.focusTheme ? `: ${plan.focusTheme}` : ''}`);
     setWinsText(plan.winsNotes || '');
-    setBlockersText(plan.problemsEncountered || '');
+    setBlockersText('');
     setCourseCorrectionsText(plan.courseCorrectionNotes || plan.reviewNotes || '');
   }, [reviewTargetWeekId, currentWeeklyPlan.id]);
 
@@ -302,11 +318,6 @@ export const ReviewHub: React.FC = () => {
     s.reflexions.heldBack.toLowerCase().includes(gwsSearchQuery.toLowerCase()) ||
     s.date.includes(gwsSearchQuery)
   );
-
-  // Extract all blockers
-  const allBlockers = gwsSessions
-    .filter(s => s.reflexions.heldBack.trim().length > 0)
-    .map(s => ({ date: s.date, task: s.taskName, text: s.reflexions.heldBack }));
 
   // Extract all improvements
   const allImprovements = gwsSessions
@@ -872,10 +883,13 @@ export const ReviewHub: React.FC = () => {
           ? `\n\nGWS Sprints (${dayGws.length}):\n` +
             dayGws.map(s => `• ${s.taskName} (${s.actualMinutes}m, ${s.ratings.total}/15)`).join('\n')
           : '';
-      const problemsPart =
-        d.problemsEncountered && d.problemsEncountered.trim()
-          ? `⚠️ Problems Encountered:\n${d.problemsEncountered.trim()}\n\n`
-          : '';
+      const dayProblems = problems.filter(p => problemOccurredOnDate(p, d.date));
+      const structuredProblemsText = formatProblemsForReviewText(dayProblems);
+      const problemsPart = structuredProblemsText
+        ? `⚠️ Problems Logged:\n${structuredProblemsText}\n\n`
+        : d.problemsEncountered && d.problemsEncountered.trim()
+        ? `⚠️ Problems Encountered:\n${d.problemsEncountered.trim()}\n\n`
+        : '';
       const reflexionPart =
         d.reviewNotes && d.reviewNotes.trim()
           ? `⚡ Reflexion & Course Correction:\n${d.reviewNotes.trim()}`
@@ -911,9 +925,16 @@ export const ReviewHub: React.FC = () => {
         (w.courseCorrectionNotes && w.courseCorrectionNotes.trim().length > 0)
     )
     .map(w => {
+      const weekStructuredProblems = formatProblemsForReviewText(
+        problems.filter(p => problemOccurredInRange(p, w.startDate, w.endDate))
+      );
       const structuredReview = [
         w.winsNotes?.trim() ? `1. Wins & Shipped:\n${w.winsNotes.trim()}` : '',
-        w.problemsEncountered?.trim() ? `2. Problems Encountered:\n${w.problemsEncountered.trim()}` : '',
+        weekStructuredProblems
+          ? `2. Problems Logged:\n${weekStructuredProblems}`
+          : w.problemsEncountered?.trim()
+          ? `2. Problems Encountered:\n${w.problemsEncountered.trim()}`
+          : '',
         w.courseCorrectionNotes?.trim() ? `3. Course Corrections:\n${w.courseCorrectionNotes.trim()}` : ''
       ]
         .filter(Boolean)
@@ -1202,14 +1223,51 @@ export const ReviewHub: React.FC = () => {
     setModalNewWeekFocus('');
   };
 
+  const commitDraftProblemIfPresent = (
+    draft: string,
+    date: string,
+    sourceType: 'weekly' | 'daily' | 'gws',
+    sourceRef?: string
+  ) => {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    const existing = problems.find(
+      p => p.title.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      recordProblemRecurrence(existing.id, {
+        date,
+        sourceType,
+        ...(sourceRef ? { sourceRef } : {})
+      });
+    } else {
+      addProblem({
+        title: trimmed,
+        category: modalProblemCategory,
+        tags: modalProblemTags,
+        sourceType,
+        date,
+        ...(sourceRef ? { sourceRef } : {})
+      });
+    }
+  };
+
   // Handlers for weekly save
   const handleSaveWeeklyReview = (e: React.FormEvent) => {
     e.preventDefault();
     const targetPlan = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
+    if (blockersText.trim()) {
+      commitDraftProblemIfPresent(blockersText, targetPlan.endDate, 'weekly', targetPlan.id);
+      setBlockersText('');
+      setModalProblemTags([]);
+    }
+    const weekProbsText = formatProblemsForReviewText(
+      problems.filter(p => problemOccurredInRange(p, targetPlan.startDate, targetPlan.endDate))
+    );
 
     const fullReviewNotes = [
       winsText.trim() ? `1. Wins & Shipped:\n${winsText.trim()}` : '',
-      blockersText.trim() ? `2. Problems Encountered:\n${blockersText.trim()}` : '',
+      weekProbsText ? `2. Problems Logged:\n${weekProbsText}` : '',
       courseCorrectionsText.trim() ? `3. Course Corrections:\n${courseCorrectionsText.trim()}` : ''
     ]
       .filter(Boolean)
@@ -1222,7 +1280,7 @@ export const ReviewHub: React.FC = () => {
       startDate: targetPlan.startDate,
       endDate: targetPlan.endDate,
       wins: winsText.trim(),
-      blockers: blockersText.trim(),
+      blockers: weekProbsText,
       courseCorrections: courseCorrectionsText.trim(),
       ratings: {
         clarity: clarityRating,
@@ -1235,7 +1293,7 @@ export const ReviewHub: React.FC = () => {
     saveWeeklyPlan({
       ...targetPlan,
       winsNotes: winsText.trim(),
-      problemsEncountered: blockersText.trim(),
+      problemsEncountered: weekProbsText,
       courseCorrectionNotes: courseCorrectionsText.trim(),
       reviewNotes: fullReviewNotes.trim()
     });
@@ -1248,9 +1306,13 @@ export const ReviewHub: React.FC = () => {
   // Handlers for daily save in modal
   const handleSaveDailyReviewModal = (e: React.FormEvent) => {
     e.preventDefault();
+    if (modalDailyProblems.trim()) {
+      commitDraftProblemIfPresent(modalDailyProblems, modalDailyDate, 'daily', modalDailyDate);
+      setModalDailyProblems('');
+      setModalProblemTags([]);
+    }
     saveDailyEntry(modalDailyDate, {
       executionScore: modalDailyScore,
-      problemsEncountered: modalDailyProblems.trim(),
       reviewNotes: modalDailyNotes.trim()
     });
     alert(`Daily review for ${modalDailyDate} saved to the Review Vault!`);
@@ -1262,6 +1324,9 @@ export const ReviewHub: React.FC = () => {
   const handleSaveGwsModal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalGwsTask.trim()) return;
+    if (modalGwsHeldBack.trim()) {
+      commitDraftProblemIfPresent(modalGwsHeldBack, selectedDate, 'gws', modalGwsTask.trim());
+    }
 
     addGWSSession({
       date: selectedDate,
@@ -1284,6 +1349,8 @@ export const ReviewHub: React.FC = () => {
     alert('GWS Session and Reflexions recorded in the Review Vault!');
     setShowCreateReviewModal(false);
     setModalGwsTask('');
+    setModalGwsHeldBack('');
+    setModalProblemTags([]);
     setReviewSubTab('vault');
   };
 
@@ -1304,6 +1371,7 @@ export const ReviewHub: React.FC = () => {
               </div>
               <div className="text-sm font-extrabold text-slate-100">
                 {reviewSubTab === 'vault' && 'All Reviews Vault (Where All Reviews Live)'}
+                {reviewSubTab === 'problems' && 'Problem Log & Feedback Loop (Categories, Tags & Active Fixes)'}
                 {reviewSubTab === 'daily' && 'Daily Review & Reflexion'}
                 {reviewSubTab === 'gws' && 'GWS Sprint Telemetry & Bottlenecks'}
                 {reviewSubTab === 'weekly' && 'Weekly Retrospective & Milestones'}
@@ -1329,6 +1397,18 @@ export const ReviewHub: React.FC = () => {
               >
                 <BookOpen className="w-3.5 h-3.5" />
                 <span>Vault ({allVaultItems.length})</span>
+              </button>
+
+              <button
+                onClick={() => setReviewSubTab('problems')}
+                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  reviewSubTab === 'problems'
+                    ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Problems{activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}</span>
               </button>
 
               <button
@@ -1442,6 +1522,15 @@ export const ReviewHub: React.FC = () => {
 
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* SUB-TAB 0.5: PROBLEM LOG & FEEDBACK LOOP LEDGER                           */}
+      {/* ========================================================================= */}
+      {reviewSubTab === 'problems' && (
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
+          <ProblemsLedgerView />
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* SUB-TAB 0: ALL REVIEWS VAULT (WHERE ALL REVIEWS LIVE)                     */}
@@ -2140,47 +2229,19 @@ export const ReviewHub: React.FC = () => {
 
             </div>
 
-            {/* Right 7 cols: Problems Encountered + Daily Reflexion & Course Correction */}
+            {/* Right 7 cols: Structured Problems Logger + Daily Reflexion & Course Correction */}
             <div className="lg:col-span-7 space-y-6">
-              {/* Section 1: Problems Encountered & Bottlenecks */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
-                    <AlertTriangle className="w-4 h-4" />
-                    <span>1. Problems Encountered & Bottlenecks</span>
-                  </div>
-                  {(() => {
-                    const dayBlockers = gwsSessions
-                      .filter(s => s.date === selectedDate && s.reflexions.heldBack && s.reflexions.heldBack.trim().length > 0)
-                      .map(s => `• [${s.taskName}] ${s.reflexions.heldBack.trim()}`);
-                    if (dayBlockers.length === 0) return null;
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          saveDailyEntry(selectedDate, {
-                            problemsEncountered: mergeUniqueLines(currentDailyEntry.problemsEncountered || '', dayBlockers)
-                          });
-                        }}
-                        className="px-2.5 py-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border border-orange-500/30 text-[11px] font-bold transition-colors"
-                      >
-                        + Import Today's GWS Blockers ({dayBlockers.length})
-                      </button>
-                    );
-                  })()}
-                </div>
-                <p className="text-xs text-slate-400">
-                  Document any problems, friction, distractions, or obstacles encountered during {selectedDate}:
-                </p>
-
-                <textarea
-                  value={currentDailyEntry.problemsEncountered || ''}
-                  onChange={(e) => saveDailyEntry(selectedDate, { problemsEncountered: e.target.value })}
-                  rows={4}
-                  placeholder="What problems or friction did you encounter today? Where did execution stall or diverge from the plan?"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-sm text-slate-200 placeholder-slate-600 focus:outline-none transition-colors resize-y leading-relaxed"
-                />
-              </div>
+              {/* Section 1: Structured Problem Log & Feedback Loop */}
+              <ProblemLoggerPanel
+                mode="review"
+                title="1. Problems Encountered & Bottlenecks"
+                subtitle={`Log problems for ${selectedDate} (GWS sprint problems appear automatically) or tap +1 if an existing bottleneck recurred.`}
+                sourceType="daily"
+                date={selectedDate}
+                sourceRef={selectedDate}
+                targetWeekId={selectedWeekId}
+                showAuditStrip={true}
+              />
 
               {/* Section 2: Daily Reflexion & Course Correction */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
@@ -2263,37 +2324,20 @@ export const ReviewHub: React.FC = () => {
             </div>
           </div>
 
-          {/* Deep Aggregators: Blockers vs Improvement Commitments */}
+          {/* Deep Aggregators: Structured GWS Problem Log vs Improvement Commitments */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             
-            {/* What held me back? */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
-              <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
-                <AlertTriangle className="w-4 h-4" />
-                <span>Recurring Bottlenecks ("What held me back?")</span>
-              </div>
-              <p className="text-xs text-slate-400">
-                Aggregated obstacles extracted from every past sprint to identify systemic friction:
-              </p>
-
-              <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                {allBlockers.length === 0 ? (
-                  <p className="text-xs text-slate-500 p-4 rounded-2xl bg-slate-950 border border-slate-800">
-                    No blockers recorded yet.
-                  </p>
-                ) : (
-                  allBlockers.map((b, idx) => (
-                    <div key={idx} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800/80 space-y-1">
-                      <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
-                        <span className="text-orange-400">{b.date}</span>
-                        <span className="truncate max-w-[200px]">{b.task}</span>
-                      </div>
-                      <p className="text-xs text-slate-200 leading-relaxed">{b.text}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            {/* What held me back? (Structured GWS Problem Logger) */}
+            <ProblemLoggerPanel
+              mode="review"
+              title='GWS Bottlenecks ("What held me back?")'
+              subtitle="All structured problems logged during GWS sprints — assign fixes, push actions, or verify solved."
+              sourceType="gws"
+              filterSourceType="gws"
+              date={selectedDate}
+              sourceRef="GWS Review"
+              targetWeekId={selectedWeekId}
+            />
 
             {/* What will I improve next session? */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-4">
@@ -2644,97 +2688,37 @@ export const ReviewHub: React.FC = () => {
               s => s.date >= targetPlanForReview.startDate && s.date <= targetPlanForReview.endDate
             );
             const weekGwsMinutes = weekGwsList.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
-            const weekDailyEntries = Object.values(dailyEntries).filter(
-              d => d.date >= targetPlanForReview.startDate && d.date <= targetPlanForReview.endDate
-            );
-            const weekDaysWithProblems = new Set(
-              weekDailyEntries
-                .filter(d => d.problemsEncountered && d.problemsEncountered.trim().length > 0)
-                .map(d => d.date)
-            );
-            const weekProblemsList = dedupeLines([
-              ...weekDailyEntries
-                .filter(d => d.problemsEncountered && d.problemsEncountered.trim().length > 0)
-                .map(d => `• [${d.date} Daily] ${d.problemsEncountered!.trim()}`),
-              ...weekGwsList
-                .filter(
-                  s =>
-                    s.reflexions.heldBack &&
-                    s.reflexions.heldBack.trim().length > 0 &&
-                    !weekDaysWithProblems.has(s.date)
-                )
-                .map(s => `• [${s.date} GWS: ${s.taskName}] ${s.reflexions.heldBack.trim()}`)
-            ]);
 
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Week GWS Sprints */}
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
-                      <Timer className="w-4 h-4" />
-                      <span>Week GWS Sprints ({weekGwsList.length})</span>
-                    </div>
-                    <span className="text-xs font-mono font-bold text-amber-400">
-                      {(weekGwsMinutes / 60).toFixed(1)}h deep work
-                    </span>
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
+                    <Timer className="w-4 h-4" />
+                    <span>Week GWS Sprints ({weekGwsList.length})</span>
                   </div>
-                  {weekGwsList.length === 0 ? (
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
-                      No GWS sprints logged between {targetPlanForReview.startDate} and {targetPlanForReview.endDate}.
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                      {weekGwsList.map((s) => (
-                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-slate-200 truncate">{s.taskName}</span>
-                            <span className="font-mono text-amber-400 shrink-0">{s.date.slice(5)} • {s.actualMinutes}m • {s.ratings.total}/15</span>
-                          </div>
-                          {s.reflexions.accomplished && (
-                            <p className="text-[11px] text-slate-400 truncate">Done: {s.reflexions.accomplished}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    {(weekGwsMinutes / 60).toFixed(1)}h deep work
+                  </span>
                 </div>
-
-                {/* Week Logged Problems & Blockers */}
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>Logged Daily & GWS Problems ({weekProblemsList.length})</span>
-                    </div>
-                    {weekProblemsList.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = mergeUniqueLines(blockersText, weekProblemsList);
-                          setBlockersText(next);
-                          saveWeeklyPlan({ ...targetPlanForReview, problemsEncountered: next });
-                        }}
-                        className="px-2.5 py-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border border-orange-500/30 text-[11px] font-bold"
-                      >
-                        + Import to Weekly Problems
-                      </button>
-                    )}
+                {weekGwsList.length === 0 ? (
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                    No GWS sprints logged between {targetPlanForReview.startDate} and {targetPlanForReview.endDate}.
                   </div>
-                  {weekProblemsList.length === 0 ? (
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
-                      No daily problems or GWS blockers recorded during this week yet.
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-xs text-slate-300">
-                      {weekProblemsList.map((prob, idx) => (
-                        <div key={idx} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px]">
-                          {prob}
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                    {weekGwsList.map((s) => (
+                      <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-200 truncate">{s.taskName}</span>
+                          <span className="font-mono text-amber-400 shrink-0">{s.date.slice(5)} • {s.actualMinutes}m • {s.ratings.total}/15</span>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        {s.reflexions.accomplished && (
+                          <p className="text-[11px] text-slate-400 truncate">Done: {s.reflexions.accomplished}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -2765,19 +2749,20 @@ export const ReviewHub: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Problems Encountered & Bottlenecks</label>
-                <textarea
-                  value={blockersText}
-                  onChange={(e) => {
-                    setBlockersText(e.target.value);
-                    saveWeeklyPlan({ ...targetPlanForReview, problemsEncountered: e.target.value });
-                  }}
-                  placeholder="What problems, friction, or missed rules occurred this week?"
-                  rows={3}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
-                />
-              </div>
+              <ProblemLoggerPanel
+                mode="review"
+                title={`2. Week ${targetPlanForReview.weekNumber} Problems & Active Fixes`}
+                subtitle={`Automatically rolls up every GWS, Daily, and Weekly problem from ${targetPlanForReview.startDate} to ${targetPlanForReview.endDate}. Assign fixes or verify whether active fixes held.`}
+                sourceType="weekly"
+                date={targetPlanForReview.endDate}
+                sourceRef={targetPlanForReview.id}
+                dateRange={{
+                  startDate: targetPlanForReview.startDate,
+                  endDate: targetPlanForReview.endDate
+                }}
+                targetWeekId={targetPlanForReview.id}
+                showAuditStrip={true}
+              />
 
               <div className="space-y-1">
                 <label className="text-xs font-bold uppercase tracking-wider text-amber-400">3. Course corrections for next week</label>
@@ -2834,7 +2819,12 @@ export const ReviewHub: React.FC = () => {
           if (monthWins.trim()) {
             text += `\n1. Monthly Wins & Shipped:\n${monthWins.trim()}\n`;
           }
-          if (monthProblems.trim()) {
+          const monthStructuredProblems = formatProblemsForReviewText(
+            problems.filter(p => problemOccurredInRange(p, mData.info.startDate, mData.info.endDate))
+          );
+          if (monthStructuredProblems) {
+            text += `\n2. Problems Encountered & Bottlenecks:\n${monthStructuredProblems}\n`;
+          } else if (monthProblems.trim()) {
             text += `\n2. Problems Encountered & Bottlenecks:\n${monthProblems.trim()}\n`;
           }
           if (monthCorrections.trim()) {
@@ -3345,33 +3335,16 @@ export const ReviewHub: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
-                      2. Problems Encountered & Systemic Bottlenecks
-                    </label>
-                    {mData.rolledUpProblems.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          upsertMonthlyReview(selectedMonth, {
-                            blockers: mergeUniqueLines(monthProblems, mData.rolledUpProblems)
-                          })
-                        }
-                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
-                      >
-                        + Pull Weekly, Daily & GWS Problems ({mData.rolledUpProblems.length})
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    value={monthProblems}
-                    onChange={e => upsertMonthlyReview(selectedMonth, { blockers: e.target.value })}
-                    rows={4}
-                    placeholder="What recurring problems, distractions, or bottlenecks held you back across the weeks of this month?"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="review"
+                  title="2. Problems Encountered & Systemic Bottlenecks"
+                  subtitle={`All problems logged across GWS, Daily, Weekly, and Monthly reviews during ${mData.info.label} (${mData.info.startDate} → ${mData.info.endDate}).`}
+                  sourceType="monthly"
+                  date={mData.info.endDate}
+                  sourceRef={selectedMonth}
+                  dateRange={{ startDate: mData.info.startDate, endDate: mData.info.endDate }}
+                  targetWeekId={selectedWeekId}
+                />
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -3441,7 +3414,12 @@ export const ReviewHub: React.FC = () => {
           if (quarterWins.trim()) {
             text += `\n1. Quarterly Wins & Major Deliverables:\n${quarterWins.trim()}\n`;
           }
-          if (quarterProblems.trim()) {
+          const quarterStructuredProblems = formatProblemsForReviewText(
+            problems.filter(p => problemOccurredInRange(p, qData.info.startDate, qData.info.endDate))
+          );
+          if (quarterStructuredProblems) {
+            text += `\n2. Structural Problems & Bottlenecks:\n${quarterStructuredProblems}\n`;
+          } else if (quarterProblems.trim()) {
             text += `\n2. Structural Problems & Bottlenecks:\n${quarterProblems.trim()}\n`;
           }
           if (quarterCorrections.trim()) {
@@ -3890,33 +3868,16 @@ export const ReviewHub: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
-                      2. Structural Problems & Recurring Bottlenecks
-                    </label>
-                    {qData.rolledUpProblems.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          upsertQuarterlyReview(selectedQuarter, {
-                            blockers: mergeUniqueLines(quarterProblems, qData.rolledUpProblems)
-                          })
-                        }
-                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
-                      >
-                        + Pull Monthly, Weekly, Daily & GWS Problems ({qData.rolledUpProblems.length})
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    value={quarterProblems}
-                    onChange={e => upsertQuarterlyReview(selectedQuarter, { blockers: e.target.value })}
-                    rows={4}
-                    placeholder="What systemic bottlenecks or root-cause problems repeated across the months and weeks of this quarter?"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="review"
+                  title="2. Structural Problems & Recurring Bottlenecks"
+                  subtitle={`All problems logged across GWS, Daily, Weekly, Monthly, and Quarterly reviews during ${qData.info.label} (${qData.info.startDate} → ${qData.info.endDate}).`}
+                  sourceType="quarterly"
+                  date={qData.info.endDate}
+                  sourceRef={selectedQuarter}
+                  dateRange={{ startDate: qData.info.startDate, endDate: qData.info.endDate }}
+                  targetWeekId={selectedWeekId}
+                />
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -3991,7 +3952,12 @@ export const ReviewHub: React.FC = () => {
           if (yearWins.trim()) {
             text += `\n1. Yearly Wins & Shipped Goals:\n${yearWins.trim()}\n`;
           }
-          if (yearProblems.trim()) {
+          const yearStructuredProblems = formatProblemsForReviewText(
+            problems.filter(p => problemOccurredInRange(p, yData.info.startDate, yData.info.endDate))
+          );
+          if (yearStructuredProblems) {
+            text += `\n2. Major Problems & Systemic Bottlenecks:\n${yearStructuredProblems}\n`;
+          } else if (yearProblems.trim()) {
             text += `\n2. Major Problems & Systemic Bottlenecks:\n${yearProblems.trim()}\n`;
           }
           if (yearCorrections.trim()) {
@@ -4545,33 +4511,16 @@ export const ReviewHub: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold uppercase tracking-wider text-orange-400">
-                      2. Major Problems, Systemic Bottlenecks & Execution Gaps
-                    </label>
-                    {yData.rolledUpProblems.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          upsertYearlyReview(selectedYear, {
-                            blockers: mergeUniqueLines(yearProblems, yData.rolledUpProblems)
-                          })
-                        }
-                        className="text-[11px] font-bold text-orange-400 hover:text-orange-300"
-                      >
-                        + Pull Quarterly, Monthly & Weekly Problems ({yData.rolledUpProblems.length})
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    value={yearProblems}
-                    onChange={e => upsertYearlyReview(selectedYear, { blockers: e.target.value })}
-                    rows={4}
-                    placeholder="Where did you drift from your Yearly Plan? What structural bottlenecks persisted across quarters?"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="review"
+                  title="2. Major Problems, Systemic Bottlenecks & Execution Gaps"
+                  subtitle={`Full-year problem ledger for ${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate}) — see what persisted across quarters and what fixes stuck.`}
+                  sourceType="yearly"
+                  date={yData.info.endDate}
+                  sourceRef={selectedYear}
+                  dateRange={{ startDate: yData.info.startDate, endDate: yData.info.endDate }}
+                  targetWeekId={selectedWeekId}
+                />
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -4859,16 +4808,24 @@ export const ReviewHub: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-orange-400">2. Problems Encountered & Bottlenecks</label>
-                  <textarea
-                    value={blockersText}
-                    onChange={(e) => setBlockersText(e.target.value)}
-                    placeholder="What problems, friction, or missed targets occurred?"
-                    rows={2}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="compact"
+                  title="2. Problems Encountered & Bottlenecks"
+                  sourceType="weekly"
+                  date={targetPlanForReview.endDate}
+                  sourceRef={targetPlanForReview.id}
+                  dateRange={{
+                    startDate: targetPlanForReview.startDate,
+                    endDate: targetPlanForReview.endDate
+                  }}
+                  targetWeekId={targetPlanForReview.id}
+                  draftText={blockersText}
+                  onDraftTextChange={setBlockersText}
+                  draftCategory={modalProblemCategory}
+                  onDraftCategoryChange={setModalProblemCategory}
+                  draftTags={modalProblemTags}
+                  onDraftTagsChange={setModalProblemTags}
+                />
 
                 <div className="space-y-1">
                   <label className="text-xs font-bold uppercase tracking-wider text-amber-400">3. Specific Course Corrections</label>
@@ -4918,16 +4875,20 @@ export const ReviewHub: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-orange-400">1. Problems Encountered & Bottlenecks</label>
-                  <textarea
-                    value={modalDailyProblems}
-                    onChange={(e) => setModalDailyProblems(e.target.value)}
-                    placeholder="What problems, friction, or distractions occurred today?"
-                    rows={3}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none resize-none"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="compact"
+                  title="1. Problems Encountered & Bottlenecks"
+                  sourceType="daily"
+                  date={modalDailyDate}
+                  sourceRef={modalDailyDate}
+                  targetWeekId={selectedWeekId}
+                  draftText={modalDailyProblems}
+                  onDraftTextChange={setModalDailyProblems}
+                  draftCategory={modalProblemCategory}
+                  onDraftCategoryChange={setModalProblemCategory}
+                  draftTags={modalProblemTags}
+                  onDraftTagsChange={setModalProblemTags}
+                />
 
                 <div className="space-y-1">
                   <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">2. Daily Reflexions & Course Correction</label>
@@ -5033,16 +4994,20 @@ export const ReviewHub: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs text-slate-400 font-medium">2. What held me back?</label>
-                  <input
-                    type="text"
-                    value={modalGwsHeldBack}
-                    onChange={(e) => setModalGwsHeldBack(e.target.value)}
-                    placeholder="Distractions or friction..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 text-xs text-slate-200 focus:outline-none"
-                  />
-                </div>
+                <ProblemLoggerPanel
+                  mode="compact"
+                  title="2. What held me back? (Log Problem)"
+                  sourceType="gws"
+                  date={selectedDate}
+                  sourceRef={modalGwsTask.trim() || 'GWS Sprint'}
+                  targetWeekId={selectedWeekId}
+                  draftText={modalGwsHeldBack}
+                  onDraftTextChange={setModalGwsHeldBack}
+                  draftCategory={modalProblemCategory}
+                  onDraftCategoryChange={setModalProblemCategory}
+                  draftTags={modalProblemTags}
+                  onDraftTagsChange={setModalProblemTags}
+                />
 
                 <div className="space-y-1">
                   <label className="text-xs text-slate-400 font-medium">3. What will I improve next session?</label>

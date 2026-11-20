@@ -13,8 +13,16 @@ import {
   SystemLevel,
   ChecklistCategory,
   ChecklistItem,
-  StrategyPlan
+  StrategyPlan,
+  ProblemEntry,
+  ProblemCategory,
+  ProblemStatus,
+  ProblemFixType,
+  ProblemSourceType,
+  ProblemOccurrence,
+  ProblemDispatchTarget
 } from '../types/schema';
+import { guessProblemCategory, normalizeTag } from '../lib/problems';
 import {
   DEFAULT_TEMPLATES,
   INITIAL_DAILY_ENTRIES,
@@ -38,7 +46,7 @@ import {
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'roadmaps' | 'matrix';
-export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type ReviewSubTab = 'vault' | 'problems' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export const getTodayDateString = (): string => {
   const now = new Date();
@@ -424,6 +432,7 @@ interface StorageContextType {
   monthlyPlans: Record<string, MonthlyPlan>;
   yearlyPlans: Record<string, YearlyPlan>;
   strategyPlans: StrategyPlan[];
+  problems: ProblemEntry[];
   reviews: ReviewEntry[];
   checklistCategories: ChecklistCategory[];
   checklistItems: ChecklistItem[];
@@ -514,6 +523,29 @@ interface StorageContextType {
   saveStrategyPlan: (plan: StrategyPlan) => void;
   deleteStrategyPlan: (id: string) => void;
 
+  // Problem Logging & Feedback Loop
+  addProblem: (input: {
+    title: string;
+    category: ProblemCategory;
+    tags?: string[];
+    sourceType: ProblemSourceType;
+    date: string;
+    sourceRef?: string;
+    note?: string;
+    fixType?: ProblemFixType;
+    fixNote?: string;
+    status?: ProblemStatus;
+  }) => ProblemEntry;
+  updateProblem: (id: string, patch: Partial<ProblemEntry>) => void;
+  recordProblemRecurrence: (id: string, occurrence: ProblemOccurrence) => void;
+  deleteProblem: (id: string) => void;
+  dispatchProblemFix: (
+    problemId: string,
+    destination: ProblemDispatchTarget,
+    customText?: string,
+    targetWeekId?: string
+  ) => boolean;
+
   // Template operations (Modularity)
   saveTemplate: (template: Template) => void;
   deleteTemplate: (id: string) => void;
@@ -541,6 +573,7 @@ const STORAGE_KEYS = {
   MONTHLY: 'legio_monthly_plans_v1',
   YEARLY: 'legio_yearly_plans_v1',
   STRATEGY_PLANS: 'legio_strategy_plans_v1',
+  PROBLEMS: 'legio_problems_v1',
   REVIEWS: 'legio_reviews_v1',
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
@@ -651,6 +684,86 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return Array.isArray(raw) ? raw : INITIAL_STRATEGY_PLANS;
   });
 
+  const [problems, setProblems] = useState<ProblemEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.PROBLEMS);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch {
+      return [];
+    }
+
+    // One-time safe migration of existing free-text problems into structured ProblemEntry items
+    const migrated: ProblemEntry[] = [];
+    const seen = new Map<string, ProblemEntry>();
+    const nowIso = new Date().toISOString();
+
+    const pushLine = (
+      rawLine: string,
+      date: string,
+      sourceType: ProblemSourceType,
+      sourceRef?: string
+    ) => {
+      const cleaned = rawLine
+        .replace(/^[•\-\*]\s*/, '')
+        .replace(/^\[[^\]]+\]\s*/, '')
+        .trim();
+      if (!cleaned || cleaned.length < 3) return;
+      const key = cleaned.toLowerCase();
+      const existing = seen.get(key);
+      if (existing) {
+        const dupOcc = existing.occurrences.some(
+          o => o.date === date && o.sourceType === sourceType
+        );
+        if (!dupOcc) {
+          existing.occurrences.push({ date, sourceType, ...(sourceRef ? { sourceRef } : {}) });
+        }
+        return;
+      }
+      const entry: ProblemEntry = {
+        id: `prob_mig_${migrated.length + 1}_${date.replace(/-/g, '')}`,
+        title: cleaned,
+        category: guessProblemCategory(cleaned),
+        tags: [],
+        status: 'open',
+        occurrences: [{ date, sourceType, ...(sourceRef ? { sourceRef } : {}) }],
+        createdAt: `${date}T12:00:00.000Z`,
+        updatedAt: nowIso
+      };
+      seen.set(key, entry);
+      migrated.push(entry);
+    };
+
+    Object.entries(dailyEntries).forEach(([d, entry]) => {
+      if (entry.problemsEncountered?.trim()) {
+        entry.problemsEncountered
+          .split('\n')
+          .forEach(line => pushLine(line, d, 'daily', d));
+      }
+    });
+
+    gwsSessions.forEach(s => {
+      if (s.reflexions?.heldBack?.trim()) {
+        s.reflexions.heldBack
+          .split('\n')
+          .forEach(line => pushLine(line, s.date, 'gws', s.taskName));
+      }
+    });
+
+    Object.values(weeklyPlans).forEach(w => {
+      if (w.problemsEncountered?.trim()) {
+        w.problemsEncountered
+          .split('\n')
+          .forEach(line => pushLine(line, w.endDate || w.startDate, 'weekly', w.id));
+      }
+    });
+
+    writeStorageSafe(STORAGE_KEYS.PROBLEMS, migrated);
+    return migrated;
+  });
+
   const [reviews, setReviews] = useState<ReviewEntry[]>(() =>
     readStorageSafe<ReviewEntry[]>(STORAGE_KEYS.REVIEWS, [])
   );
@@ -718,6 +831,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const monthlyPlansRef = useRef(monthlyPlans);
   const yearlyPlansRef = useRef(yearlyPlans);
   const strategyPlansRef = useRef(strategyPlans);
+  const problemsRef = useRef(problems);
   const reviewsRef = useRef(reviews);
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
@@ -819,6 +933,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setStrategyPlans(next);
   };
 
+  const commitProblems = (next: ProblemEntry[]) => {
+    problemsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.PROBLEMS, next);
+    setProblems(next);
+  };
+
   const commitReviews = (next: ReviewEntry[]) => {
     reviewsRef.current = next;
     writeStorageSafe(STORAGE_KEYS.REVIEWS, next);
@@ -868,6 +988,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       monthlyPlans: monthlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
       strategyPlans: strategyPlansRef.current,
+      problems: problemsRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
@@ -1774,6 +1895,174 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
+  const addProblem: StorageContextType['addProblem'] = (input) => {
+    const nowIso = new Date().toISOString();
+    const cleanedTags = Array.from(
+      new Set((input.tags || []).map(normalizeTag).filter(Boolean))
+    );
+    const entry: ProblemEntry = {
+      id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title: input.title.trim(),
+      category: input.category,
+      tags: cleanedTags,
+      status: input.status || 'open',
+      occurrences: [
+        {
+          date: input.date || getTodayDateString(),
+          sourceType: input.sourceType,
+          ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
+          ...(input.note ? { note: input.note } : {})
+        }
+      ],
+      ...(input.fixType ? { fixType: input.fixType } : {}),
+      ...(input.fixNote?.trim() ? { fixNote: input.fixNote.trim() } : {}),
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    commitProblems([entry, ...problemsRef.current]);
+    markLocalMutation();
+    return entry;
+  };
+
+  const updateProblem: StorageContextType['updateProblem'] = (id, patch) => {
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== id) return p;
+      const merged: ProblemEntry = {
+        ...p,
+        ...patch,
+        tags: patch.tags
+          ? Array.from(new Set(patch.tags.map(normalizeTag).filter(Boolean)))
+          : p.tags,
+        updatedAt: nowIso
+      };
+      if (patch.status === 'solved' && !merged.solvedAt) {
+        merged.solvedAt = nowIso;
+      } else if (patch.status && patch.status !== 'solved') {
+        delete merged.solvedAt;
+      }
+      return merged;
+    });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  const recordProblemRecurrence: StorageContextType['recordProblemRecurrence'] = (id, occurrence) => {
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== id) return p;
+      const nextStatus: ProblemStatus = p.status === 'solved' ? 'open' : p.status;
+      const updated: ProblemEntry = {
+        ...p,
+        status: nextStatus,
+        occurrences: [
+          ...(p.occurrences || []),
+          {
+            date: occurrence.date || getTodayDateString(),
+            sourceType: occurrence.sourceType,
+            ...(occurrence.sourceRef ? { sourceRef: occurrence.sourceRef } : {}),
+            ...(occurrence.note ? { note: occurrence.note } : {})
+          }
+        ],
+        updatedAt: nowIso
+      };
+      delete updated.solvedAt;
+      return updated;
+    });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  const deleteProblem = (id: string) => {
+    commitProblems(problemsRef.current.filter(p => p.id !== id));
+    markLocalMutation();
+  };
+
+  const dispatchProblemFix: StorageContextType['dispatchProblemFix'] = (
+    problemId,
+    destination,
+    customText,
+    targetWeekId
+  ) => {
+    const problem = problemsRef.current.find(p => p.id === problemId);
+    if (!problem) return false;
+
+    const actionText = (customText || problem.fixNote || problem.title).trim();
+    if (!actionText) return false;
+    const normText = actionText.toLowerCase();
+
+    if (destination === 'weekly_plan') {
+      const targetPlan =
+        (targetWeekId ? getWeeklyPlan(targetWeekId) : undefined) ||
+        findBestWeeklyPlanForDate(selectedDateRef.current, weeklyPlansRef.current, selectedWeekIdRef.current) ||
+        getWeeklyPlan(selectedWeekIdRef.current);
+
+      const exists = targetPlan.tasks.some(t => t.text.trim().toLowerCase() === normText);
+      if (!exists) {
+        const nextTasks: TaskItem[] = [
+          ...targetPlan.tasks,
+          {
+            id: `wt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            text: actionText,
+            completed: false,
+            score: 1,
+            notes: `Fix for problem: ${problem.title}`
+          }
+        ];
+        saveWeeklyPlan({
+          ...targetPlan,
+          tasks: nextTasks,
+          achievedScore: computeWeeklyAchievedScore(nextTasks)
+        });
+      }
+    } else {
+      const recMap: Record<Exclude<ProblemDispatchTarget, 'weekly_plan'>, ChecklistItem['recurrence']> = {
+        checklist_oneoff: 'none',
+        checklist_daily: 'daily',
+        checklist_weekly: 'weekly',
+        reps_board: 'tally'
+      };
+      const recurrence = recMap[destination];
+      const existing = checklistItemsRef.current.some(
+        i => i.recurrence === recurrence && i.text.trim().toLowerCase() === normText
+      );
+      if (!existing) {
+        let volumePerRep: number | undefined;
+        let volumeUnit: string | undefined;
+        if (recurrence === 'tally') {
+          const m = actionText.match(/(\d+(?:\.\d+)?)\s*(min|mins|m|hr|hrs|h|ml|l|pages?|reps?|sets?|km|cards?|drills?)\b/i);
+          if (m) {
+            volumePerRep = parseFloat(m[1]);
+            volumeUnit = m[2].toLowerCase();
+          }
+        }
+        const newItem: ChecklistItem = {
+          id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          categoryId: checklistCategoriesRef.current[0]?.id || 'cat_general',
+          text: actionText,
+          recurrence,
+          completed: false,
+          completedPeriods: [],
+          ...(recurrence === 'tally' ? { totalCount: 0 } : {}),
+          ...(volumePerRep !== undefined ? { volumePerRep, volumeUnit } : {}),
+          createdAt: getTodayDateString()
+        };
+        saveChecklistItems([...checklistItemsRef.current, newItem]);
+      }
+    }
+
+    const prevTargets = problem.dispatchedTo || [];
+    const nextTargets = prevTargets.includes(destination)
+      ? prevTargets
+      : [...prevTargets, destination];
+    updateProblem(problemId, {
+      dispatchedTo: nextTargets,
+      ...(problem.status === 'open' ? { status: 'testing' } : {}),
+      ...(customText?.trim() && !problem.fixNote?.trim() ? { fixNote: customText.trim() } : {})
+    });
+    return true;
+  };
+
   const saveTemplate = (template: Template) => {
     const prev = templatesRef.current;
     const idx = prev.findIndex(t => t.id === template.id);
@@ -1852,6 +2141,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       monthlyPlans: monthlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
       strategyPlans: strategyPlansRef.current,
+      problems: problemsRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current
@@ -1881,6 +2171,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         (src.monthlyPlans && typeof src.monthlyPlans === 'object') ||
         (src.yearlyPlans && typeof src.yearlyPlans === 'object') ||
         Array.isArray(src.strategyPlans) ||
+        Array.isArray(src.problems) ||
         Array.isArray(src.reviews) ||
         Array.isArray(src.checklistItems);
 
@@ -1922,6 +2213,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         commitYearlyPlans(cleanedY);
       }
       if (Array.isArray(src.strategyPlans)) commitStrategyPlans(src.strategyPlans);
+      if (Array.isArray(src.problems)) commitProblems(src.problems);
       if (Array.isArray(src.reviews)) commitReviews(src.reviews);
       if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
       if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
@@ -1954,6 +2246,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitMonthlyPlans(INITIAL_MONTHLY_PLANS);
     commitYearlyPlans(INITIAL_YEARLY_PLANS);
     commitStrategyPlans(INITIAL_STRATEGY_PLANS);
+    commitProblems([]);
     commitReviews([]);
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
@@ -1994,6 +2287,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       monthlyPlans: {} as Record<string, MonthlyPlan>,
       yearlyPlans: {} as Record<string, YearlyPlan>,
       strategyPlans: [] as StrategyPlan[],
+      problems: [] as ProblemEntry[],
       reviews: [] as ReviewEntry[],
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
@@ -2012,6 +2306,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitMonthlyPlans(fresh.monthlyPlans);
     commitYearlyPlans(fresh.yearlyPlans);
     commitStrategyPlans(fresh.strategyPlans);
+    commitProblems(fresh.problems);
     commitReviews(fresh.reviews);
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
@@ -2148,6 +2443,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       commitYearlyPlans(cleanedY);
     }
     if (Array.isArray(state.strategyPlans)) commitStrategyPlans(state.strategyPlans);
+    if (Array.isArray(state.problems)) commitProblems(state.problems);
     if (Array.isArray(state.reviews)) commitReviews(state.reviews);
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
@@ -2370,6 +2666,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         localIsNewer || !Array.isArray(cloudState?.strategyPlans)
           ? local.strategyPlans
           : cloudState.strategyPlans,
+      problems:
+        localIsNewer || !Array.isArray(cloudState?.problems)
+          ? local.problems
+          : cloudState.problems,
       reviews: mergedReviews,
       checklistCategories:
         localIsNewer || !Array.isArray(cloudState?.checklistCategories)
@@ -2705,6 +3005,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             monthlyPlans: raw.monthlyPlans,
             yearlyPlans: raw.yearlyPlans,
             strategyPlans: raw.strategyPlans,
+            problems: raw.problems,
             reviews: raw.reviews,
             checklistCategories: raw.checklistCategories,
             checklistItems: raw.checklistItems,
@@ -2764,6 +3065,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         monthlyPlans,
         yearlyPlans,
         strategyPlans,
+        problems,
         reviews,
         checklistCategories,
         checklistItems,
@@ -2815,6 +3117,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saveYearlyPlan,
         saveStrategyPlan,
         deleteStrategyPlan,
+        addProblem,
+        updateProblem,
+        recordProblemRecurrence,
+        deleteProblem,
+        dispatchProblemFix,
         saveTemplate,
         deleteTemplate,
         resetTemplatesToDefault,

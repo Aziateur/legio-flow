@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Copy, Check, ArrowDownToLine, Sparkles, Send } from 'lucide-react';
 import { DailyEntry, GWSSession } from '../../types/schema';
+import { useStorage } from '../../context/StorageContext';
+import { formatProblemsForReviewText, problemOccurredOnDate } from '../../lib/problems';
 
 interface QuickCopyPasteBarProps {
   currentEntry: DailyEntry;
@@ -13,6 +15,7 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
   gwsSessions,
   onApplyParsedPlan
 }) => {
+  const { problems } = useStorage();
   const [copiedType, setCopiedType] = useState<string | null>(null);
   const [pasteInputOpen, setPasteInputOpen] = useState(false);
   const [pastedRawText, setPastedRawText] = useState('');
@@ -54,7 +57,11 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
       });
     }
 
-    if (currentEntry.problemsEncountered && currentEntry.problemsEncountered.trim()) {
+    const dayProblems = problems.filter(p => problemOccurredOnDate(p, currentEntry.date));
+    const formattedProblems = formatProblemsForReviewText(dayProblems);
+    if (formattedProblems) {
+      text += `\nProblems Encountered:\n${formattedProblems}\n`;
+    } else if (currentEntry.problemsEncountered && currentEntry.problemsEncountered.trim()) {
       text += `\nProblems Encountered:\n${currentEntry.problemsEncountered.trim()}\n`;
     }
 

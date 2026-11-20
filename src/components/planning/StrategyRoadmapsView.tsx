@@ -5,6 +5,7 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
+import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
   BookOpen,
   Plus,
@@ -592,6 +593,20 @@ export const StrategyRoadmapsView: React.FC = () => {
                   })}
                 </div>
               </div>
+
+              {/* Linked Plan Blockers (Problems tagged with this Roadmap Plan) */}
+              <ProblemLoggerPanel
+                key={`roadmap_probs_${activePlan.id}_${activePlan.title}`}
+                mode="roadmap"
+                title={`Linked Problems (#${activePlan.title || 'Plan'})`}
+                subtitle="Problems tagged with this plan from any review automatically surface here so you see what's blocking your next gate."
+                sourceType="roadmap"
+                date={selectedDate}
+                sourceRef={activePlan.title}
+                filterTag={activePlan.title}
+                targetWeekId={activeWeeklyPlan?.id || selectedWeekId}
+                defaultCollapsed={true}
+              />
 
               {/* Sequential Written Stages */}
               <div className="space-y-5">

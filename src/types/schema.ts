@@ -226,3 +226,58 @@ export interface StrategyPlan {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ProblemCategory =
+  | 'mindset'
+  | 'skill'
+  | 'logistics'
+  | 'energy'
+  | 'strategy';
+
+export type ProblemStatus = 'open' | 'testing' | 'solved';
+
+export type ProblemFixType =
+  | 'task'
+  | 'habit_rewire'
+  | 'skill_reps'
+  | 'rule_guardrail'
+  | 'plan_change'
+  | 'watch';
+
+export type ProblemSourceType =
+  | 'gws'
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+  | 'quarterly'
+  | 'yearly'
+  | 'roadmap';
+
+export type ProblemDispatchTarget =
+  | 'weekly_plan'
+  | 'checklist_oneoff'
+  | 'checklist_daily'
+  | 'checklist_weekly'
+  | 'reps_board';
+
+export interface ProblemOccurrence {
+  date: string; // YYYY-MM-DD
+  sourceType: ProblemSourceType;
+  sourceRef?: string;
+  note?: string;
+}
+
+export interface ProblemEntry {
+  id: string;
+  title: string;
+  category: ProblemCategory;
+  tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags (e.g. "sleep", "bootcamp")
+  status: ProblemStatus;
+  occurrences: ProblemOccurrence[];
+  fixType?: ProblemFixType;
+  fixNote?: string;
+  dispatchedTo?: ProblemDispatchTarget[];
+  createdAt: string;
+  updatedAt: string;
+  solvedAt?: string;
+}

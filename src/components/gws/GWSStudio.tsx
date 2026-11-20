@@ -7,6 +7,8 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { GWSSession } from '../../types/schema';
+import { ProblemCategory } from '../../types/schema';
+import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
   Play, 
   Pause, 
@@ -43,7 +45,10 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     saveDailyEntry,
     weeklyPlans,
     selectedWeekId,
-    saveWeeklyPlan
+    saveWeeklyPlan,
+    problems,
+    addProblem,
+    recordProblemRecurrence
   } = useStorage();
 
   const currentDailyEntry = getEntryForDate(selectedDate);
@@ -80,7 +85,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
 
   // Reflexions
   const [accomplished, setAccomplished] = useState('');
-  const [heldBack, setHeldBack] = useState('');
+  const [heldBackDraft, setHeldBackDraft] = useState('');
+  const [heldBackCategory, setHeldBackCategory] = useState<ProblemCategory>('mindset');
+  const [heldBackTags, setHeldBackTags] = useState<string[]>([]);
   const [improveNext, setImproveNext] = useState('');
 
   // History filtering
@@ -198,6 +205,29 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     }
 
     const sessionActual = actualMinutes > 0 ? actualMinutes : (plannedMinutes || 45);
+    const trimmedDraft = heldBackDraft.trim();
+
+    if (trimmedDraft) {
+      const existing = problems.find(
+        p => p.title.trim().toLowerCase() === trimmedDraft.toLowerCase()
+      );
+      if (existing) {
+        recordProblemRecurrence(existing.id, {
+          date: selectedDate,
+          sourceType: 'gws',
+          sourceRef: taskName.trim()
+        });
+      } else {
+        addProblem({
+          title: trimmedDraft,
+          category: heldBackCategory,
+          tags: heldBackTags,
+          sourceType: 'gws',
+          date: selectedDate,
+          sourceRef: taskName.trim()
+        });
+      }
+    }
 
     addGWSSession({
       date: selectedDate,
@@ -212,7 +242,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       },
       reflexions: {
         accomplished: accomplished.trim(),
-        heldBack: heldBack.trim(),
+        heldBack: trimmedDraft,
         improveNext: improveNext.trim()
       }
     });
@@ -281,7 +311,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     setLinkedPriorityId(null);
     handleResetTimer();
     setAccomplished('');
-    setHeldBack('');
+    setHeldBackDraft('');
+    setHeldBackTags([]);
     setImproveNext('');
 
     if (isModal && onClose) {
@@ -602,19 +633,21 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                 />
               </div>
 
-              {/* 2. What held me back? */}
-              <div className="space-y-1">
-                <label className="block text-xs font-medium text-slate-400">
-                  2. What held me back?
-                </label>
-                <textarea
-                  value={heldBack}
-                  onChange={(e) => setHeldBack(e.target.value)}
-                  placeholder="Distractions, lack of clarity, rabbit holes, fatigue..."
-                  rows={2}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-none transition-colors"
-                />
-              </div>
+              {/* 2. What held me back? (Structured Problem Logger) */}
+              <ProblemLoggerPanel
+                mode="compact"
+                title="2. What held me back? (Log Problem)"
+                sourceType="gws"
+                date={selectedDate}
+                sourceRef={taskName.trim() || 'GWS Sprint'}
+                targetWeekId={selectedWeekId}
+                draftText={heldBackDraft}
+                onDraftTextChange={setHeldBackDraft}
+                draftCategory={heldBackCategory}
+                onDraftCategoryChange={setHeldBackCategory}
+                draftTags={heldBackTags}
+                onDraftTagsChange={setHeldBackTags}
+              />
 
               {/* 3. What will I improve next session? */}
               <div className="space-y-1">

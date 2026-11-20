@@ -8,6 +8,7 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
+import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
   Target, 
   Gift, 
@@ -869,6 +870,18 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         </div>
 
       </div>
+
+      {/* Weekly Problem Triage & Active Fixes (Only on Weekly Planning) */}
+      <ProblemLoggerPanel
+        mode="weekly_triage"
+        title={`Week ${plan.weekNumber} Problem Triage & Active Fixes`}
+        subtitle="Turn open review problems into concrete tasks, habit rewires, skill reps, rules, or plan changes — then push them straight into this week."
+        sourceType="weekly"
+        date={selectedDate}
+        sourceRef={plan.id}
+        targetWeekId={plan.id}
+        defaultCollapsed={false}
+      />
 
     </div>
   );
