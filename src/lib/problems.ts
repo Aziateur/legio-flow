@@ -3,8 +3,80 @@ import {
   ProblemDispatchTarget,
   ProblemEntry,
   ProblemFixType,
+  ProblemScale,
+  ProblemSourceType,
   ProblemStatus
 } from '../types/schema';
+
+export interface ProblemScaleMeta {
+  id: ProblemScale;
+  label: string;
+  shortLabel: string;
+  rank: 1 | 2 | 3;
+  hint: string;
+  badgeClass: string;
+  activeChipClass: string;
+}
+
+export const PROBLEM_SCALES: ProblemScaleMeta[] = [
+  {
+    id: 'friction',
+    label: 'Friction',
+    shortLabel: 'Friction',
+    rank: 1,
+    hint: 'Small day-to-day symptom or slip (GWS / Daily). Can cluster into a Bottleneck or Blocker.',
+    badgeClass: 'bg-slate-800/90 text-slate-400 border-slate-700',
+    activeChipClass: 'bg-slate-200 text-slate-950 border-slate-100'
+  },
+  {
+    id: 'bottleneck',
+    label: 'Bottleneck',
+    shortLabel: 'Bottleneck',
+    rank: 2,
+    hint: 'Recurring weekly pattern that clusters related Friction. Fix once at this level.',
+    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeChipClass: 'bg-amber-400 text-slate-950 border-amber-300'
+  },
+  {
+    id: 'blocker',
+    label: 'Blocker',
+    shortLabel: 'Blocker',
+    rank: 3,
+    hint: 'Major structural constraint blocking a Month, Quarter, or Roadmap Stage Gate.',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+    activeChipClass: 'bg-rose-500 text-slate-950 border-rose-400'
+  }
+];
+
+export const SCALE_MAP: Record<ProblemScale, ProblemScaleMeta> = PROBLEM_SCALES.reduce(
+  (acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  },
+  {} as Record<ProblemScale, ProblemScaleMeta>
+);
+
+export const SCALE_RANK: Record<ProblemScale, number> = {
+  friction: 1,
+  bottleneck: 2,
+  blocker: 3
+};
+
+export const defaultScaleForSource = (sourceType?: ProblemSourceType): ProblemScale => {
+  if (sourceType === 'weekly') return 'bottleneck';
+  if (
+    sourceType === 'monthly' ||
+    sourceType === 'quarterly' ||
+    sourceType === 'yearly' ||
+    sourceType === 'roadmap'
+  ) {
+    return 'blocker';
+  }
+  return 'friction';
+};
+
+export const getProblemScale = (problem: ProblemEntry): ProblemScale =>
+  problem.scale || 'friction';
 
 export interface ProblemCategoryMeta {
   id: ProblemCategory;
@@ -203,6 +275,130 @@ export const getLastOccurrenceDate = (problem: ProblemEntry): string => {
   return dates[dates.length - 1] || problem.createdAt.slice(0, 10);
 };
 
+// --- CLUSTERING HELPERS (Friction -> Bottleneck -> Blocker) ---
+
+export const getDirectChildren = (
+  allProblems: ProblemEntry[],
+  parentId: string
+): ProblemEntry[] => allProblems.filter(p => p.parentProblemId === parentId);
+
+export const getDescendantProblems = (
+  allProblems: ProblemEntry[],
+  parentId: string
+): ProblemEntry[] => {
+  const result: ProblemEntry[] = [];
+  const visited = new Set<string>([parentId]);
+  const queue = [parentId];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const p of allProblems) {
+      if (p.parentProblemId === cur && !visited.has(p.id)) {
+        visited.add(p.id);
+        result.push(p);
+        queue.push(p.id);
+      }
+    }
+  }
+  return result;
+};
+
+export const getClusterTotalHits = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry
+): number => {
+  const own = Math.max(1, problem.occurrences?.length || 1);
+  const descendants = getDescendantProblems(allProblems, problem.id);
+  return descendants.reduce((sum, d) => sum + Math.max(1, d.occurrences?.length || 1), own);
+};
+
+export const clusterOccurredOnDate = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  date: string
+): boolean => {
+  if (problemOccurredOnDate(problem, date)) return true;
+  return getDescendantProblems(allProblems, problem.id).some(d =>
+    problemOccurredOnDate(d, date)
+  );
+};
+
+export const clusterOccurredInRange = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  startDate: string,
+  endDate: string
+): boolean => {
+  if (problemOccurredInRange(problem, startDate, endDate)) return true;
+  return getDescendantProblems(allProblems, problem.id).some(d =>
+    problemOccurredInRange(d, startDate, endDate)
+  );
+};
+
+export const countClusterOccurrencesInRange = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  startDate: string,
+  endDate: string
+): number => {
+  const own = countOccurrencesInRange(problem, startDate, endDate);
+  const descendants = getDescendantProblems(allProblems, problem.id);
+  return descendants.reduce(
+    (sum, d) => sum + countOccurrencesInRange(d, startDate, endDate),
+    own
+  );
+};
+
+export const clusterHasTag = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  tag: string
+): boolean => {
+  if (problemHasTag(problem, tag)) return true;
+  return getDescendantProblems(allProblems, problem.id).some(d => problemHasTag(d, tag));
+};
+
+export const clusterHasSourceType = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  sourceType: ProblemSourceType
+): boolean => {
+  if ((problem.occurrences || []).some(o => o.sourceType === sourceType)) return true;
+  return getDescendantProblems(allProblems, problem.id).some(d =>
+    (d.occurrences || []).some(o => o.sourceType === sourceType)
+  );
+};
+
+export const hasExistingParent = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry
+): boolean =>
+  Boolean(problem.parentProblemId && allProblems.some(p => p.id === problem.parentProblemId));
+
+export const getEligibleParentProblems = (
+  allProblems: ProblemEntry[],
+  childScale: ProblemScale,
+  excludeId?: string
+): ProblemEntry[] => {
+  const childRank = SCALE_RANK[childScale];
+  const descendants = excludeId
+    ? new Set(getDescendantProblems(allProblems, excludeId).map(d => d.id))
+    : new Set<string>();
+  return allProblems
+    .filter(p => {
+      if (excludeId && (p.id === excludeId || descendants.has(p.id))) return false;
+      return SCALE_RANK[getProblemScale(p)] > childRank;
+    })
+    .sort((a, b) => {
+      // Active parents first, then higher scale, then most recent
+      const sa = a.status === 'solved' ? 1 : 0;
+      const sb = b.status === 'solved' ? 1 : 0;
+      if (sa !== sb) return sa - sb;
+      const rDiff = SCALE_RANK[getProblemScale(b)] - SCALE_RANK[getProblemScale(a)];
+      if (rDiff !== 0) return rDiff;
+      return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    });
+};
+
 export const guessProblemCategory = (text: string): ProblemCategory => {
   const lower = text.toLowerCase();
   if (/(sleep|tired|fatigue|energy|exhaust|burnout|wake|night|bed|health|sick|headache)/.test(lower)) {
@@ -220,18 +416,31 @@ export const guessProblemCategory = (text: string): ProblemCategory => {
   return 'mindset';
 };
 
-export const formatProblemsForReviewText = (list: ProblemEntry[]): string => {
+export const formatProblemsForReviewText = (
+  list: ProblemEntry[],
+  allProblems?: ProblemEntry[]
+): string => {
   if (list.length === 0) return '';
-  return list
+  const sourcePool = allProblems || list;
+  // Format top-level items (folding clustered children under their parent if parent is in list)
+  const listIds = new Set(list.map(p => p.id));
+  const topLevel = list.filter(p => !p.parentProblemId || !listIds.has(p.parentProblemId));
+
+  return topLevel
     .map(p => {
       const cat = CATEGORY_MAP[p.category]?.shortLabel || p.category;
-      const count = p.occurrences.length > 1 ? ` (×${p.occurrences.length})` : '';
+      const scale = SCALE_MAP[getProblemScale(p)]?.shortLabel || 'Friction';
+      const children = getDescendantProblems(sourcePool, p.id);
+      const hits = getClusterTotalHits(sourcePool, p);
+      const count = hits > 1 ? ` (×${hits})` : '';
+      const childSummary =
+        children.length > 0 ? ` [${children.length} linked]` : '';
       const tagStr = p.tags.length > 0 ? ` [${p.tags.map(t => `#${t}`).join(' ')}]` : '';
       const fixStr = p.fixNote?.trim()
         ? ` → ${p.fixType ? `${FIX_TYPE_MAP[p.fixType].shortLabel}: ` : ''}${p.fixNote.trim()}`
         : '';
       const statusStr = p.status === 'solved' ? ' ✓Solved' : p.status === 'testing' ? ' ⟳Testing' : '';
-      return `• [${cat}]${statusStr} ${p.title}${count}${tagStr}${fixStr}`;
+      return `• [${scale} · ${cat}]${statusStr} ${p.title}${count}${childSummary}${tagStr}${fixStr}`;
     })
     .join('\n');
 };

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ProblemCategory,
   ProblemDispatchTarget,
   ProblemEntry,
   ProblemFixType,
+  ProblemScale,
   ProblemSourceType
 } from '../../types/schema';
 import {
@@ -12,8 +13,15 @@ import {
   FIX_TYPE_MAP,
   PROBLEM_CATEGORIES,
   PROBLEM_FIX_TYPES,
+  PROBLEM_SCALES,
+  SCALE_MAP,
   STATUS_META,
+  getClusterTotalHits,
+  getDescendantProblems,
+  getDirectChildren,
+  getEligibleParentProblems,
   getLastOccurrenceDate,
+  getProblemScale,
   normalizeTag,
   tagsMatch
 } from '../../lib/problems';
@@ -22,6 +30,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  CornerDownRight,
+  Layers,
   Map as MapIcon,
   Plus,
   RotateCcw,
@@ -29,6 +39,7 @@ import {
   Shield,
   Tag,
   Trash2,
+  Unlink,
   Wrench,
   X
 } from 'lucide-react';
@@ -42,6 +53,8 @@ interface ProblemItemRowProps {
   periodOccurrenceCount?: number;
   compact?: boolean;
   defaultExpanded?: boolean;
+  showParentBreadcrumb?: boolean;
+  nested?: boolean;
 }
 
 export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
@@ -52,20 +65,26 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   targetWeekId,
   periodOccurrenceCount,
   compact = false,
-  defaultExpanded = false
+  defaultExpanded = false,
+  showParentBreadcrumb = false,
+  nested = false
 }) => {
   const {
+    problems,
     strategyPlans,
     updateProblem,
     recordProblemRecurrence,
+    clusterIntoNewParent,
     deleteProblem,
     dispatchProblemFix
   } = useStorage();
 
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [childrenOpen, setChildrenOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState(problem.title);
   const [fixNoteDraft, setFixNoteDraft] = useState(problem.fixNote || '');
   const [tagInput, setTagInput] = useState('');
+  const [newParentTitle, setNewParentTitle] = useState('');
   const [justLoggedPlusOne, setJustLoggedPlusOne] = useState(false);
   const [dispatchFeedback, setDispatchFeedback] = useState<string | null>(null);
 
@@ -77,12 +96,35 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     setFixNoteDraft(problem.fixNote || '');
   }, [problem.fixNote]);
 
+  const scale = getProblemScale(problem);
+  const scaleMeta = SCALE_MAP[scale];
   const catMeta = CATEGORY_MAP[problem.category] || CATEGORY_MAP.mindset;
   const statusMeta = STATUS_META[problem.status] || STATUS_META.open;
   const fixMeta = problem.fixType ? FIX_TYPE_MAP[problem.fixType] : null;
-  const totalCount = Math.max(1, (problem.occurrences || []).length);
   const lastDate = getLastOccurrenceDate(problem);
   const roadmapTitles = strategyPlans.map(p => p.title.trim()).filter(Boolean);
+
+  const directChildren = useMemo(
+    () => getDirectChildren(problems, problem.id),
+    [problems, problem.id]
+  );
+  const allDescendants = useMemo(
+    () => getDescendantProblems(problems, problem.id),
+    [problems, problem.id]
+  );
+  const clusterHits = useMemo(
+    () => getClusterTotalHits(problems, problem),
+    [problems, problem]
+  );
+  const parentProblem = useMemo(
+    () => (problem.parentProblemId ? problems.find(p => p.id === problem.parentProblemId) : undefined),
+    [problems, problem.parentProblemId]
+  );
+  const eligibleParents = useMemo(
+    () => getEligibleParentProblems(problems, scale, problem.id),
+    [problems, scale, problem.id]
+  );
+  const activeDescendantCount = allDescendants.filter(d => d.status !== 'solved').length;
 
   const handlePlusOne = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -147,24 +189,59 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     }
   };
 
+  const handleChangeScale = (nextScale: ProblemScale) => {
+    // If promoting to blocker (highest level), clear any parent link; if current parent isn't strictly larger, clear it
+    const nextPatch: Partial<ProblemEntry> = { scale: nextScale };
+    if (parentProblem) {
+      const parentScale = getProblemScale(parentProblem);
+      const rank = { friction: 1, bottleneck: 2, blocker: 3 };
+      if (rank[parentScale] <= rank[nextScale]) {
+        nextPatch.parentProblemId = undefined;
+      }
+    }
+    updateProblem(problem.id, nextPatch);
+  };
+
+  const handleCreateAndCluster = () => {
+    const trimmed = newParentTitle.trim();
+    if (!trimmed) return;
+    const targetParentScale: 'bottleneck' | 'blocker' =
+      scale === 'bottleneck' ? 'blocker' : 'bottleneck';
+    clusterIntoNewParent(problem.id, trimmed, targetParentScale);
+    setNewParentTitle('');
+    setExpanded(false);
+  };
+
   const isRoadmapTag = (tag: string) => roadmapTitles.some(rt => tagsMatch(rt, tag));
 
   return (
     <div
       className={`rounded-2xl border transition-all ${
-        problem.status === 'solved'
+        nested
+          ? 'bg-slate-900/70 border-slate-800/80'
+          : problem.status === 'solved'
           ? 'bg-slate-950/60 border-emerald-500/25'
+          : scale === 'blocker'
+          ? 'bg-slate-950/95 border-rose-500/30 hover:border-rose-500/45'
+          : scale === 'bottleneck'
+          ? 'bg-slate-950/95 border-amber-500/25 hover:border-amber-500/40'
           : problem.status === 'testing'
           ? 'bg-slate-950/90 border-sky-500/30'
           : 'bg-slate-950/90 border-slate-800 hover:border-slate-700'
       }`}
     >
       {/* Main Row */}
-      <div className={`${compact ? 'p-2.5' : 'p-3.5'} space-y-2`}>
+      <div className={`${compact || nested ? 'p-2.5' : 'p-3.5'} space-y-2`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0 space-y-1.5">
             {/* Badges Line */}
             <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold uppercase tracking-wider ${scaleMeta.badgeClass}`}
+                title={scaleMeta.hint}
+              >
+                {scaleMeta.shortLabel}
+              </span>
               <span
                 className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold uppercase tracking-wider ${statusMeta.badgeClass}`}
               >
@@ -175,14 +252,14 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               >
                 {catMeta.shortLabel}
               </span>
-              {totalCount > 1 && (
+              {clusterHits > 1 && (
                 <span
                   className="px-1.5 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/30 text-orange-300 font-mono text-[10px] font-extrabold"
-                  title={`Occurred ${totalCount} times total (last: ${lastDate})`}
+                  title={`${clusterHits} total hits across this problem${allDescendants.length > 0 ? ' and its linked items' : ''} (last: ${lastDate})`}
                 >
-                  ×{totalCount}
+                  ×{clusterHits}
                   {periodOccurrenceCount !== undefined &&
-                  periodOccurrenceCount !== totalCount &&
+                  periodOccurrenceCount !== clusterHits &&
                   periodOccurrenceCount > 0
                     ? ` (${periodOccurrenceCount} here)`
                     : ''}
@@ -197,6 +274,15 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               <span className="text-[10px] font-mono text-slate-500">{lastDate}</span>
             </div>
 
+            {/* Parent Breadcrumb (when shown in flat/search view) */}
+            {showParentBreadcrumb && parentProblem && (
+              <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/80">
+                <CornerDownRight className="w-3 h-3 shrink-0" />
+                <span>Inside {SCALE_MAP[getProblemScale(parentProblem)].shortLabel}:</span>
+                <span className="text-slate-300 truncate max-w-[260px]">{parentProblem.title}</span>
+              </div>
+            )}
+
             {/* Problem Title */}
             <p
               className={`text-xs sm:text-sm font-semibold leading-snug break-words ${
@@ -206,9 +292,32 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               {problem.title}
             </p>
 
-            {/* Tags */}
-            {problem.tags.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1">
+            {/* Tags + Clustered Children Fold Pill */}
+            {(problem.tags.length > 0 || directChildren.length > 0) && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {directChildren.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setChildrenOpen(prev => !prev)}
+                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full border text-[10px] font-extrabold transition-colors ${
+                      childrenOpen
+                        ? 'bg-amber-500/20 text-amber-200 border-amber-500/45'
+                        : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/30'
+                    }`}
+                  >
+                    <Layers className="w-2.5 h-2.5 shrink-0" />
+                    <span>
+                      {directChildren.length} linked{' '}
+                      {directChildren.length === 1 ? 'item' : 'items'}
+                    </span>
+                    {childrenOpen ? (
+                      <ChevronUp className="w-2.5 h-2.5" />
+                    ) : (
+                      <ChevronDown className="w-2.5 h-2.5" />
+                    )}
+                  </button>
+                )}
+
                 {problem.tags.map(tag => (
                   <span
                     key={tag}
@@ -273,11 +382,26 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               {justLoggedPlusOne ? 'Logged!' : '+1'}
             </button>
 
+            {nested && parentProblem && (
+              <button
+                type="button"
+                onClick={() => updateProblem(problem.id, { parentProblemId: undefined })}
+                title="Unlink from parent cluster"
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-300 border border-slate-800 transition-colors"
+              >
+                <Unlink className="w-3 h-3" />
+              </button>
+            )}
+
             {problem.status === 'testing' && (
               <button
                 type="button"
                 onClick={() => updateProblem(problem.id, { status: 'solved' })}
-                title="Fix worked — mark verified Solved"
+                title={
+                  activeDescendantCount > 0
+                    ? `Fix worked — mark Solved & close ${activeDescendantCount} linked item(s)`
+                    : 'Fix worked — mark verified Solved'
+                }
                 className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 transition-colors"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -303,7 +427,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
               }`}
-              title="Assign fix, push to plan/checklist, or edit tags"
+              title="Solve, group under bigger problem, or edit"
             >
               <Wrench className="w-3 h-3" />
               <span className="hidden sm:inline">{problem.fixType ? 'Fix' : 'Solve'}</span>
@@ -326,10 +450,34 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
         </div>
       </div>
 
-      {/* Expandable Feedback Loop & Fix Drawer */}
+      {/* Nested Clustered Children (Collapsed by Default for Zero Clutter) */}
+      {childrenOpen && directChildren.length > 0 && (
+        <div className="px-3.5 pb-3 pt-2 border-t border-slate-800/70 bg-slate-950/50 space-y-1.5">
+          <div className="flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+            <CornerDownRight className="w-3 h-3 text-amber-400" />
+            <span>Clustered inside this {scaleMeta.shortLabel} ({directChildren.length})</span>
+          </div>
+          <div className="space-y-1.5 pl-2 border-l border-amber-500/25">
+            {directChildren.map(child => (
+              <ProblemItemRow
+                key={child.id}
+                problem={child}
+                contextDate={contextDate}
+                contextSourceType={contextSourceType}
+                contextSourceRef={contextSourceRef}
+                targetWeekId={targetWeekId}
+                compact
+                nested
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Expandable Feedback Loop, Clustering & Fix Drawer */}
       {expanded && (
         <div className="px-3.5 pb-3.5 pt-2.5 border-t border-slate-800/80 bg-slate-900/40 space-y-3 rounded-b-2xl">
-          {/* Editable Title & Category */}
+          {/* Editable Title, Scale & Category */}
           <div className="space-y-2">
             <input
               type="text"
@@ -353,26 +501,120 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               placeholder="Problem description..."
             />
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-                Category:
-              </span>
-              {PROBLEM_CATEGORIES.map(c => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => updateProblem(problem.id, { category: c.id as ProblemCategory })}
-                  className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
-                    problem.category === c.id
-                      ? c.activeChipClass
-                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                  }`}
-                >
-                  {c.shortLabel}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              {/* Scale Selector */}
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                  Scale:
+                </span>
+                {PROBLEM_SCALES.map(sc => (
+                  <button
+                    key={sc.id}
+                    type="button"
+                    onClick={() => handleChangeScale(sc.id)}
+                    title={sc.hint}
+                    className={`px-2 py-0.5 rounded-lg border text-[10px] font-extrabold transition-all ${
+                      scale === sc.id
+                        ? sc.activeChipClass
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {sc.shortLabel}
+                  </button>
+                ))}
+              </div>
+
+              {/* Category Selector */}
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                  Category:
+                </span>
+                {PROBLEM_CATEGORIES.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => updateProblem(problem.id, { category: c.id as ProblemCategory })}
+                    className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
+                      problem.category === c.id
+                        ? c.activeChipClass
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {c.shortLabel}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+
+          {/* Cluster / Group Under Bigger Problem (for Friction & Bottleneck) */}
+          {scale !== 'blocker' && (
+            <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-2.5 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="inline-flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+                  <Layers className="w-3 h-3" />
+                  <span>
+                    Group under bigger {scale === 'friction' ? 'Bottleneck / Blocker' : 'Blocker'}
+                  </span>
+                </span>
+                {parentProblem && (
+                  <button
+                    type="button"
+                    onClick={() => updateProblem(problem.id, { parentProblemId: undefined })}
+                    className="inline-flex items-center space-x-1 text-[10px] font-bold text-slate-400 hover:text-rose-400"
+                  >
+                    <Unlink className="w-2.5 h-2.5" />
+                    <span>Unlink</span>
+                  </button>
+                )}
+              </div>
+
+              {eligibleParents.length > 0 && (
+                <select
+                  value={problem.parentProblemId || ''}
+                  onChange={e =>
+                    updateProblem(problem.id, {
+                      parentProblemId: e.target.value || undefined
+                    })
+                  }
+                  className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
+                >
+                  <option value="">Not grouped (standalone {scaleMeta.shortLabel})</option>
+                  {eligibleParents.map(ep => (
+                    <option key={ep.id} value={ep.id}>
+                      [{SCALE_MAP[getProblemScale(ep)].shortLabel}] {ep.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {/* 1-click create & cluster into a brand-new Root Bottleneck/Blocker */}
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={newParentTitle}
+                  onChange={e => setNewParentTitle(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleCreateAndCluster();
+                    }
+                  }}
+                  placeholder={`Or cluster into new ${scale === 'bottleneck' ? 'Blocker' : 'Bottleneck'} (Enter)...`}
+                  className="flex-1 bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={!newParentTitle.trim()}
+                  onClick={handleCreateAndCluster}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-300 border border-amber-500/35 text-[11px] font-bold shrink-0"
+                >
+                  + Cluster
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Tags / Linked Plans */}
           <div className="space-y-1.5">
@@ -580,13 +822,17 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 }`}
               >
                 <CheckCircle2 className="w-3 h-3" />
-                <span>Verified Solved</span>
+                <span>
+                  {activeDescendantCount > 0
+                    ? `Verified Solved (Closes ${activeDescendantCount + 1})`
+                    : 'Verified Solved'}
+                </span>
               </button>
             </div>
 
             {problem.occurrences.length > 0 && (
               <span className="text-[10px] text-slate-500 font-mono">
-                {problem.occurrences.length} log{problem.occurrences.length === 1 ? '' : 's'} · last {lastDate}
+                {clusterHits} hit{clusterHits === 1 ? '' : 's'} · last {lastDate}
               </span>
             )}
           </div>

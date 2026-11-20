@@ -14,6 +14,7 @@ import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import {
   formatProblemsForReviewText,
+  hasExistingParent,
   problemOccurredInRange,
   problemOccurredOnDate
 } from '../../lib/problems';
@@ -228,7 +229,9 @@ export const ReviewHub: React.FC = () => {
   const [modalProblemCategory, setModalProblemCategory] = useState<ProblemCategory>('mindset');
   const [modalProblemTags, setModalProblemTags] = useState<string[]>([]);
 
-  const activeProblemCount = problems.filter(p => p.status !== 'solved').length;
+  const activeProblemCount = problems.filter(
+    p => p.status !== 'solved' && !hasExistingParent(problems, p)
+  ).length;
 
   // Create Review Modal state
   const [showCreateReviewModal, setShowCreateReviewModal] = useState(false);
@@ -1357,78 +1360,43 @@ export const ReviewHub: React.FC = () => {
   return (
     <div className="space-y-6">
       
-      {/* Top Unified Review Window Switcher Bar */}
-      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-2 sm:p-2.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
-          
-          <div className="flex items-center space-x-3 px-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <BookOpen className="w-5 h-5" />
+      {/* Top Unified Review Window Switcher Bar (Cleanly separated: Reviews by Scale vs. Ledgers) */}
+      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-2.5 sm:px-3.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
+
+          <div className="flex items-center space-x-2.5 px-1.5 shrink-0">
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
+              <BookOpen className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
-                Review Command & Vault
+                Review Hub
               </div>
-              <div className="text-sm font-extrabold text-slate-100">
-                {reviewSubTab === 'vault' && 'All Reviews Vault (Where All Reviews Live)'}
-                {reviewSubTab === 'problems' && 'Problem Log & Feedback Loop (Categories, Tags & Active Fixes)'}
-                {reviewSubTab === 'daily' && 'Daily Review & Reflexion'}
-                {reviewSubTab === 'gws' && 'GWS Sprint Telemetry & Bottlenecks'}
-                {reviewSubTab === 'weekly' && 'Weekly Retrospective & Milestones'}
-                {reviewSubTab === 'monthly' && 'Monthly Review (Contains Weekly, Daily & GWS Data)'}
-                {reviewSubTab === 'quarterly' && 'Quarterly Review (Contains Monthly, Weekly, Daily & GWS Data)'}
-                {reviewSubTab === 'yearly' && 'Yearly Review (Contains Quarterly, Monthly, Weekly, Daily & GWS Data)'}
+              <div className="text-sm font-extrabold text-slate-100 whitespace-nowrap">
+                {reviewSubTab === 'vault' && 'Review Vault'}
+                {reviewSubTab === 'problems' && 'Problem Log'}
+                {reviewSubTab === 'gws' && 'GWS Review'}
+                {reviewSubTab === 'daily' && 'Daily Review'}
+                {reviewSubTab === 'weekly' && 'Weekly Review'}
+                {reviewSubTab === 'monthly' && 'Monthly Review'}
+                {reviewSubTab === 'quarterly' && 'Quarterly Review'}
+                {reviewSubTab === 'yearly' && 'Yearly Review'}
               </div>
             </div>
           </div>
 
-          {/* Switcher & Action Button */}
-          <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
-            
-            {/* Segmented Switcher Controls filtered by systemLevel */}
-            <div className="flex items-center space-x-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80 overflow-x-auto">
-              <button
-                onClick={() => setReviewSubTab('vault')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
-                  reviewSubTab === 'vault'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Vault ({allVaultItems.length})</span>
-              </button>
+          {/* Static Wrapping Controls: Group 1 (Reviews by Time Scale) + Group 2 (Ledgers) + Action */}
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
 
-              <button
-                onClick={() => setReviewSubTab('problems')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
-                  reviewSubTab === 'problems'
-                    ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>Problems{activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}</span>
-              </button>
-
-              <button
-                onClick={() => setReviewSubTab('daily')}
-                className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
-                  reviewSubTab === 'daily'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <CalendarIcon className="w-3.5 h-3.5" />
-                <span>Daily</span>
-              </button>
-
+            {/* Group 1: Time-Scale Reviews (Smallest -> Largest) */}
+            <div className="flex flex-wrap items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
               {systemLevel >= 2 && (
                 <button
+                  type="button"
                   onClick={() => setReviewSubTab('gws')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'gws'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -1437,12 +1405,26 @@ export const ReviewHub: React.FC = () => {
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={() => setReviewSubTab('daily')}
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  reviewSubTab === 'daily'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <CalendarIcon className="w-3.5 h-3.5" />
+                <span>Daily</span>
+              </button>
+
               {systemLevel >= 3 && (
                 <button
+                  type="button"
                   onClick={() => setReviewSubTab('weekly')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'weekly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -1453,10 +1435,11 @@ export const ReviewHub: React.FC = () => {
 
               {systemLevel >= 4 && (
                 <button
+                  type="button"
                   onClick={() => setReviewSubTab('monthly')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'monthly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -1467,10 +1450,11 @@ export const ReviewHub: React.FC = () => {
 
               {systemLevel >= 4 && (
                 <button
+                  type="button"
                   onClick={() => setReviewSubTab('quarterly')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'quarterly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -1481,10 +1465,11 @@ export const ReviewHub: React.FC = () => {
 
               {systemLevel >= 5 && (
                 <button
+                  type="button"
                   onClick={() => setReviewSubTab('yearly')}
-                  className={`flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'yearly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -1494,8 +1479,38 @@ export const ReviewHub: React.FC = () => {
               )}
             </div>
 
-            {/* Clear PROMINENT "Create Review" Button */}
+            {/* Group 2: Cross-Cutting Ledgers (Problems & Vault) */}
+            <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setReviewSubTab('problems')}
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  reviewSubTab === 'problems'
+                    ? 'bg-orange-500 text-slate-950 shadow-sm shadow-orange-500/20'
+                    : 'text-slate-300 hover:text-orange-300 hover:bg-slate-900'
+                }`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Problems{activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setReviewSubTab('vault')}
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  reviewSubTab === 'vault'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Vault ({allVaultItems.length})</span>
+              </button>
+            </div>
+
+            {/* Compact Single-Plus Action Button */}
             <button
+              type="button"
               onClick={() => {
                 setCreateReviewType(
                   reviewSubTab === 'yearly'
@@ -1512,10 +1527,11 @@ export const ReviewHub: React.FC = () => {
                 );
                 setShowCreateReviewModal(true);
               }}
-              className="flex items-center space-x-1.5 px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95 shrink-0"
+              className="flex items-center space-x-1 px-3 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95 shrink-0"
+              title="Quick-create a review entry"
             >
-              <Plus className="w-4 h-4" />
-              <span>+ Create Review</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>New</span>
             </button>
 
           </div>
@@ -3289,19 +3305,18 @@ export const ReviewHub: React.FC = () => {
                   </h2>
                 </div>
 
-                {(mData.rolledUpWins.length > 0 || mData.rolledUpProblems.length > 0 || mData.rolledUpCorrections.length > 0) && (
+                {(mData.rolledUpWins.length > 0 || mData.rolledUpCorrections.length > 0) && (
                   <button
                     type="button"
                     onClick={() => {
                       upsertMonthlyReview(selectedMonth, {
                         wins: mergeUniqueLines(monthWins, mData.rolledUpWins),
-                        blockers: mergeUniqueLines(monthProblems, mData.rolledUpProblems),
                         courseCorrections: mergeUniqueLines(monthCorrections, mData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 text-xs font-bold transition-all"
                   >
-                    + Auto-Import All Smaller-Scale Reviews into Monthly Draft
+                    + Pull Weekly Wins & Corrections
                   </button>
                 )}
               </div>
@@ -3822,19 +3837,18 @@ export const ReviewHub: React.FC = () => {
                   </h2>
                 </div>
 
-                {(qData.rolledUpWins.length > 0 || qData.rolledUpProblems.length > 0 || qData.rolledUpCorrections.length > 0) && (
+                {(qData.rolledUpWins.length > 0 || qData.rolledUpCorrections.length > 0) && (
                   <button
                     type="button"
                     onClick={() => {
                       upsertQuarterlyReview(selectedQuarter, {
                         wins: mergeUniqueLines(quarterWins, qData.rolledUpWins),
-                        blockers: mergeUniqueLines(quarterProblems, qData.rolledUpProblems),
                         courseCorrections: mergeUniqueLines(quarterCorrections, qData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition-all"
                   >
-                    + Auto-Import All Smaller-Scale Reviews into Quarterly Draft
+                    + Pull Monthly Wins & Corrections
                   </button>
                 )}
               </div>
@@ -4465,19 +4479,18 @@ export const ReviewHub: React.FC = () => {
                   </h2>
                 </div>
 
-                {(yData.rolledUpWins.length > 0 || yData.rolledUpProblems.length > 0 || yData.rolledUpCorrections.length > 0) && (
+                {(yData.rolledUpWins.length > 0 || yData.rolledUpCorrections.length > 0) && (
                   <button
                     type="button"
                     onClick={() => {
                       upsertYearlyReview(selectedYear, {
                         wins: mergeUniqueLines(yearWins, yData.rolledUpWins),
-                        blockers: mergeUniqueLines(yearProblems, yData.rolledUpProblems),
                         courseCorrections: mergeUniqueLines(yearCorrections, yData.rolledUpCorrections)
                       });
                     }}
                     className="px-4 py-2 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold transition-all"
                   >
-                    + Auto-Import All Contained Reviews into Yearly Draft
+                    + Pull Quarterly Wins & Corrections
                   </button>
                 )}
               </div>

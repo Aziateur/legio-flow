@@ -434,59 +434,59 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   return (
     <div className="space-y-6">
 
-      {/* Top Unified Planning Window Switcher Bar */}
-      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-2 sm:p-2.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
+      {/* Top Unified Planning Window Switcher Bar (Cleanly separated: Time-Scale Plans vs. Strategy & Matrix) */}
+      <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-2.5 sm:px-3.5 rounded-3xl bg-slate-900/90 border border-slate-800 backdrop-blur-md shadow-xl">
 
-          <div className="flex items-center space-x-3 px-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <Compass className="w-5 h-5" />
+          <div className="flex items-center space-x-2.5 px-1.5 shrink-0">
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
+              <Compass className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
-                Planning Command
+                Planning Hub
               </div>
-              <div className="text-sm font-extrabold text-slate-100">
-                {planningSubTab === 'daily' && 'Daily Mission & Priorities'}
-                {planningSubTab === 'weekly' && 'Weekly Goal Crusher (10 Pts)'}
+              <div className="text-sm font-extrabold text-slate-100 whitespace-nowrap">
+                {planningSubTab === 'daily' && 'Daily Plan'}
+                {planningSubTab === 'weekly' && 'Weekly Goal Crusher'}
                 {planningSubTab === 'monthly' && `Monthly Plan (${formatMonthLabel(selectedMonthKey)})`}
                 {planningSubTab === 'yearly' && `Yearly Plan (${selectedYearKey})`}
-                {planningSubTab === 'roadmaps' && 'Written Strategy Roadmaps (Stage-Gate Plans)'}
-                {planningSubTab === 'matrix' && 'Weeks Matrix (GWS & Daily Checklist Consistency)'}
+                {planningSubTab === 'roadmaps' && 'Written Roadmaps'}
+                {planningSubTab === 'matrix' && 'Weeks Matrix'}
               </div>
             </div>
           </div>
 
-          {/* Switcher & Action Button */}
-          <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
+          {/* Static Wrapping Controls: Group 1 (Periodic Plans) + Group 2 (Roadmaps & Matrix) + Action */}
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
 
-            {/* Segmented Switcher Controls filtered by systemLevel */}
-            <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800/80 overflow-x-auto">
+            {/* Group 1: Time-Scale Plans */}
+            <div className="flex flex-wrap items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
               <button
                 type="button"
                 onClick={() => setPlanningSubTab('daily')}
-                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                   planningSubTab === 'daily'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
                 <Calendar className="w-3.5 h-3.5" />
-                <span>Daily Plan</span>
+                <span>Daily</span>
               </button>
 
               {systemLevel >= 3 && (
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('weekly')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'weekly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
                   <Target className="w-3.5 h-3.5" />
-                  <span>Weekly Plan</span>
+                  <span>Weekly</span>
                 </button>
               )}
 
@@ -494,14 +494,14 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('monthly')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'monthly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  <span>Monthly Plan</span>
+                  <span>Monthly</span>
                 </button>
               )}
 
@@ -509,23 +509,26 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('yearly')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'yearly'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
                   <Compass className="w-3.5 h-3.5" />
-                  <span>Yearly Plan</span>
+                  <span>Yearly</span>
                 </button>
               )}
+            </div>
 
+            {/* Group 2: Strategy Roadmaps & Matrix */}
+            <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
               <button
                 type="button"
                 onClick={() => setPlanningSubTab('roadmaps')}
-                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                   planningSubTab === 'roadmaps'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
@@ -537,9 +540,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('matrix')}
-                  className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'matrix'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                   }`}
                 >
@@ -549,14 +552,14 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               )}
             </div>
 
-            {/* Clear PROMINENT "Create Plan" button */}
+            {/* Compact New Plan button */}
             <button
               type="button"
               onClick={openCreatePlanModal}
-              className="flex items-center space-x-1.5 px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95 shrink-0"
+              className="flex items-center space-x-1 px-3 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-xs uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all active:scale-95 shrink-0"
             >
-              <Plus className="w-4 h-4" />
-              <span>Create Plan</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Plan</span>
             </button>
 
           </div>

@@ -240,6 +240,8 @@ export type ProblemCategory =
 
 export type ProblemStatus = 'open' | 'testing' | 'solved';
 
+export type ProblemScale = 'friction' | 'bottleneck' | 'blocker';
+
 export type ProblemFixType =
   | 'task'
   | 'habit_rewire'
@@ -275,6 +277,8 @@ export interface ProblemEntry {
   id: string;
   title: string;
   category: ProblemCategory;
+  scale?: ProblemScale; // 'friction' (Small/Daily) | 'bottleneck' (Medium/Weekly) | 'blocker' (Big/Macro/Roadmap)
+  parentProblemId?: string; // Clusters this item under a larger Bottleneck or Blocker
   tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags (e.g. "sleep", "bootcamp")
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];

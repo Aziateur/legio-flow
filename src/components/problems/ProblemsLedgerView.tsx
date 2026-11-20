@@ -1,10 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { ProblemCategory, ProblemEntry } from '../../types/schema';
+import { ProblemCategory, ProblemEntry, ProblemScale } from '../../types/schema';
 import {
   PROBLEM_CATEGORIES,
+  PROBLEM_SCALES,
+  SCALE_MAP,
+  SCALE_RANK,
+  clusterHasTag,
+  getClusterTotalHits,
+  getEligibleParentProblems,
   getLastOccurrenceDate,
+  getProblemScale,
+  hasExistingParent,
   normalizeTag,
-  problemHasTag,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
@@ -12,6 +19,7 @@ import { ProblemItemRow } from './ProblemItemRow';
 import {
   AlertTriangle,
   CheckCircle2,
+  Layers,
   Map as MapIcon,
   Plus,
   Search,
@@ -20,7 +28,7 @@ import {
 } from 'lucide-react';
 
 type LedgerStatusFilter = 'all' | 'open' | 'testing' | 'rules' | 'solved';
-type LedgerSort = 'frequency' | 'recent' | 'triage';
+type LedgerSort = 'triage' | 'frequency' | 'recent';
 
 export const ProblemsLedgerView: React.FC = () => {
   const {
@@ -34,14 +42,18 @@ export const ProblemsLedgerView: React.FC = () => {
   } = useStorage();
 
   const [statusFilter, setStatusFilter] = useState<LedgerStatusFilter>('all');
+  const [scaleFilter, setScaleFilter] = useState<'all' | ProblemScale>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | ProblemCategory>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<LedgerSort>('triage');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Quick-add state
+  // Progressive-disclosure quick-add state
+  const [composerOpen, setComposerOpen] = useState(false);
   const [quickTitle, setQuickTitle] = useState('');
+  const [quickScale, setQuickScale] = useState<ProblemScale>('bottleneck');
   const [quickCategory, setQuickCategory] = useState<ProblemCategory>('mindset');
+  const [quickParentId, setQuickParentId] = useState<string>('');
   const [quickTags, setQuickTags] = useState<string[]>([]);
   const [quickTagInput, setQuickTagInput] = useState('');
 
@@ -64,17 +76,36 @@ export const ProblemsLedgerView: React.FC = () => {
     return Array.from(map.values());
   }, [roadmapTitles, problems]);
 
+  const topLevelProblems = useMemo(
+    () => problems.filter(p => !hasExistingParent(problems, p)),
+    [problems]
+  );
+
+  const eligibleParents = useMemo(
+    () => getEligibleParentProblems(problems, quickScale).filter(p => p.status !== 'solved'),
+    [problems, quickScale]
+  );
+
   const stats = useMemo(() => {
-    const open = problems.filter(p => p.status === 'open').length;
-    const testing = problems.filter(p => p.status === 'testing').length;
-    const rules = problems.filter(
+    const open = topLevelProblems.filter(p => p.status === 'open').length;
+    const testing = topLevelProblems.filter(p => p.status === 'testing').length;
+    const rules = topLevelProblems.filter(
       p => p.fixType === 'rule_guardrail' && p.status !== 'solved'
     ).length;
-    const solved = problems.filter(p => p.status === 'solved').length;
+    const solved = topLevelProblems.filter(p => p.status === 'solved').length;
     const totalOccurrences = problems.reduce(
       (sum, p) => sum + Math.max(1, p.occurrences?.length || 1),
       0
     );
+
+    const byScale: Record<ProblemScale, number> = {
+      blocker: 0,
+      bottleneck: 0,
+      friction: 0
+    };
+    problems.forEach(p => {
+      byScale[getProblemScale(p)] += 1;
+    });
 
     const byCategory: Record<ProblemCategory, number> = {
       mindset: 0,
@@ -90,12 +121,17 @@ export const ProblemsLedgerView: React.FC = () => {
       }
     });
 
-    return { open, testing, rules, solved, totalOccurrences, byCategory };
-  }, [problems]);
+    return { open, testing, rules, solved, totalOccurrences, byCategory, byScale };
+  }, [problems, topLevelProblems]);
+
+  // Flat view only when explicitly filtering by a specific child scale or searching text
+  const useFlatPool = scaleFilter === 'friction' || searchQuery.trim().length > 0;
 
   const filtered = useMemo<ProblemEntry[]>(() => {
     const q = searchQuery.trim().toLowerCase();
-    const list = problems.filter(p => {
+    const basePool = useFlatPool ? problems : topLevelProblems;
+
+    const list = basePool.filter(p => {
       if (statusFilter === 'open' && p.status !== 'open') return false;
       if (statusFilter === 'testing' && p.status !== 'testing') return false;
       if (
@@ -105,8 +141,15 @@ export const ProblemsLedgerView: React.FC = () => {
         return false;
       }
       if (statusFilter === 'solved' && p.status !== 'solved') return false;
+      if (scaleFilter !== 'all' && getProblemScale(p) !== scaleFilter) return false;
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
-      if (tagFilter !== 'all' && !problemHasTag(p, tagFilter)) return false;
+      if (tagFilter !== 'all') {
+        if (useFlatPool) {
+          if (!(p.tags || []).some(t => tagsMatch(t, tagFilter))) return false;
+        } else if (!clusterHasTag(problems, p, tagFilter)) {
+          return false;
+        }
+      }
       if (q) {
         const matchTitle = p.title.toLowerCase().includes(q);
         const matchFix = (p.fixNote || '').toLowerCase().includes(q);
@@ -121,21 +164,32 @@ export const ProblemsLedgerView: React.FC = () => {
 
     return [...list].sort((a, b) => {
       if (sortBy === 'frequency') {
-        const diff = (b.occurrences?.length || 1) - (a.occurrences?.length || 1);
+        const diff = getClusterTotalHits(problems, b) - getClusterTotalHits(problems, a);
         if (diff !== 0) return diff;
         return getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a));
       }
       if (sortBy === 'recent') {
         return (b.updatedAt || '').localeCompare(a.updatedAt || '');
       }
-      // triage: open first, then testing, then solved; highest recurrence first within each group
       const sw = statusWeight(a.status) - statusWeight(b.status);
       if (sw !== 0) return sw;
-      const diff = (b.occurrences?.length || 1) - (a.occurrences?.length || 1);
+      const scDiff = SCALE_RANK[getProblemScale(b)] - SCALE_RANK[getProblemScale(a)];
+      if (scDiff !== 0) return scDiff;
+      const diff = getClusterTotalHits(problems, b) - getClusterTotalHits(problems, a);
       if (diff !== 0) return diff;
       return getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a));
     });
-  }, [problems, statusFilter, categoryFilter, tagFilter, sortBy, searchQuery]);
+  }, [
+    problems,
+    topLevelProblems,
+    useFlatPool,
+    statusFilter,
+    scaleFilter,
+    categoryFilter,
+    tagFilter,
+    sortBy,
+    searchQuery
+  ]);
 
   const handleToggleQuickTag = (tag: string) => {
     const clean = normalizeTag(tag);
@@ -165,7 +219,7 @@ export const ProblemsLedgerView: React.FC = () => {
     if (existing) {
       recordProblemRecurrence(existing.id, {
         date: selectedDate,
-        sourceType: 'daily',
+        sourceType: quickScale === 'blocker' ? 'monthly' : quickScale === 'bottleneck' ? 'weekly' : 'daily',
         sourceRef: selectedDate
       });
       if (quickTags.length > 0) {
@@ -177,15 +231,21 @@ export const ProblemsLedgerView: React.FC = () => {
       addProblem({
         title: trimmed,
         category: quickCategory,
+        scale: quickScale,
+        ...(quickParentId ? { parentProblemId: quickParentId } : {}),
         tags: quickTags,
-        sourceType: 'daily',
+        sourceType: quickScale === 'blocker' ? 'monthly' : quickScale === 'bottleneck' ? 'weekly' : 'daily',
         date: selectedDate,
         sourceRef: selectedDate
       });
     }
     setQuickTitle('');
+    setQuickParentId('');
     setQuickTags([]);
+    setComposerOpen(false);
   };
+
+  const showOptions = composerOpen || quickTitle.trim().length > 0;
 
   return (
     <div className="space-y-6">
@@ -272,7 +332,7 @@ export const ProblemsLedgerView: React.FC = () => {
             }`}
           >
             <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-              Total Logs
+              Total Hits
             </div>
             <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
               {stats.totalOccurrences}
@@ -317,7 +377,7 @@ export const ProblemsLedgerView: React.FC = () => {
                           ? 'opacity-30'
                           : 'opacity-90 hover:opacity-100'
                       }`}
-                      title={`${c.label}: ${count} log(s) (${Math.round(pct)}%)`}
+                      title={`${c.label}: ${count} hit(s) (${Math.round(pct)}%)`}
                     />
                   );
                 })}
@@ -360,17 +420,14 @@ export const ProblemsLedgerView: React.FC = () => {
         </div>
       </div>
 
-      {/* Quick Log Strip */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-3">
-        <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-orange-400">
-          <AlertTriangle className="w-4 h-4" />
-          <span>Quick Log Problem</span>
-        </div>
-
+      {/* 1-Line Progressive-Disclosure Quick Log Strip */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-3">
         <div className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
           <input
             type="text"
             value={quickTitle}
+            onFocus={() => setComposerOpen(true)}
             onChange={e => setQuickTitle(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') {
@@ -378,120 +435,213 @@ export const ProblemsLedgerView: React.FC = () => {
                 handleQuickLog();
               }
             }}
-            placeholder="Describe the bottleneck in 1 crisp line and press Enter..."
-            className="flex-1 bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
+            placeholder="Log a new Blocker, Bottleneck, or Friction (Enter to add)..."
+            className="flex-1 bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl px-4 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
           />
           <button
             type="button"
             onClick={handleQuickLog}
             disabled={!quickTitle.trim()}
-            className="flex items-center space-x-1 px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+            className="flex items-center space-x-1 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>Log</span>
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {PROBLEM_CATEGORIES.map(c => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => setQuickCategory(c.id)}
-              className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-all ${
-                quickCategory === c.id
-                  ? c.activeChipClass
-                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-              }`}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
+        {showOptions && (
+          <div className="space-y-2.5 pt-2 border-t border-slate-800/70">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Scale:
+                </span>
+                {PROBLEM_SCALES.map(sc => (
+                  <button
+                    key={sc.id}
+                    type="button"
+                    onClick={() => {
+                      setQuickScale(sc.id);
+                      setQuickParentId('');
+                    }}
+                    title={sc.hint}
+                    className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-extrabold transition-all ${
+                      quickScale === sc.id
+                        ? sc.activeChipClass
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {sc.shortLabel}
+                  </button>
+                ))}
+              </div>
+              {!quickTitle.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setComposerOpen(false)}
+                  className="text-[10px] font-bold text-slate-500 hover:text-slate-300"
+                >
+                  Collapse
+                </button>
+              )}
+            </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            <Tag className="w-3 h-3" />
-            <span>Tie to Plan / Tag:</span>
-          </span>
-          {roadmapTitles.map(rt => {
-            const active = quickTags.some(t => tagsMatch(t, rt));
-            return (
-              <button
-                key={rt}
-                type="button"
-                onClick={() => handleToggleQuickTag(rt)}
-                className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full border text-[11px] font-bold transition-all ${
-                  active
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
-                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                }`}
-              >
-                <MapIcon className="w-3 h-3" />
-                <span>{rt}</span>
-              </button>
-            );
-          })}
-          {quickTags
-            .filter(t => !roadmapTitles.some(rt => tagsMatch(rt, t)))
-            .map(t => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => handleToggleQuickTag(t)}
-                className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-100 border border-slate-600 text-[11px] font-bold"
-              >
-                #{t} ×
-              </button>
-            ))}
-          <input
-            type="text"
-            value={quickTagInput}
-            onChange={e => setQuickTagInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ',') {
-                e.preventDefault();
-                handleAddQuickCustomTag();
-              }
-            }}
-            placeholder="+ tag (Enter)"
-            className="bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-full px-2.5 py-0.5 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none w-24"
-          />
-        </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Category:
+              </span>
+              {PROBLEM_CATEGORIES.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setQuickCategory(c.id)}
+                  className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-bold transition-all ${
+                    quickCategory === c.id
+                      ? c.activeChipClass
+                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {c.shortLabel}
+                </button>
+              ))}
+            </div>
+
+            {eligibleParents.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                  <Layers className="w-3 h-3" />
+                  <span>Group under:</span>
+                </span>
+                <select
+                  value={quickParentId}
+                  onChange={e => setQuickParentId(e.target.value)}
+                  className="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-2.5 py-1 text-xs text-slate-200 focus:outline-none"
+                >
+                  <option value="">Standalone {SCALE_MAP[quickScale].shortLabel}</option>
+                  {eligibleParents.map(ep => (
+                    <option key={ep.id} value={ep.id}>
+                      ↳ [{SCALE_MAP[getProblemScale(ep)].shortLabel}] {ep.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <Tag className="w-3 h-3" />
+                <span>Tie to Plan / Tag:</span>
+              </span>
+              {roadmapTitles.map(rt => {
+                const active = quickTags.some(t => tagsMatch(t, rt));
+                return (
+                  <button
+                    key={rt}
+                    type="button"
+                    onClick={() => handleToggleQuickTag(rt)}
+                    className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full border text-[11px] font-bold transition-all ${
+                      active
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <MapIcon className="w-3 h-3" />
+                    <span>{rt}</span>
+                  </button>
+                );
+              })}
+              {quickTags
+                .filter(t => !roadmapTitles.some(rt => tagsMatch(rt, t)))
+                .map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => handleToggleQuickTag(t)}
+                    className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-100 border border-slate-600 text-[11px] font-bold"
+                  >
+                    #{t} ×
+                  </button>
+                ))}
+              <input
+                type="text"
+                value={quickTagInput}
+                onChange={e => setQuickTagInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    handleAddQuickCustomTag();
+                  }
+                }}
+                placeholder="+ tag"
+                className="bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-full px-2.5 py-0.5 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none w-20"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Filters + Search + Problem List */}
+      {/* Filters + Search + Clustered Problem List */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          {/* Status Pills */}
-          <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
-            {(
-              [
-                { id: 'all', label: `All (${problems.length})` },
-                { id: 'open', label: `Open (${stats.open})` },
-                { id: 'testing', label: `Testing (${stats.testing})` },
-                { id: 'rules', label: `Active Rules (${stats.rules})` },
-                { id: 'solved', label: `Solved (${stats.solved})` }
-              ] as const
-            ).map(tab => (
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          {/* Status + Scale Pills */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+              {(
+                [
+                  { id: 'all', label: `All (${topLevelProblems.length})` },
+                  { id: 'open', label: `Open (${stats.open})` },
+                  { id: 'testing', label: `Testing (${stats.testing})` },
+                  { id: 'rules', label: `Rules (${stats.rules})` },
+                  { id: 'solved', label: `Solved (${stats.solved})` }
+                ] as const
+              ).map(tab => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.id)}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    statusFilter === tab.id
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
               <button
-                key={tab.id}
                 type="button"
-                onClick={() => setStatusFilter(tab.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  statusFilter === tab.id
-                    ? 'bg-amber-500 text-slate-950'
+                onClick={() => setScaleFilter('all')}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  scaleFilter === 'all'
+                    ? 'bg-slate-800 text-slate-100'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {tab.label}
+                All Scales
               </button>
-            ))}
+              {(['blocker', 'bottleneck', 'friction'] as ProblemScale[]).map(sc => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => setScaleFilter(sc)}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    scaleFilter === sc
+                      ? SCALE_MAP[sc].activeChipClass
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {SCALE_MAP[sc].shortLabel} ({stats.byScale[sc]})
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Search + Sort */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 sm:w-56">
+            <div className="relative flex-1 sm:w-52">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -507,7 +657,7 @@ export const ProblemsLedgerView: React.FC = () => {
               onChange={e => setSortBy(e.target.value as LedgerSort)}
               className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none focus:border-amber-500/50"
             >
-              <option value="triage">Sort: Needs Triage</option>
+              <option value="triage">Sort: Scale & Priority</option>
               <option value="frequency">Sort: Most Frequent (×N)</option>
               <option value="recent">Sort: Most Recent</option>
             </select>
@@ -571,6 +721,7 @@ export const ProblemsLedgerView: React.FC = () => {
                 contextDate={selectedDate}
                 contextSourceType="daily"
                 targetWeekId={selectedWeekId}
+                showParentBreadcrumb={useFlatPool}
               />
             ))}
           </div>

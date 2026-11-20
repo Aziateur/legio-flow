@@ -16,13 +16,19 @@ import {
   StrategyPlan,
   ProblemEntry,
   ProblemCategory,
+  ProblemScale,
   ProblemStatus,
   ProblemFixType,
   ProblemSourceType,
   ProblemOccurrence,
   ProblemDispatchTarget
 } from '../types/schema';
-import { guessProblemCategory, normalizeTag } from '../lib/problems';
+import {
+  defaultScaleForSource,
+  getDescendantProblems,
+  guessProblemCategory,
+  normalizeTag
+} from '../lib/problems';
 import {
   DEFAULT_TEMPLATES,
   INITIAL_DAILY_ENTRIES,
@@ -527,6 +533,8 @@ interface StorageContextType {
   addProblem: (input: {
     title: string;
     category: ProblemCategory;
+    scale?: ProblemScale;
+    parentProblemId?: string;
     tags?: string[];
     sourceType: ProblemSourceType;
     date: string;
@@ -538,6 +546,11 @@ interface StorageContextType {
   }) => ProblemEntry;
   updateProblem: (id: string, patch: Partial<ProblemEntry>) => void;
   recordProblemRecurrence: (id: string, occurrence: ProblemOccurrence) => void;
+  clusterIntoNewParent: (
+    childId: string,
+    parentTitle: string,
+    parentScale: 'bottleneck' | 'blocker'
+  ) => ProblemEntry | null;
   deleteProblem: (id: string) => void;
   dispatchProblemFix: (
     problemId: string,
@@ -1945,10 +1958,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const cleanedTags = Array.from(
       new Set((input.tags || []).map(normalizeTag).filter(Boolean))
     );
+    const resolvedScale: ProblemScale = input.scale || defaultScaleForSource(input.sourceType);
     const entry: ProblemEntry = {
       id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       title: input.title.trim(),
       category: input.category,
+      scale: resolvedScale,
+      ...(input.parentProblemId ? { parentProblemId: input.parentProblemId } : {}),
       tags: cleanedTags,
       status: input.status || 'open',
       occurrences: [
@@ -1964,29 +1980,61 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       createdAt: nowIso,
       updatedAt: nowIso
     };
-    commitProblems([entry, ...problemsRef.current]);
+    // If attached under a parent that was marked solved, gently re-open the parent so the loop stays honest
+    const updatedPrev = input.parentProblemId
+      ? problemsRef.current.map(p => {
+          if (p.id === input.parentProblemId && p.status === 'solved') {
+            const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
+            delete reopened.solvedAt;
+            return reopened;
+          }
+          return p;
+        })
+      : problemsRef.current;
+
+    commitProblems([entry, ...updatedPrev]);
     markLocalMutation();
     return entry;
   };
 
   const updateProblem: StorageContextType['updateProblem'] = (id, patch) => {
     const nowIso = new Date().toISOString();
-    const next = problemsRef.current.map(p => {
-      if (p.id !== id) return p;
-      const merged: ProblemEntry = {
-        ...p,
-        ...patch,
-        tags: patch.tags
-          ? Array.from(new Set(patch.tags.map(normalizeTag).filter(Boolean)))
-          : p.tags,
-        updatedAt: nowIso
-      };
-      if (patch.status === 'solved' && !merged.solvedAt) {
-        merged.solvedAt = nowIso;
-      } else if (patch.status && patch.status !== 'solved') {
-        delete merged.solvedAt;
+    const cur = problemsRef.current;
+    // If a parent cluster is verified solved, also close its open/testing children cleanly
+    const childIdsToClose =
+      patch.status === 'solved'
+        ? new Set(getDescendantProblems(cur, id).map(d => d.id))
+        : new Set<string>();
+
+    const next = cur.map(p => {
+      if (p.id === id) {
+        const merged: ProblemEntry = {
+          ...p,
+          ...patch,
+          tags: patch.tags
+            ? Array.from(new Set(patch.tags.map(normalizeTag).filter(Boolean)))
+            : p.tags,
+          updatedAt: nowIso
+        };
+        if (patch.parentProblemId === undefined && 'parentProblemId' in patch) {
+          delete merged.parentProblemId;
+        }
+        if (patch.status === 'solved' && !merged.solvedAt) {
+          merged.solvedAt = nowIso;
+        } else if (patch.status && patch.status !== 'solved') {
+          delete merged.solvedAt;
+        }
+        return merged;
       }
-      return merged;
+      if (childIdsToClose.has(p.id) && p.status !== 'solved') {
+        return {
+          ...p,
+          status: 'solved' as ProblemStatus,
+          solvedAt: nowIso,
+          updatedAt: nowIso
+        };
+      }
+      return p;
     });
     commitProblems(next);
     markLocalMutation();
@@ -1994,32 +2042,95 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const recordProblemRecurrence: StorageContextType['recordProblemRecurrence'] = (id, occurrence) => {
     const nowIso = new Date().toISOString();
-    const next = problemsRef.current.map(p => {
-      if (p.id !== id) return p;
-      const nextStatus: ProblemStatus = p.status === 'solved' ? 'open' : p.status;
-      const updated: ProblemEntry = {
-        ...p,
-        status: nextStatus,
-        occurrences: [
-          ...(p.occurrences || []),
-          {
-            date: occurrence.date || getTodayDateString(),
-            sourceType: occurrence.sourceType,
-            ...(occurrence.sourceRef ? { sourceRef: occurrence.sourceRef } : {}),
-            ...(occurrence.note ? { note: occurrence.note } : {})
-          }
-        ],
-        updatedAt: nowIso
-      };
-      delete updated.solvedAt;
-      return updated;
+    const cur = problemsRef.current;
+    const target = cur.find(p => p.id === id);
+    const parentIdToReopen = target?.parentProblemId;
+    const next = cur.map(p => {
+      if (p.id === id) {
+        const nextStatus: ProblemStatus = p.status === 'solved' ? 'open' : p.status;
+        const updated: ProblemEntry = {
+          ...p,
+          status: nextStatus,
+          occurrences: [
+            ...(p.occurrences || []),
+            {
+              date: occurrence.date || getTodayDateString(),
+              sourceType: occurrence.sourceType,
+              ...(occurrence.sourceRef ? { sourceRef: occurrence.sourceRef } : {}),
+              ...(occurrence.note ? { note: occurrence.note } : {})
+            }
+          ],
+          updatedAt: nowIso
+        };
+        delete updated.solvedAt;
+        return updated;
+      }
+      if (parentIdToReopen && p.id === parentIdToReopen && p.status === 'solved') {
+        const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
+        delete reopened.solvedAt;
+        return reopened;
+      }
+      return p;
     });
     commitProblems(next);
     markLocalMutation();
   };
 
+  const clusterIntoNewParent: StorageContextType['clusterIntoNewParent'] = (
+    childId,
+    parentTitle,
+    parentScale
+  ) => {
+    const trimmed = parentTitle.trim();
+    if (!trimmed) return null;
+    const cur = problemsRef.current;
+    const child = cur.find(p => p.id === childId);
+    if (!child) return null;
+
+    const nowIso = new Date().toISOString();
+    const latestDate =
+      child.occurrences?.[child.occurrences.length - 1]?.date || getTodayDateString();
+    const newParent: ProblemEntry = {
+      id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title: trimmed,
+      category: child.category,
+      scale: parentScale,
+      tags: [...(child.tags || [])],
+      status: child.status === 'solved' ? 'solved' : 'open',
+      occurrences: [
+        {
+          date: latestDate,
+          sourceType: parentScale === 'blocker' ? 'monthly' : 'weekly',
+          note: `Clustered from: ${child.title}`
+        }
+      ],
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    const next = [
+      newParent,
+      ...cur.map(p =>
+        p.id === childId ? { ...p, parentProblemId: newParent.id, updatedAt: nowIso } : p
+      )
+    ];
+    commitProblems(next);
+    markLocalMutation();
+    return newParent;
+  };
+
   const deleteProblem = (id: string) => {
-    commitProblems(problemsRef.current.filter(p => p.id !== id));
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current
+      .filter(p => p.id !== id)
+      .map(p => {
+        if (p.parentProblemId === id) {
+          const unlinked = { ...p, updatedAt: nowIso };
+          delete unlinked.parentProblemId;
+          return unlinked;
+        }
+        return p;
+      });
+    commitProblems(next);
     markLocalMutation();
   };
 
@@ -3165,6 +3276,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addProblem,
         updateProblem,
         recordProblemRecurrence,
+        clusterIntoNewParent,
         deleteProblem,
         dispatchProblemFix,
         saveTemplate,
