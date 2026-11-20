@@ -8,6 +8,7 @@ import {
 import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
 import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
+import { StrategyRoadmapsView } from './StrategyRoadmapsView';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
   Calendar,
@@ -24,7 +25,8 @@ import {
   X,
   FilePlus,
   Bell,
-  Table
+  Table,
+  BookOpen
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -449,6 +451,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 {planningSubTab === 'weekly' && 'Weekly Goal Crusher (10 Pts)'}
                 {planningSubTab === 'monthly' && `Monthly Plan (${formatMonthLabel(selectedMonthKey)})`}
                 {planningSubTab === 'yearly' && `Yearly Plan (${selectedYearKey})`}
+                {planningSubTab === 'roadmaps' && 'Written Strategy Roadmaps (Stage-Gate Plans)'}
                 {planningSubTab === 'matrix' && 'Weeks Matrix (GWS & Daily Checklist Consistency)'}
               </div>
             </div>
@@ -516,6 +519,19 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   <span>Yearly Plan</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setPlanningSubTab('roadmaps')}
+                className={`flex items-center justify-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                  planningSubTab === 'roadmaps'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Roadmaps</span>
+              </button>
 
               {systemLevel >= 3 && (
                 <button
@@ -1053,7 +1069,10 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         </div>
       )}
 
-      {/* VIEW 5: WEEKS MATRIX */}
+      {/* VIEW 5: WRITTEN STRATEGY ROADMAPS (STAGE-GATE PLANS) */}
+      {planningSubTab === 'roadmaps' && <StrategyRoadmapsView />}
+
+      {/* VIEW 6: WEEKS MATRIX */}
       {planningSubTab === 'matrix' && (
         <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
           <SpreadsheetMatrixView />

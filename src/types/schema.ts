@@ -199,3 +199,30 @@ export interface ChecklistItem {
   volumeUnit?: string; // Optional unit label (e.g. "min", "ml", "pages", "reps")
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }
+
+export interface StrategyProximalGoal {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+export interface StrategyStage {
+  id: string;
+  title: string;             // e.g. "Stage 0: Learn before you trade"
+  systemState: string;       // e.g. "System set up"
+  proximalGoals: StrategyProximalGoal[];
+  whatItLooksLike: string;   // Observable reality bullets
+  notPossibleUntil: string;  // Discipline boundary / off-limits until gate is passed
+  dayInALife: string;        // Vivid story of how a typical day looks and feels
+  gateCriterion: string;     // Exact gate proof required to unlock the next stage
+  gatePassed: boolean;
+}
+
+export interface StrategyPlan {
+  id: string;
+  title: string;             // e.g. "Trading Strategy"
+  description?: string;
+  stages: StrategyStage[];
+  createdAt: string;
+  updatedAt: string;
+}

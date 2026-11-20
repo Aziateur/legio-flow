@@ -7,7 +7,8 @@ import {
   MonthlyPlan,
   YearlyPlan,
   ChecklistCategory,
-  ChecklistItem
+  ChecklistItem,
+  StrategyPlan
 } from './schema';
 
 export const DEFAULT_TEMPLATES: Template[] = [
@@ -458,6 +459,67 @@ export const INITIAL_CHECKLIST_ITEMS: ChecklistItem[] = [
     text: 'Send Legio onboarding checklist to cohort',
     recurrence: 'none',
     completed: false
+  }
+];
+
+export const INITIAL_STRATEGY_PLANS: StrategyPlan[] = [
+  {
+    id: 'plan_trading_strategy',
+    title: 'Trading Strategy',
+    description: 'Stage-gate written progression from foundational system setup to automated execution.',
+    createdAt: '2026-11-20T00:00:00.000Z',
+    updatedAt: '2026-11-20T00:00:00.000Z',
+    stages: [
+      {
+        id: 'stg_0',
+        title: 'Learn before you trade',
+        systemState: 'System set up',
+        proximalGoals: [],
+        whatItLooksLike:
+          '- I have a basic system with clear entry and exit parameters\n- I have regular backtests so that I keep refining my system over time\n- I am in contact with similar people regarding all that\n- Learning every day about investing and trading\n- I have repeatable tasks; course correction is obvious',
+        notPossibleUntil:
+          'No work will be done in marketing until trading is done 5h a day and has passed the knowledge threshold where most tasks are automatic and/or repeatable.',
+        dayInALife:
+          "I take 2 to 3 hours to go through lessons, talk about it, do backtests — it's mostly reasoning and applying the lessons.",
+        gateCriterion:
+          'Finished boot camp and have a set amount of time used for trading and investing.',
+        gatePassed: false
+      },
+      {
+        id: 'stg_1',
+        title: 'Stage 1: Active trading',
+        systemState: 'System functional',
+        proximalGoals: [],
+        whatItLooksLike: '',
+        notPossibleUntil: '',
+        dayInALife: '',
+        gateCriterion:
+          'System is predictable and yields results in money and most importantly information.',
+        gatePassed: false
+      },
+      {
+        id: 'stg_2',
+        title: 'Stage 2: Profitable trading',
+        systemState: 'System profitable',
+        proximalGoals: [],
+        whatItLooksLike: '',
+        notPossibleUntil: '',
+        dayInALife: '',
+        gateCriterion: 'System produces cash at a satisfying rate.',
+        gatePassed: false
+      },
+      {
+        id: 'stg_3',
+        title: 'Stage 3: Automated trading',
+        systemState: 'System automated',
+        proximalGoals: [],
+        whatItLooksLike: '',
+        notPossibleUntil: '',
+        dayInALife: '',
+        gateCriterion: '',
+        gatePassed: false
+      }
+    ]
   }
 ];
 

@@ -12,7 +12,8 @@ import {
   ReviewEntry,
   SystemLevel,
   ChecklistCategory,
-  ChecklistItem
+  ChecklistItem,
+  StrategyPlan
 } from '../types/schema';
 import {
   DEFAULT_TEMPLATES,
@@ -22,7 +23,8 @@ import {
   INITIAL_MONTHLY_PLANS,
   INITIAL_YEARLY_PLANS,
   INITIAL_CHECKLIST_CATEGORIES,
-  INITIAL_CHECKLIST_ITEMS
+  INITIAL_CHECKLIST_ITEMS,
+  INITIAL_STRATEGY_PLANS
 } from '../types/defaults';
 import {
   getSupabaseClient,
@@ -35,7 +37,7 @@ import {
 } from '../lib/supabase';
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
-export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'matrix';
+export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'roadmaps' | 'matrix';
 export type ReviewSubTab = 'vault' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export const getTodayDateString = (): string => {
@@ -421,6 +423,7 @@ interface StorageContextType {
   weeklyPlans: Record<string, WeeklyPlan>;
   monthlyPlans: Record<string, MonthlyPlan>;
   yearlyPlans: Record<string, YearlyPlan>;
+  strategyPlans: StrategyPlan[];
   reviews: ReviewEntry[];
   checklistCategories: ChecklistCategory[];
   checklistItems: ChecklistItem[];
@@ -507,6 +510,10 @@ interface StorageContextType {
   getYearlyPlan: (yearKey: string) => YearlyPlan;
   saveYearlyPlan: (plan: YearlyPlan) => void;
 
+  // Written Strategy Roadmap Plans
+  saveStrategyPlan: (plan: StrategyPlan) => void;
+  deleteStrategyPlan: (id: string) => void;
+
   // Template operations (Modularity)
   saveTemplate: (template: Template) => void;
   deleteTemplate: (id: string) => void;
@@ -533,6 +540,7 @@ const STORAGE_KEYS = {
   WEEKLY: 'legio_weekly_v1',
   MONTHLY: 'legio_monthly_plans_v1',
   YEARLY: 'legio_yearly_plans_v1',
+  STRATEGY_PLANS: 'legio_strategy_plans_v1',
   REVIEWS: 'legio_reviews_v1',
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
@@ -638,6 +646,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return cleaned;
   });
 
+  const [strategyPlans, setStrategyPlans] = useState<StrategyPlan[]>(() => {
+    const raw = readStorageSafe<StrategyPlan[]>(STORAGE_KEYS.STRATEGY_PLANS, INITIAL_STRATEGY_PLANS);
+    return Array.isArray(raw) ? raw : INITIAL_STRATEGY_PLANS;
+  });
+
   const [reviews, setReviews] = useState<ReviewEntry[]>(() =>
     readStorageSafe<ReviewEntry[]>(STORAGE_KEYS.REVIEWS, [])
   );
@@ -704,6 +717,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const weeklyPlansRef = useRef(weeklyPlans);
   const monthlyPlansRef = useRef(monthlyPlans);
   const yearlyPlansRef = useRef(yearlyPlans);
+  const strategyPlansRef = useRef(strategyPlans);
   const reviewsRef = useRef(reviews);
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
@@ -799,6 +813,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setYearlyPlans(next);
   };
 
+  const commitStrategyPlans = (next: StrategyPlan[]) => {
+    strategyPlansRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.STRATEGY_PLANS, next);
+    setStrategyPlans(next);
+  };
+
   const commitReviews = (next: ReviewEntry[]) => {
     reviewsRef.current = next;
     writeStorageSafe(STORAGE_KEYS.REVIEWS, next);
@@ -847,6 +867,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       weeklyPlans: weeklyPlansRef.current,
       monthlyPlans: monthlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
+      strategyPlans: strategyPlansRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
@@ -1167,12 +1188,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (p1 === 'planning') {
       const sub: PlanningSubTab =
-        p2 === 'weekly' || p2 === 'monthly' || p2 === 'yearly' || p2 === 'matrix'
+        p2 === 'weekly' || p2 === 'monthly' || p2 === 'yearly' || p2 === 'roadmaps' || p2 === 'matrix'
           ? (p2 as PlanningSubTab)
           : p2 === 'three_year' || p2 === '3year'
           ? 'yearly'
           : 'daily';
       return { main: 'planning', planningSub: sub, reviewSub: 'daily' };
+    }
+    if (p1 === 'roadmaps' || p1 === 'strategy') {
+      return { main: 'planning', planningSub: 'roadmaps', reviewSub: 'daily' };
     }
     if (p1 === 'matrix' || p1 === 'spreadsheet') {
       return { main: 'planning', planningSub: 'matrix', reviewSub: 'daily' };
@@ -1730,6 +1754,26 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
+  const saveStrategyPlan = (plan: StrategyPlan) => {
+    const prev = strategyPlansRef.current;
+    const nowIso = new Date().toISOString();
+    const updatedPlan: StrategyPlan = {
+      ...plan,
+      stages: Array.isArray(plan.stages) ? plan.stages : [],
+      createdAt: plan.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+    const idx = prev.findIndex(p => p.id === updatedPlan.id);
+    const next = idx >= 0 ? prev.map((p, i) => (i === idx ? updatedPlan : p)) : [...prev, updatedPlan];
+    commitStrategyPlans(next);
+    markLocalMutation();
+  };
+
+  const deleteStrategyPlan = (id: string) => {
+    commitStrategyPlans(strategyPlansRef.current.filter(p => p.id !== id));
+    markLocalMutation();
+  };
+
   const saveTemplate = (template: Template) => {
     const prev = templatesRef.current;
     const idx = prev.findIndex(t => t.id === template.id);
@@ -1807,6 +1851,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       weeklyPlans: weeklyPlansRef.current,
       monthlyPlans: monthlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
+      strategyPlans: strategyPlansRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current
@@ -1835,6 +1880,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         (src.weeklyPlans && typeof src.weeklyPlans === 'object') ||
         (src.monthlyPlans && typeof src.monthlyPlans === 'object') ||
         (src.yearlyPlans && typeof src.yearlyPlans === 'object') ||
+        Array.isArray(src.strategyPlans) ||
         Array.isArray(src.reviews) ||
         Array.isArray(src.checklistItems);
 
@@ -1875,6 +1921,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         });
         commitYearlyPlans(cleanedY);
       }
+      if (Array.isArray(src.strategyPlans)) commitStrategyPlans(src.strategyPlans);
       if (Array.isArray(src.reviews)) commitReviews(src.reviews);
       if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
       if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
@@ -1906,6 +1953,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr, '2026-10-12'));
     commitMonthlyPlans(INITIAL_MONTHLY_PLANS);
     commitYearlyPlans(INITIAL_YEARLY_PLANS);
+    commitStrategyPlans(INITIAL_STRATEGY_PLANS);
     commitReviews([]);
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
@@ -1945,6 +1993,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } as Record<string, WeeklyPlan>,
       monthlyPlans: {} as Record<string, MonthlyPlan>,
       yearlyPlans: {} as Record<string, YearlyPlan>,
+      strategyPlans: [] as StrategyPlan[],
       reviews: [] as ReviewEntry[],
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
@@ -1962,6 +2011,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitWeeklyPlans(fresh.weeklyPlans);
     commitMonthlyPlans(fresh.monthlyPlans);
     commitYearlyPlans(fresh.yearlyPlans);
+    commitStrategyPlans(fresh.strategyPlans);
     commitReviews(fresh.reviews);
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
@@ -2097,6 +2147,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
       commitYearlyPlans(cleanedY);
     }
+    if (Array.isArray(state.strategyPlans)) commitStrategyPlans(state.strategyPlans);
     if (Array.isArray(state.reviews)) commitReviews(state.reviews);
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
@@ -2315,6 +2366,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       weeklyPlans: mergedWeeklyPlans,
       monthlyPlans: mergedMonthlyPlans,
       yearlyPlans: mergedYearlyPlans,
+      strategyPlans:
+        localIsNewer || !Array.isArray(cloudState?.strategyPlans)
+          ? local.strategyPlans
+          : cloudState.strategyPlans,
       reviews: mergedReviews,
       checklistCategories:
         localIsNewer || !Array.isArray(cloudState?.checklistCategories)
@@ -2649,6 +2704,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             weeklyPlans: raw.weeklyPlans,
             monthlyPlans: raw.monthlyPlans,
             yearlyPlans: raw.yearlyPlans,
+            strategyPlans: raw.strategyPlans,
             reviews: raw.reviews,
             checklistCategories: raw.checklistCategories,
             checklistItems: raw.checklistItems,
@@ -2707,6 +2763,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         weeklyPlans,
         monthlyPlans,
         yearlyPlans,
+        strategyPlans,
         reviews,
         checklistCategories,
         checklistItems,
@@ -2756,6 +2813,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saveMonthlyPlan,
         getYearlyPlan,
         saveYearlyPlan,
+        saveStrategyPlan,
+        deleteStrategyPlan,
         saveTemplate,
         deleteTemplate,
         resetTemplatesToDefault,
