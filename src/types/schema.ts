@@ -195,5 +195,7 @@ export interface ChecklistItem {
   completed: boolean; // Used when recurrence === 'none'
   completedPeriods?: string[]; // Stores 'YYYY-MM-DD' for daily/tally logs, 'week_N' for weekly, 'YYYY-MM' for monthly
   totalCount?: number; // Used when recurrence === 'tally' (cumulative total done — never resets, excluded from weekly matrix)
+  volumePerRep?: number; // Optional volume per single rep (e.g. 5 for "5 min guitar session", 500 for "500 ml hydrate")
+  volumeUnit?: string; // Optional unit label (e.g. "min", "ml", "pages", "reps")
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }

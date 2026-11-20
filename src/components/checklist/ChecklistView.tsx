@@ -4,9 +4,23 @@ import {
   getActiveDailyChecklistItemsForDate
 } from '../../context/StorageContext';
 import { ChecklistItem, ChecklistRecurrence } from '../../types/schema';
-import { CheckCircle2, Circle, Flame, ListChecks, Minus, Plus, Repeat, Trash2, Hash } from 'lucide-react';
+import {
+  Activity,
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Circle,
+  Flame,
+  Hash,
+  ListChecks,
+  Minus,
+  Plus,
+  Repeat,
+  Timer,
+  Trash2
+} from 'lucide-react';
 
-type ViewFilter = 'all' | 'recurring' | 'tally' | 'none';
+type ViewFilter = 'all' | 'recurring' | 'none' | 'tally';
 type StreakUnit = 'd' | 'w' | 'm' | '';
 
 interface SectionConfig {
@@ -46,15 +60,6 @@ const SECTIONS: SectionConfig[] = [
     accentBorder: 'border-purple-500/20',
     streakUnit: 'm',
     placeholder: 'Add monthly recurring task...'
-  },
-  {
-    recurrence: 'tally',
-    title: 'Anytime Reps (Total Done)',
-    subtitle: 'Counts total times completed — never resets & hidden from Weeks Matrix',
-    badgeClass: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-    accentBorder: 'border-cyan-500/25',
-    streakUnit: '',
-    placeholder: 'Add anytime rep (e.g. 5 min guitar session, hydrate)...'
   },
   {
     recurrence: 'none',
@@ -113,7 +118,13 @@ function computeStreak(
   selectedWeekId: string
 ): { count: number; unit: StreakUnit; completedCurrent: boolean } {
   const unit: StreakUnit =
-    item.recurrence === 'daily' ? 'd' : item.recurrence === 'weekly' ? 'w' : item.recurrence === 'monthly' ? 'm' : '';
+    item.recurrence === 'daily'
+      ? 'd'
+      : item.recurrence === 'weekly'
+      ? 'w'
+      : item.recurrence === 'monthly'
+      ? 'm'
+      : '';
 
   if (item.recurrence === 'none' || item.recurrence === 'tally') {
     return { count: 0, unit: '', completedCurrent: item.completed };
@@ -139,15 +150,53 @@ function computeStreak(
   return { count, unit, completedCurrent };
 }
 
+/** Auto-detects volume per rep from titles like "5 min guitar session", "500ml water", "20 pages" */
+function parseVolumeFromTitle(text: string): { volumePerRep?: number; volumeUnit?: string } {
+  const match = text.match(
+    /\b(\d+(?:\.\d+)?)\s*(mins?|minutes?|m|hrs?|hours?|h|ml|l|liters?|pages?|km|reps?|sets?|pushups?|pullups?|calls?)\b/i
+  );
+  if (!match) return {};
+  const val = parseFloat(match[1]);
+  if (Number.isNaN(val) || val <= 0) return {};
+  const rawUnit = match[2].toLowerCase();
+  let unit = rawUnit;
+  if (rawUnit === 'm' || rawUnit === 'min' || rawUnit === 'mins' || rawUnit === 'minute' || rawUnit === 'minutes') {
+    unit = 'min';
+  } else if (rawUnit === 'h' || rawUnit === 'hr' || rawUnit === 'hrs' || rawUnit === 'hour' || rawUnit === 'hours') {
+    unit = 'h';
+  } else if (rawUnit === 'l' || rawUnit === 'liter' || rawUnit === 'liters') {
+    unit = 'L';
+  }
+  return { volumePerRep: val, volumeUnit: unit };
+}
+
+function formatTotalVolume(count: number, perRep?: number, unit?: string): string | null {
+  if (!perRep || perRep <= 0 || !unit) return null;
+  const total = Math.round(count * perRep * 100) / 100;
+  const normUnit = unit.trim().toLowerCase();
+  if (normUnit === 'min' || normUnit === 'mins') {
+    if (total >= 60) {
+      return `${total} min (${(total / 60).toFixed(1)}h)`;
+    }
+    return `${total} min`;
+  }
+  if (normUnit === 'ml' && total >= 1000) {
+    return `${(total / 1000).toFixed(1)} L`;
+  }
+  return `${total} ${unit.trim()}`;
+}
+
 export const ChecklistView: React.FC = () => {
   const {
     checklistItems,
     saveChecklistItems,
     dailyEntries,
+    gwsSessions,
     todayDate,
     selectedDate,
     selectedWeekId,
-    saveDailyEntry
+    saveDailyEntry,
+    setActiveTab
   } = useStorage();
 
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
@@ -158,10 +207,16 @@ export const ChecklistView: React.FC = () => {
     tally: '',
     none: ''
   });
+  const [draftTallyVolume, setDraftTallyVolume] = useState('');
+  const [draftTallyUnit, setDraftTallyUnit] = useState('');
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [editingCountId, setEditingCountId] = useState<string | null>(null);
   const [editingCountText, setEditingCountText] = useState('');
+  const [editingVolId, setEditingVolId] = useState<string | null>(null);
+  const [editingVolNum, setEditingVolNum] = useState('');
+  const [editingVolUnit, setEditingVolUnit] = useState('');
   const [recentlyIncrementedId, setRecentlyIncrementedId] = useState<string | null>(null);
 
   const monthKey = selectedDate.slice(0, 7);
@@ -207,7 +262,6 @@ export const ChecklistView: React.FC = () => {
       if (delta === 1) {
         periods.push(selectedDate);
       } else if (curTotal > 0) {
-        // Remove the most recent log for selectedDate if present, otherwise pop last log
         const idx = periods.lastIndexOf(selectedDate);
         if (idx !== -1) {
           periods.splice(idx, 1);
@@ -249,6 +303,30 @@ export const ChecklistView: React.FC = () => {
     setEditingCountText('');
   };
 
+  const startEditingVolume = (item: ChecklistItem) => {
+    setEditingVolId(item.id);
+    setEditingVolNum(item.volumePerRep ? String(item.volumePerRep) : '');
+    setEditingVolUnit(item.volumeUnit || '');
+  };
+
+  const commitEditVolume = () => {
+    if (!editingVolId) return;
+    const parsedNum = parseFloat(editingVolNum.trim());
+    const cleanUnit = editingVolUnit.trim();
+    const updated = checklistItems.map((item) => {
+      if (item.id !== editingVolId) return item;
+      if (!Number.isNaN(parsedNum) && parsedNum > 0 && cleanUnit) {
+        return { ...item, volumePerRep: parsedNum, volumeUnit: cleanUnit };
+      }
+      const { volumePerRep: _v, volumeUnit: _u, ...rest } = item;
+      return rest;
+    });
+    saveChecklistItems(updated);
+    setEditingVolId(null);
+    setEditingVolNum('');
+    setEditingVolUnit('');
+  };
+
   const handleToggleItem = (itemId: string) => {
     const target = checklistItems.find((i) => i.id === itemId);
     if (target?.recurrence === 'tally') {
@@ -278,6 +356,17 @@ export const ChecklistView: React.FC = () => {
     const text = (drafts[recurrence] || '').trim();
     if (!text) return;
 
+    let volProps: { volumePerRep?: number; volumeUnit?: string } = {};
+    if (recurrence === 'tally') {
+      const manualNum = parseFloat(draftTallyVolume.trim());
+      const manualUnit = draftTallyUnit.trim();
+      if (!Number.isNaN(manualNum) && manualNum > 0 && manualUnit) {
+        volProps = { volumePerRep: manualNum, volumeUnit: manualUnit };
+      } else {
+        volProps = parseVolumeFromTitle(text);
+      }
+    }
+
     const newItem: ChecklistItem = {
       id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       categoryId:
@@ -290,7 +379,7 @@ export const ChecklistView: React.FC = () => {
       recurrence,
       completed: false,
       completedPeriods: [],
-      ...(recurrence === 'tally' ? { totalCount: 0 } : {}),
+      ...(recurrence === 'tally' ? { totalCount: 0, ...volProps } : {}),
       createdAt: todayDate
     };
 
@@ -298,6 +387,10 @@ export const ChecklistView: React.FC = () => {
     saveChecklistItems(updated);
     syncDailyAutomaticHabits(updated);
     setDrafts((prev) => ({ ...prev, [recurrence]: '' }));
+    if (recurrence === 'tally') {
+      setDraftTallyVolume('');
+      setDraftTallyUnit('');
+    }
   };
 
   const handleDeleteItem = (itemId: string) => {
@@ -319,7 +412,10 @@ export const ChecklistView: React.FC = () => {
                 ? 'cat_tally'
                 : 'cat_recurring',
             ...(recurrence === 'tally'
-              ? { totalCount: Math.max(item.totalCount || 0, (item.completedPeriods || []).length) }
+              ? {
+                  totalCount: Math.max(item.totalCount || 0, (item.completedPeriods || []).length),
+                  ...(item.volumePerRep ? {} : parseVolumeFromTitle(item.text))
+                }
               : {}),
             ...(recurrence === 'daily' && item.recurrence !== 'daily' ? { createdAt: todayDate } : {})
           }
@@ -374,24 +470,63 @@ export const ChecklistView: React.FC = () => {
 
   const standardChecklistItems = checklistItems.filter((i) => i.recurrence !== 'tally');
   const tallyItems = checklistItems.filter((i) => i.recurrence === 'tally');
+  const recurringItems = checklistItems.filter(
+    (i) => i.recurrence === 'daily' || i.recurrence === 'weekly' || i.recurrence === 'monthly'
+  );
+
   const totalCount = standardChecklistItems.length;
   const doneCount = standardChecklistItems.filter(isItemDone).length;
-  const totalTallyReps = tallyItems.reduce((acc, i) => acc + getTallyTotal(i), 0);
   const completedOneOffCount = checklistItems.filter((i) => i.recurrence === 'none' && i.completed).length;
+
+  // --- REPS BOARD TELEMETRY (GWS + Regular Recurring Reps + Custom Anytime Reps) ---
+  const gwsTotalCount = gwsSessions.length;
+  const gwsTotalMinutes = gwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+  const gwsTotalHours = (gwsTotalMinutes / 60).toFixed(1);
+  const gwsTodaySessions = gwsSessions.filter((s) => s.date === selectedDate);
+  const gwsTodayMinutes = gwsTodaySessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+  const gwsAvgScore =
+    gwsTotalCount > 0
+      ? (gwsSessions.reduce((acc, s) => acc + (s.ratings?.total || 0), 0) / gwsTotalCount).toFixed(1)
+      : '0.0';
+
+  const recurringVolumeRows = useMemo(() => {
+    return recurringItems
+      .map((item) => ({
+        item,
+        count: new Set(item.completedPeriods || []).size,
+        doneCurrent: isItemDone(item)
+      }))
+      .sort((a, b) => b.count - a.count);
+  }, [recurringItems, selectedDate, selectedWeekId]);
+
+  const totalRecurringReps = recurringVolumeRows.reduce((acc, r) => acc + r.count, 0);
+  const maxRecurringReps = Math.max(1, ...recurringVolumeRows.map((r) => r.count));
+
+  const totalTallyReps = tallyItems.reduce((acc, i) => acc + getTallyTotal(i), 0);
+  const todayTallyReps = tallyItems.reduce((acc, i) => acc + getTallyCountForSelectedDate(i), 0);
+  const maxTallyReps = Math.max(1, ...tallyItems.map((i) => getTallyTotal(i)));
+
+  // Total time-based volume across custom reps (min/h) + GWS
+  const tallyMinutesTotal = tallyItems.reduce((acc, item) => {
+    const unit = (item.volumeUnit || '').trim().toLowerCase();
+    const perRep = item.volumePerRep || 0;
+    const count = getTallyTotal(item);
+    if (perRep <= 0 || count <= 0) return acc;
+    if (unit === 'min' || unit === 'mins') return acc + count * perRep;
+    if (unit === 'h' || unit === 'hr' || unit === 'hrs') return acc + count * perRep * 60;
+    return acc;
+  }, 0);
+
+  const totalCombinedReps = gwsTotalCount + totalRecurringReps + totalTallyReps;
 
   const recurringSections = SECTIONS.filter(
     (s) => s.recurrence === 'daily' || s.recurrence === 'weekly' || s.recurrence === 'monthly'
   );
-  const tallySection = SECTIONS.find((s) => s.recurrence === 'tally')!;
   const oneOffSection = SECTIONS.find((s) => s.recurrence === 'none')!;
 
   const renderSectionCard = (section: SectionConfig) => {
     const items = checklistItems.filter((i) => i.recurrence === section.recurrence);
-    const isTallySection = section.recurrence === 'tally';
     const sectionDone = items.filter(isItemDone).length;
-    const sectionTotalReps = isTallySection
-      ? items.reduce((acc, i) => acc + getTallyTotal(i), 0)
-      : 0;
 
     return (
       <div
@@ -403,7 +538,7 @@ export const ChecklistView: React.FC = () => {
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-100">{section.title}</h2>
               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${section.badgeClass}`}>
-                {isTallySection ? `${sectionTotalReps} total reps` : `${sectionDone}/${items.length}`}
+                {sectionDone}/{items.length}
               </span>
             </div>
             <p className="mt-0.5 text-xs text-slate-400">{section.subtitle}</p>
@@ -413,58 +548,35 @@ export const ChecklistView: React.FC = () => {
         <div className="flex-1 space-y-1.5">
           {items.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-800 px-3 py-4 text-center text-xs text-slate-500">
-              {isTallySection
-                ? 'No anytime reps yet — add something like "5 min guitar session" or "Hydrate"'
-                : 'No tasks yet'}
+              No tasks yet
             </div>
           ) : (
             items.map((item) => {
-              const isTally = item.recurrence === 'tally';
               const done = isItemDone(item);
               const streak = streaksById.get(item.id);
               const isEditing = editingId === item.id;
-              const tallyTotal = isTally ? getTallyTotal(item) : 0;
-              const tallyToday = isTally ? getTallyCountForSelectedDate(item) : 0;
-              const justBumped = recentlyIncrementedId === item.id;
 
               return (
                 <div
                   key={item.id}
-                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-all ${
-                    justBumped
-                      ? 'border-emerald-500/60 bg-emerald-500/10'
-                      : !isTally && done
+                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                    done
                       ? 'border-slate-800/70 bg-slate-950/40'
                       : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
                   }`}
                 >
-                  {isTally ? (
-                    <button
-                      type="button"
-                      onClick={() => handleAdjustTally(item.id, 1)}
-                      className={`inline-flex shrink-0 items-center justify-center rounded-md border px-2 py-1 text-xs font-bold transition-all active:scale-95 ${
-                        justBumped
-                          ? 'border-emerald-400 bg-emerald-500 text-slate-950'
-                          : 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25'
-                      }`}
-                      title="Check off (+1 rep)"
-                    >
-                      +1
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleToggleItem(item.id)}
-                      className="shrink-0 text-slate-400 transition-colors hover:text-emerald-400"
-                      aria-label={done ? 'Mark incomplete' : 'Mark complete'}
-                    >
-                      {done ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                      ) : (
-                        <Circle className="h-4 w-4" />
-                      )}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleItem(item.id)}
+                    className="shrink-0 text-slate-400 transition-colors hover:text-emerald-400"
+                    aria-label={done ? 'Mark incomplete' : 'Mark complete'}
+                  >
+                    {done ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    ) : (
+                      <Circle className="h-4 w-4" />
+                    )}
+                  </button>
 
                   {isEditing ? (
                     <input
@@ -487,7 +599,7 @@ export const ChecklistView: React.FC = () => {
                       type="button"
                       onClick={() => startEditing(item)}
                       className={`min-w-0 flex-1 text-left text-sm ${
-                        !isTally && done ? 'text-slate-500 line-through' : 'text-slate-200'
+                        done ? 'text-slate-500 line-through' : 'text-slate-200'
                       }`}
                       title="Click to rename"
                     >
@@ -495,66 +607,7 @@ export const ChecklistView: React.FC = () => {
                     </button>
                   )}
 
-                  {/* Tally Cumulative Rep Counter & Quick Undo */}
-                  {isTally && (
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {tallyToday > 0 && (
-                        <span
-                          className="hidden sm:inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-300"
-                          title={`Completed ${tallyToday} time(s) on ${selectedDate}`}
-                        >
-                          +{tallyToday} today
-                        </span>
-                      )}
-
-                      {editingCountId === item.id ? (
-                        <input
-                          type="number"
-                          min={0}
-                          value={editingCountText}
-                          autoFocus
-                          onChange={(e) => setEditingCountText(e.target.value)}
-                          onBlur={commitEditCount}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') commitEditCount();
-                            if (e.key === 'Escape') {
-                              setEditingCountId(null);
-                              setEditingCountText('');
-                            }
-                          }}
-                          className="w-16 rounded border border-cyan-500/50 bg-slate-900 px-2 py-0.5 text-center font-mono text-xs font-bold text-cyan-200 outline-none"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => startEditingCount(item)}
-                          title="Total times completed (click to edit count directly)"
-                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-bold transition-colors ${
-                            tallyTotal > 0
-                              ? 'border-cyan-500/35 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25'
-                              : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700'
-                          }`}
-                        >
-                          <span>{tallyTotal}</span>
-                          <span className="font-sans text-[10px] font-normal opacity-80">
-                            {tallyTotal === 1 ? 'time' : 'times'}
-                          </span>
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => handleAdjustTally(item.id, -1)}
-                        disabled={tallyTotal === 0}
-                        title="Undo (-1)"
-                        className="rounded border border-slate-800 bg-slate-900 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:opacity-30"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </button>
-                    </div>
-                  )}
-
-                  {!isTally && item.recurrence !== 'none' && streak && (
+                  {item.recurrence !== 'none' && streak && (
                     <span
                       title={
                         streak.count > 0
@@ -582,7 +635,7 @@ export const ChecklistView: React.FC = () => {
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
-                    <option value="tally">Reps</option>
+                    <option value="tally">Reps Board</option>
                     <option value="none">One-Off</option>
                   </select>
 
@@ -633,7 +686,7 @@ export const ChecklistView: React.FC = () => {
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2.5">
             <ListChecks className="h-5 w-5 text-amber-400" />
-            <h1 className="text-lg font-bold tracking-tight text-slate-100">Checklist</h1>
+            <h1 className="text-lg font-bold tracking-tight text-slate-100">Checklist & Reps Board</h1>
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
               {doneCount} / {totalCount} Done
             </span>
@@ -641,12 +694,10 @@ export const ChecklistView: React.FC = () => {
               <Flame className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
               Best Streak: {bestActiveStreak.count > 0 ? `${bestActiveStreak.count}${bestActiveStreak.unit}` : '0'}
             </span>
-            {tallyItems.length > 0 && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
-                <Hash className="h-3.5 w-3.5 text-cyan-400" />
-                {totalTallyReps} Reps
-              </span>
-            )}
+            <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
+              <BarChart3 className="h-3.5 w-3.5 text-cyan-400" />
+              {totalCombinedReps} Total Reps
+            </span>
           </div>
           <p className="text-xs text-slate-400">
             {selectedDate} • {weekLabel} • {monthKey}
@@ -659,8 +710,8 @@ export const ChecklistView: React.FC = () => {
               [
                 { id: 'all', label: 'All' },
                 { id: 'recurring', label: 'Recurring' },
-                { id: 'tally', label: 'Reps' },
-                { id: 'none', label: 'One-Off' }
+                { id: 'none', label: 'One-Off' },
+                { id: 'tally', label: 'Reps Board' }
               ] as { id: ViewFilter; label: string }[]
             ).map((tab) => (
               <button
@@ -690,7 +741,7 @@ export const ChecklistView: React.FC = () => {
         </div>
       </div>
 
-      {/* Recurring Sections (Daily / Weekly / Monthly with Consecutive Streaks) */}
+      {/* 1. Recurring Sections (Daily / Weekly / Monthly with Consecutive Streaks) */}
       {(viewFilter === 'all' || viewFilter === 'recurring') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
@@ -705,20 +756,7 @@ export const ChecklistView: React.FC = () => {
         </section>
       )}
 
-      {/* Anytime Reps / Cumulative Total Counter Section (Never resets, excluded from Weeks Matrix) */}
-      {(viewFilter === 'all' || viewFilter === 'tally') && (
-        <section className="space-y-3">
-          <div className="flex items-center gap-2 px-1">
-            <Hash className="h-4 w-4 text-cyan-400" />
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Anytime Reps • Cumulative Total (Hidden from Weeks Matrix)
-            </h2>
-          </div>
-          {renderSectionCard(tallySection)}
-        </section>
-      )}
-
-      {/* One-Off Section */}
+      {/* 2. One-Off Section */}
       {(viewFilter === 'all' || viewFilter === 'none') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
@@ -728,6 +766,472 @@ export const ChecklistView: React.FC = () => {
             </h2>
           </div>
           {renderSectionCard(oneOffSection)}
+        </section>
+      )}
+
+      {/* 3. REPS BOARD — Mini Volume Dashboard below Checklist (GWS + Regular Habit Reps + Anytime Reps) */}
+      {(viewFilter === 'all' || viewFilter === 'tally') && (
+        <section className="space-y-4 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-cyan-400" />
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                Reps Board • Lifetime Volume Dashboard
+              </h2>
+              <span className="rounded-full border border-slate-800 bg-slate-900 px-2 py-0.5 text-[10px] font-mono text-slate-400">
+                Hidden from Weeks Matrix
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-slate-400">
+              <span>
+                Combined: <strong className="text-slate-100">{totalCombinedReps}</strong> reps
+              </span>
+              {tallyMinutesTotal + gwsTotalMinutes > 0 && (
+                <>
+                  <span className="text-slate-700">•</span>
+                  <span>
+                    Timed Volume:{' '}
+                    <strong className="text-amber-300">
+                      {((tallyMinutesTotal + gwsTotalMinutes) / 60).toFixed(1)}h
+                    </strong>
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Dashboard Container */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 sm:p-5 shadow-lg space-y-5">
+
+            {/* Top Row: GWS Deep Work Volume + Regular Recurring Habit Volumes */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+              {/* GWS Sprints Volume Card */}
+              <div className="lg:col-span-5 rounded-2xl border border-amber-500/25 bg-gradient-to-br from-slate-950 via-slate-950 to-amber-950/15 p-4 flex flex-col justify-between gap-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                      <Timer className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                        GWS Sprints Done
+                      </div>
+                      <div className="text-[11px] text-slate-400">Deep work sessions volume</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('gws')}
+                    className="inline-flex items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 transition-colors"
+                  >
+                    <span>GWS Studio</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Sprints</div>
+                    <div className="text-2xl font-extrabold font-mono text-amber-400 mt-0.5">
+                      {gwsTotalCount}
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400">
+                      {gwsTodaySessions.length > 0 ? `+${gwsTodaySessions.length} today` : '0 today'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Volume</div>
+                    <div className="text-2xl font-extrabold font-mono text-slate-100 mt-0.5">
+                      {gwsTotalHours}h
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400">
+                      {gwsTotalMinutes} min total
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Avg Quality</div>
+                    <div className="text-2xl font-extrabold font-mono text-emerald-400 mt-0.5">
+                      {gwsAvgScore}
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400">
+                      out of 15{gwsTodayMinutes > 0 ? ` • ${gwsTodayMinutes}m` : ''}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Regular Recurring Habit Volumes Card */}
+              <div className="lg:col-span-7 rounded-2xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col justify-between gap-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                      <Activity className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                        Regular Habit Volume
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Auto-counted from your Daily, Weekly & Monthly checklist items
+                      </div>
+                    </div>
+                  </div>
+                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-xs font-bold text-emerald-300">
+                    {totalRecurringReps} reps
+                  </span>
+                </div>
+
+                {recurringVolumeRows.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-800 p-4 text-center text-xs text-slate-500">
+                    Add recurring items above to track their lifetime volume here.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
+                    {recurringVolumeRows.map(({ item, count }) => {
+                      const pct = Math.max(count > 0 ? 8 : 0, Math.round((count / maxRecurringReps) * 100));
+                      const barColor =
+                        item.recurrence === 'daily'
+                          ? 'bg-emerald-400'
+                          : item.recurrence === 'weekly'
+                          ? 'bg-amber-400'
+                          : 'bg-purple-400';
+                      const tagColor =
+                        item.recurrence === 'daily'
+                          ? 'text-emerald-400'
+                          : item.recurrence === 'weekly'
+                          ? 'text-amber-400'
+                          : 'text-purple-400';
+
+                      return (
+                        <div
+                          key={item.id}
+                          className="rounded-xl border border-slate-800/80 bg-slate-900/70 px-3 py-2 space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="truncate font-medium text-slate-200" title={item.text}>
+                              {item.text}
+                            </span>
+                            <span className={`shrink-0 font-mono font-bold ${tagColor}`}>
+                              {count}×
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-slate-950 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Row: Custom Anytime Reps Bento Tiles (Volumes per Rep) */}
+            <div className="space-y-3 pt-1 border-t border-slate-800/80">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Hash className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-300">
+                    Anytime Reps • Volumes per Rep ({tallyItems.length})
+                  </h3>
+                  <span className="rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2 py-0.5 font-mono text-[11px] font-bold text-cyan-200">
+                    {totalTallyReps} total
+                  </span>
+                  {todayTallyReps > 0 && (
+                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-300">
+                      +{todayTallyReps} today
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] text-slate-500">
+                  Click any count or unit to edit • Never resets
+                </span>
+              </div>
+
+              {tallyItems.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-cyan-500/25 bg-slate-950/50 px-4 py-6 text-center space-y-1">
+                  <p className="text-xs font-semibold text-slate-300">
+                    No anytime reps yet
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Add anything below like <span className="font-mono text-cyan-300">&quot;5 min guitar session&quot;</span>,{' '}
+                    <span className="font-mono text-cyan-300">&quot;20 min guitar session&quot;</span>, or{' '}
+                    <span className="font-mono text-cyan-300">&quot;Hydrate&quot;</span> — volumes per rep auto-calculate!
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {tallyItems.map((item) => {
+                    const tallyTotal = getTallyTotal(item);
+                    const tallyToday = getTallyCountForSelectedDate(item);
+                    const justBumped = recentlyIncrementedId === item.id;
+                    const isEditing = editingId === item.id;
+                    const barPct = Math.max(
+                      tallyTotal > 0 ? 8 : 0,
+                      Math.round((tallyTotal / maxTallyReps) * 100)
+                    );
+                    const totalVolLabel = formatTotalVolume(tallyTotal, item.volumePerRep, item.volumeUnit);
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`group rounded-2xl border p-3.5 flex flex-col justify-between gap-3 transition-all ${
+                          justBumped
+                            ? 'border-emerald-400/70 bg-emerald-500/10 shadow-md shadow-emerald-500/10'
+                            : 'border-slate-800 bg-slate-950/90 hover:border-cyan-500/35'
+                        }`}
+                      >
+                        {/* Tile Header: Name + Today pill + Delete */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                value={editingText}
+                                autoFocus
+                                onChange={(e) => setEditingText(e.target.value)}
+                                onBlur={commitEdit}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') commitEdit();
+                                  if (e.key === 'Escape') {
+                                    setEditingId(null);
+                                    setEditingText('');
+                                  }
+                                }}
+                                className="w-full rounded border border-cyan-500/50 bg-slate-900 px-2 py-0.5 text-sm font-semibold text-slate-100 outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditing(item)}
+                                className="w-full text-left text-sm font-bold text-slate-100 hover:text-cyan-200 transition-colors leading-snug"
+                                title="Click to rename"
+                              >
+                                {item.text}
+                              </button>
+                            )}
+
+                            {/* Volume per Rep / Total Volume chip */}
+                            {editingVolId === item.id ? (
+                              <div className="mt-1.5 flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min={0}
+                                  value={editingVolNum}
+                                  onChange={(e) => setEditingVolNum(e.target.value)}
+                                  placeholder="5"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commitEditVolume();
+                                    if (e.key === 'Escape') setEditingVolId(null);
+                                  }}
+                                  className="w-14 rounded border border-cyan-500/50 bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] text-slate-100 outline-none"
+                                />
+                                <input
+                                  type="text"
+                                  value={editingVolUnit}
+                                  onChange={(e) => setEditingVolUnit(e.target.value)}
+                                  placeholder="min / ml"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commitEditVolume();
+                                    if (e.key === 'Escape') setEditingVolId(null);
+                                  }}
+                                  className="w-16 rounded border border-cyan-500/50 bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] text-slate-100 outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={commitEditVolume}
+                                  className="rounded bg-cyan-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-950"
+                                >
+                                  OK
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditingVolume(item)}
+                                title="Click to set or edit volume per rep (e.g. 5 min, 500 ml)"
+                                className="mt-1 inline-flex items-center gap-1 text-[11px] font-mono text-slate-400 hover:text-cyan-300 transition-colors"
+                              >
+                                {item.volumePerRep && item.volumeUnit ? (
+                                  <>
+                                    <span className="text-slate-500">
+                                      {item.volumePerRep} {item.volumeUnit}/rep
+                                    </span>
+                                    <span className="text-slate-700">→</span>
+                                    <span className="font-bold text-cyan-300">{totalVolLabel}</span>
+                                  </>
+                                ) : (
+                                  <span className="text-[10px] text-slate-600 hover:text-cyan-400">
+                                    + Set vol/rep
+                                  </span>
+                                )}
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            {tallyToday > 0 && (
+                              <span
+                                className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-300"
+                                title={`Done ${tallyToday}× on ${selectedDate}`}
+                              >
+                                +{tallyToday}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(item.id)}
+                              className="p-1 text-slate-600 opacity-0 transition-opacity hover:text-rose-400 group-hover:opacity-100"
+                              aria-label="Delete rep"
+                              title="Delete rep"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Center Volume Display + Proportional Bar */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-baseline justify-between">
+                            {editingCountId === item.id ? (
+                              <input
+                                type="number"
+                                min={0}
+                                value={editingCountText}
+                                autoFocus
+                                onChange={(e) => setEditingCountText(e.target.value)}
+                                onBlur={commitEditCount}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') commitEditCount();
+                                  if (e.key === 'Escape') {
+                                    setEditingCountId(null);
+                                    setEditingCountText('');
+                                  }
+                                }}
+                                className="w-20 rounded border border-cyan-500/60 bg-slate-900 px-2 py-0.5 font-mono text-xl font-extrabold text-cyan-200 outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditingCount(item)}
+                                title="Click to edit starting/total count directly"
+                                className="flex items-baseline gap-1.5 group/count"
+                              >
+                                <span className="font-mono text-3xl font-extrabold tracking-tight text-cyan-300 group-hover/count:text-cyan-200">
+                                  {tallyTotal}
+                                </span>
+                                <span className="text-xs font-medium text-slate-400">
+                                  {tallyTotal === 1 ? 'time' : 'times'}
+                                </span>
+                              </button>
+                            )}
+
+                            <select
+                              value={item.recurrence}
+                              onChange={(e) =>
+                                handleChangeRecurrence(item.id, e.target.value as ChecklistRecurrence)
+                              }
+                              aria-label="Move category"
+                              className="rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-500 outline-none hover:border-slate-700 hover:text-slate-300"
+                            >
+                              <option value="tally">Reps Board</option>
+                              <option value="daily">Daily</option>
+                              <option value="weekly">Weekly</option>
+                              <option value="monthly">Monthly</option>
+                              <option value="none">One-Off</option>
+                            </select>
+                          </div>
+
+                          <div className="h-1.5 w-full rounded-full bg-slate-900 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-300"
+                              style={{ width: `${barPct}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Bottom Tactile +1 / -1 Controls */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleAdjustTally(item.id, 1)}
+                            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl border py-2 text-xs font-extrabold transition-all active:scale-95 ${
+                              justBumped
+                                ? 'border-emerald-400 bg-emerald-500 text-slate-950'
+                                : 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25'
+                            }`}
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>+1 Rep</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAdjustTally(item.id, -1)}
+                            disabled={tallyTotal === 0}
+                            title="Undo (-1)"
+                            className="rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:opacity-30"
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Inline Add New Rep Bar */}
+              <form
+                onSubmit={(e) => handleAddItem('tally', e)}
+                className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
+              >
+                <input
+                  type="text"
+                  value={drafts.tally}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, tally: e.target.value }))}
+                  placeholder="Add rep tracker (e.g. 5 min guitar session, 20 min guitar session, Hydrate)..."
+                  className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3.5 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="any"
+                    min={0}
+                    value={draftTallyVolume}
+                    onChange={(e) => setDraftTallyVolume(e.target.value)}
+                    placeholder="Vol/rep"
+                    title="Optional: volume per rep (auto-detected if in name, e.g. '5 min')"
+                    className="w-24 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50"
+                  />
+                  <input
+                    type="text"
+                    value={draftTallyUnit}
+                    onChange={(e) => setDraftTallyUnit(e.target.value)}
+                    placeholder="Unit (min)"
+                    title="Optional: unit label (min, ml, pages, km...)"
+                    className="w-24 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!drafts.tally.trim()}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 px-4 py-2 text-xs font-extrabold text-slate-950 transition-colors disabled:opacity-40"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Add Rep</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </section>
       )}
     </div>
