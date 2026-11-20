@@ -1500,6 +1500,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const monthlyToggles: Array<{ monthlyTaskId: string; completed: boolean }> = [];
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    const strategyGoalToggles: Array<{
+      strategyPlanId: string;
+      strategyStageId: string;
+      strategyGoalId: string;
+      completed: boolean;
+    }> = [];
 
     (savedPlan.tasks || []).forEach(t => {
       const wasDone = prevMap.get(t.id);
@@ -1510,6 +1516,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       if (t.yearlyTaskId) {
         yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
+      }
+      if (t.strategyPlanId && t.strategyStageId && t.strategyGoalId) {
+        strategyGoalToggles.push({
+          strategyPlanId: t.strategyPlanId,
+          strategyStageId: t.strategyStageId,
+          strategyGoalId: t.strategyGoalId,
+          completed: t.completed
+        });
       }
     });
 
@@ -1546,6 +1560,37 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (yearlyToggles.length > 0) {
       syncLinkedYearlyTasks(yearlyToggles);
+    }
+
+    if (strategyGoalToggles.length > 0) {
+      const curPlans = strategyPlansRef.current;
+      let anyChanged = false;
+      const nowIso = new Date().toISOString();
+      const nextPlans = curPlans.map(sp => {
+        const planHits = strategyGoalToggles.filter(g => g.strategyPlanId === sp.id);
+        if (planHits.length === 0) return sp;
+        let planChanged = false;
+        const nextStages = sp.stages.map(st => {
+          const stageHits = planHits.filter(g => g.strategyStageId === st.id);
+          if (stageHits.length === 0) return st;
+          let stageChanged = false;
+          const nextGoals = st.proximalGoals.map(pg => {
+            const hit = stageHits.find(g => g.strategyGoalId === pg.id);
+            if (hit && pg.completed !== hit.completed) {
+              stageChanged = true;
+              planChanged = true;
+              anyChanged = true;
+              return { ...pg, completed: hit.completed };
+            }
+            return pg;
+          });
+          return stageChanged ? { ...st, proximalGoals: nextGoals } : st;
+        });
+        return planChanged ? { ...sp, stages: nextStages, updatedAt: nowIso } : sp;
+      });
+      if (anyChanged) {
+        commitStrategyPlans(nextPlans);
+      }
     }
   };
 

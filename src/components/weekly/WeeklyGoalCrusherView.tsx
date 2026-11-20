@@ -21,7 +21,13 @@ import {
   ChevronRight,
   ArrowDownToLine,
   ChevronDown,
-  Layers
+  ChevronUp,
+  Layers,
+  Map as MapIcon,
+  Crosshair,
+  Eye,
+  Lock,
+  Calendar
 } from 'lucide-react';
 
 export const WeeklyGoalCrusherView: React.FC = () => {
@@ -36,7 +42,10 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     dailyEntries,
     saveDailyEntry,
     getEntryForDate,
-    setPlanningSubTab
+    setPlanningSubTab,
+    strategyPlans,
+    monthlyPlans,
+    yearlyPlans
   } = useStorage();
 
   const plan = weeklyPlans[selectedWeekId] || weeklyPlans['week_3'] || Object.values(weeklyPlans)[0];
@@ -45,7 +54,84 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const [newGoalInput, setNewGoalInput] = useState('');
   const [newSubGoalInputs, setNewSubGoalInputs] = useState<Record<string, string>>({});
   const [showRewardLadder, setShowRewardLadder] = useState(false);
+  const [showPlanPuller, setShowPlanPuller] = useState(false);
+  const [pullSourceTab, setPullSourceTab] = useState<'roadmaps' | 'monthly' | 'yearly'>('roadmaps');
   const [pulledNotice, setPulledNotice] = useState<string | null>(null);
+
+  // Pull-from-Plans helpers (Roadmaps active unlocked stage only + Monthly + Yearly)
+  const planMonthKey = (plan.startDate || selectedDate).slice(0, 7);
+  const planYearKey = (plan.startDate || selectedDate).slice(0, 4);
+  const linkedMonthlyPlan = monthlyPlans[planMonthKey];
+  const linkedYearlyPlan = yearlyPlans[planYearKey];
+
+  const isInThisWeek = (
+    text: string,
+    links?: { strategyGoalId?: string; monthlyTaskId?: string; yearlyTaskId?: string }
+  ): boolean => {
+    if (links?.strategyGoalId && plan.tasks.some(t => t.strategyGoalId === links.strategyGoalId)) {
+      return true;
+    }
+    if (links?.monthlyTaskId && plan.tasks.some(t => t.monthlyTaskId === links.monthlyTaskId)) {
+      return true;
+    }
+    if (links?.yearlyTaskId && plan.tasks.some(t => t.yearlyTaskId === links.yearlyTaskId)) {
+      return true;
+    }
+    const norm = text.trim().toLowerCase();
+    return !!norm && plan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+  };
+
+  const handlePullItemIntoWeek = (params: {
+    text: string;
+    completed?: boolean;
+    sourceLabel?: string;
+    strategyPlanId?: string;
+    strategyStageId?: string;
+    strategyGoalId?: string;
+    monthlyTaskId?: string;
+    yearlyTaskId?: string;
+  }) => {
+    const trimmed = params.text.trim();
+    if (!trimmed) return;
+    if (
+      isInThisWeek(trimmed, {
+        strategyGoalId: params.strategyGoalId,
+        monthlyTaskId: params.monthlyTaskId,
+        yearlyTaskId: params.yearlyTaskId
+      })
+    ) {
+      setPulledNotice(`Already in Week ${plan.weekNumber}`);
+      setTimeout(() => setPulledNotice(null), 1800);
+      return;
+    }
+
+    const newTask: TaskItem = {
+      id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      text: trimmed,
+      score: 2,
+      completed: Boolean(params.completed),
+      ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
+      ...(params.strategyPlanId ? { strategyPlanId: params.strategyPlanId } : {}),
+      ...(params.strategyStageId ? { strategyStageId: params.strategyStageId } : {}),
+      ...(params.strategyGoalId ? { strategyGoalId: params.strategyGoalId } : {}),
+      ...(params.monthlyTaskId ? { monthlyTaskId: params.monthlyTaskId } : {}),
+      ...(params.yearlyTaskId ? { yearlyTaskId: params.yearlyTaskId } : {})
+    };
+    const nextTasks = [...plan.tasks, newTask];
+    saveWeeklyPlan({
+      ...plan,
+      tasks: nextTasks,
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
+    });
+    setPulledNotice(`Pulled "${trimmed.slice(0, 34)}${trimmed.length > 34 ? '…' : ''}" into Week ${plan.weekNumber}`);
+    setTimeout(() => setPulledNotice(null), 2200);
+  };
+
+  const parseBulletLines = (raw?: string): string[] =>
+    (raw || '')
+      .split('\n')
+      .map(line => line.replace(/^[•\-\*\d\.\)\s]+/, '').trim())
+      .filter(line => line.length >= 2);
 
   // Score stats (includes proportional partial credit for completed sub-goals)
   const totalPossible = plan.tasks.reduce((acc, t) => acc + (t.score || 0), 0);
@@ -657,7 +743,26 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         {/* Clean Goals Checklist */}
         <div className="space-y-2 pt-2 border-t border-slate-800/80">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-400 pb-1">
-            <span>Weekly Deliverables ({plan.tasks.length})</span>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span>Weekly Deliverables ({plan.tasks.length})</span>
+              <button
+                type="button"
+                onClick={() => setShowPlanPuller(prev => !prev)}
+                className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-xl border text-[11px] font-extrabold transition-all active:scale-95 ${
+                  showPlanPuller
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                    : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/35'
+                }`}
+              >
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+                <span>Pull from Plans</span>
+                {showPlanPuller ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
             <div className="flex items-center space-x-2">
               <span className="font-mono text-slate-500 text-[11px]">
                 Allocated: <strong className="text-amber-400">{totalPossible}</strong> / 10 Pts
@@ -681,6 +786,350 @@ export const WeeklyGoalCrusherView: React.FC = () => {
               )}
             </div>
           </div>
+
+          {/* Pull from Plans Drawer (Written Roadmaps active unlocked stage + Monthly + Yearly) */}
+          {showPlanPuller && (
+            <div className="rounded-2xl bg-slate-950/90 border border-amber-500/30 p-4 sm:p-5 space-y-4 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800/80">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPullSourceTab('roadmaps')}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      pullSourceTab === 'roadmaps'
+                        ? 'bg-amber-500 text-slate-950 border-amber-400'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <MapIcon className="w-3.5 h-3.5" />
+                    <span>Written Plans ({strategyPlans.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPullSourceTab('monthly')}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      pullSourceTab === 'monthly'
+                        ? 'bg-purple-500 text-slate-950 border-purple-400'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Monthly ({linkedMonthlyPlan?.tasks.length || 0})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPullSourceTab('yearly')}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      pullSourceTab === 'yearly'
+                        ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Yearly ({linkedYearlyPlan?.tasks.length || 0})</span>
+                  </button>
+                </div>
+
+                <span className="text-[11px] text-slate-500">
+                  Pull directly into <strong className="text-amber-400">Week {plan.weekNumber}</strong>
+                </span>
+              </div>
+
+              {/* TAB 1: WRITTEN ROADMAPS (STRICTLY UNLOCKED ACTIVE STAGE ONLY) */}
+              {pullSourceTab === 'roadmaps' && (
+                <div className="space-y-3">
+                  {strategyPlans.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+                      No Written Plans yet. Create one in Planning Hub → Roadmaps.
+                    </div>
+                  ) : (
+                    strategyPlans.map(sp => {
+                      const activeStageIdx = sp.stages.findIndex(s => !s.gatePassed);
+                      const activeStage = activeStageIdx >= 0 ? sp.stages[activeStageIdx] : null;
+                      const lookLines = activeStage ? parseBulletLines(activeStage.whatItLooksLike) : [];
+                      const gateText = activeStage?.gateCriterion?.trim() || '';
+
+                      return (
+                        <div
+                          key={sp.id}
+                          className="rounded-2xl bg-slate-900/75 border border-slate-800 p-4 space-y-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
+                              <span className="text-sm font-extrabold text-amber-300 truncate">
+                                {sp.title || 'Untitled Plan'}
+                              </span>
+                              {activeStage ? (
+                                <span className="px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[10px] font-bold text-slate-300">
+                                  Active: STAGE {activeStageIdx} — {activeStage.title}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                                  All Gates Passed ✓
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPlanningSubTab('roadmaps')}
+                              className="text-[11px] font-bold text-slate-400 hover:text-amber-300"
+                            >
+                              Open Plan →
+                            </button>
+                          </div>
+
+                          {activeStage && (
+                            <div className="space-y-2.5">
+                              {/* Proximal Goals */}
+                              {activeStage.proximalGoals.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="inline-flex items-center space-x-1 text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
+                                    <Crosshair className="w-3 h-3" />
+                                    <span>Proximal Goals</span>
+                                  </div>
+                                  <div className="space-y-1">
+                                    {activeStage.proximalGoals.map(pg => {
+                                      const already = isInThisWeek(pg.text, { strategyGoalId: pg.id });
+                                      return (
+                                        <div
+                                          key={pg.id}
+                                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                                        >
+                                          <span
+                                            className={`text-xs min-w-0 break-words ${
+                                              pg.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                                            }`}
+                                          >
+                                            {pg.text}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            disabled={already}
+                                            onClick={() =>
+                                              handlePullItemIntoWeek({
+                                                text: pg.text,
+                                                completed: pg.completed,
+                                                sourceLabel: `${sp.title} · Stage ${activeStageIdx}`,
+                                                strategyPlanId: sp.id,
+                                                strategyStageId: activeStage.id,
+                                                strategyGoalId: pg.id
+                                              })
+                                            }
+                                            className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                                              already
+                                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                                : 'bg-slate-900 hover:bg-amber-500/20 text-amber-300 border-amber-500/30 active:scale-95'
+                                            }`}
+                                          >
+                                            {!already && <ArrowDownToLine className="w-3 h-3" />}
+                                            <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull`}</span>
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* What It Looks Like bullets */}
+                              {lookLines.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="inline-flex items-center space-x-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+                                    <Eye className="w-3 h-3" />
+                                    <span>What It Looks Like</span>
+                                  </div>
+                                  <div className="space-y-1">
+                                    {lookLines.map((line, lIdx) => {
+                                      const already = isInThisWeek(line);
+                                      return (
+                                        <div
+                                          key={lIdx}
+                                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                                        >
+                                          <span className="text-xs text-slate-300 min-w-0 break-words">
+                                            {line}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            disabled={already}
+                                            onClick={() =>
+                                              handlePullItemIntoWeek({
+                                                text: line,
+                                                sourceLabel: `${sp.title} · Stage ${activeStageIdx}`,
+                                                strategyPlanId: sp.id,
+                                                strategyStageId: activeStage.id
+                                              })
+                                            }
+                                            className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                                              already
+                                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                                : 'bg-slate-900 hover:bg-amber-500/20 text-amber-300 border-amber-500/30 active:scale-95'
+                                            }`}
+                                          >
+                                            {!already && <ArrowDownToLine className="w-3 h-3" />}
+                                            <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull`}</span>
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Stage Gate Criterion */}
+                              {gateText && (
+                                <div className="space-y-1.5">
+                                  <div className="inline-flex items-center space-x-1 text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">
+                                    <Lock className="w-3 h-3" />
+                                    <span>Stage {activeStageIdx} Gate</span>
+                                  </div>
+                                  {(() => {
+                                    const already = isInThisWeek(gateText);
+                                    return (
+                                      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-amber-500/25">
+                                        <span className="text-xs font-medium text-slate-200 min-w-0 break-words">
+                                          {gateText}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          disabled={already}
+                                          onClick={() =>
+                                            handlePullItemIntoWeek({
+                                              text: gateText,
+                                              sourceLabel: `${sp.title} · Stage ${activeStageIdx} Gate`,
+                                              strategyPlanId: sp.id,
+                                              strategyStageId: activeStage.id
+                                            })
+                                          }
+                                          className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                                            already
+                                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                              : 'bg-slate-900 hover:bg-amber-500/20 text-amber-300 border-amber-500/30 active:scale-95'
+                                          }`}
+                                        >
+                                          {!already && <ArrowDownToLine className="w-3 h-3" />}
+                                          <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull Gate`}</span>
+                                        </button>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+
+                              {activeStage.proximalGoals.length === 0 && lookLines.length === 0 && !gateText && (
+                                <p className="text-[11px] text-slate-500 italic">
+                                  Add Proximal Goals, What It Looks Like bullets, or a Gate inside this stage to pull them here.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: MONTHLY PLAN */}
+              {pullSourceTab === 'monthly' && (
+                <div className="space-y-2">
+                  {!linkedMonthlyPlan || linkedMonthlyPlan.tasks.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+                      No Monthly goals found for {planMonthKey}. Add them in Planning Hub → Monthly Plan.
+                    </div>
+                  ) : (
+                    linkedMonthlyPlan.tasks.map(mt => {
+                      const already = isInThisWeek(mt.text, { monthlyTaskId: mt.id });
+                      return (
+                        <div
+                          key={mt.id}
+                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-800"
+                        >
+                          <span
+                            className={`text-xs min-w-0 break-words ${
+                              mt.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                            }`}
+                          >
+                            {mt.text}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={already}
+                            onClick={() =>
+                              handlePullItemIntoWeek({
+                                text: mt.text,
+                                completed: mt.completed,
+                                sourceLabel: `Monthly ${planMonthKey}`,
+                                monthlyTaskId: mt.id,
+                                ...(mt.yearlyTaskId ? { yearlyTaskId: mt.yearlyTaskId } : {})
+                              })
+                            }
+                            className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                              already
+                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                : 'bg-slate-950 hover:bg-purple-500/20 text-purple-300 border-purple-500/30 active:scale-95'
+                            }`}
+                          >
+                            {!already && <ArrowDownToLine className="w-3 h-3" />}
+                            <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull`}</span>
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* TAB 3: YEARLY PLAN */}
+              {pullSourceTab === 'yearly' && (
+                <div className="space-y-2">
+                  {!linkedYearlyPlan || linkedYearlyPlan.tasks.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+                      No Yearly goals found for {planYearKey}. Add them in Planning Hub → Yearly Plan.
+                    </div>
+                  ) : (
+                    linkedYearlyPlan.tasks.map(yt => {
+                      const already = isInThisWeek(yt.text, { yearlyTaskId: yt.id });
+                      return (
+                        <div
+                          key={yt.id}
+                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-800"
+                        >
+                          <span
+                            className={`text-xs min-w-0 break-words ${
+                              yt.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                            }`}
+                          >
+                            {yt.text}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={already}
+                            onClick={() =>
+                              handlePullItemIntoWeek({
+                                text: yt.text,
+                                completed: yt.completed,
+                                sourceLabel: `Yearly ${planYearKey}`,
+                                yearlyTaskId: yt.id
+                              })
+                            }
+                            className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                              already
+                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                : 'bg-slate-950 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/30 active:scale-95'
+                            }`}
+                          >
+                            {!already && <ArrowDownToLine className="w-3 h-3" />}
+                            <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull`}</span>
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {plan.tasks.map((task) => {
             const inSelectedDay = isGoalInDay(selectedDate, task.text, task.id);
@@ -710,14 +1159,22 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                       )}
                     </button>
 
-                    <input
-                      type="text"
-                      value={task.text}
-                      onChange={(e) => handleEditGoal(task.id, e.target.value)}
-                      className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
-                        task.completed ? 'line-through text-slate-500' : 'text-slate-100'
-                      }`}
-                    />
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={task.text}
+                        onChange={(e) => handleEditGoal(task.id, e.target.value)}
+                        className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
+                          task.completed ? 'line-through text-slate-500' : 'text-slate-100'
+                        }`}
+                      />
+                      {task.sourceLabel && (
+                        <span className="inline-flex items-center space-x-1 mt-0.5 text-[10px] font-bold text-amber-400/80">
+                          <MapIcon className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">{task.sourceLabel}</span>
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Actions & Point Weight */}

@@ -62,6 +62,10 @@ export interface TaskItem {
   subTasks?: SubTaskItem[];
   monthlyTaskId?: string;
   yearlyTaskId?: string;
+  strategyPlanId?: string;
+  strategyStageId?: string;
+  strategyGoalId?: string;
+  sourceLabel?: string;
 }
 
 export interface ActiveGWSTimer {

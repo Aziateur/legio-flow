@@ -106,6 +106,8 @@ export const StrategyRoadmapsView: React.FC = () => {
   const [editLockedMode, setEditLockedMode] = useState<boolean>(false);
   const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({});
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
+  const [pullTargetWeekId, setPullTargetWeekId] = useState<string>('');
+  const [pullNotice, setPullNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (strategyPlans.length === 0) {
@@ -116,10 +118,13 @@ export const StrategyRoadmapsView: React.FC = () => {
   }, [strategyPlans, selectedPlanId]);
 
   const activePlan = strategyPlans.find(p => p.id === selectedPlanId) || strategyPlans[0] || null;
-  const activeWeeklyPlan =
+  const sortedWeeklyPlans = Object.values(weeklyPlans).sort((a, b) => a.weekNumber - b.weekNumber);
+  const defaultWeeklyPlan =
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId] ||
-    Object.values(weeklyPlans)[0];
+    sortedWeeklyPlans[sortedWeeklyPlans.length - 1];
+  const activeWeeklyPlan =
+    (pullTargetWeekId && weeklyPlans[pullTargetWeekId]) || defaultWeeklyPlan;
 
   const handleCreatePlan = () => {
     const newPlan = createNewPlanTemplate(strategyPlans.length);
@@ -229,17 +234,35 @@ export const StrategyRoadmapsView: React.FC = () => {
     setGoalDrafts(prev => ({ ...prev, [stageId]: '' }));
   };
 
-  const isGoalInActiveWeek = (text: string): boolean => {
+  const parseLookLines = (raw?: string): string[] =>
+    (raw || '')
+      .split('\n')
+      .map(line => line.replace(/^[•\-\*\d\.\)\s]+/, '').trim())
+      .filter(line => line.length >= 2);
+
+  const isGoalInActiveWeek = (text: string, strategyGoalId?: string): boolean => {
     if (!activeWeeklyPlan) return false;
+    if (strategyGoalId && activeWeeklyPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
+      return true;
+    }
     const norm = text.trim().toLowerCase();
     return !!norm && activeWeeklyPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
   };
 
-  const handlePullGoalToWeek = (text: string) => {
+  const handlePullGoalToWeek = (
+    text: string,
+    links?: {
+      strategyPlanId?: string;
+      strategyStageId?: string;
+      strategyGoalId?: string;
+      sourceLabel?: string;
+      completed?: boolean;
+    }
+  ) => {
     if (!activeWeeklyPlan) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (isGoalInActiveWeek(trimmed)) {
+    if (isGoalInActiveWeek(trimmed, links?.strategyGoalId)) {
       setSelectedWeekId(activeWeeklyPlan.id);
       setPlanningSubTab('weekly');
       return;
@@ -250,7 +273,11 @@ export const StrategyRoadmapsView: React.FC = () => {
         id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         text: trimmed,
         score: 2,
-        completed: false
+        completed: Boolean(links?.completed),
+        ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
+        ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
+        ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
+        ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
       }
     ];
     saveWeeklyPlan({
@@ -258,6 +285,8 @@ export const StrategyRoadmapsView: React.FC = () => {
       tasks: nextTasks,
       achievedScore: computeWeeklyAchievedScore(nextTasks)
     });
+    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to Week ${activeWeeklyPlan.weekNumber}`);
+    setTimeout(() => setPullNotice(null), 2400);
   };
 
   const handleCopyMarkdown = () => {
@@ -505,6 +534,24 @@ export const StrategyRoadmapsView: React.FC = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {activeWeeklyPlan && sortedWeeklyPlans.length > 0 && (
+                      <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                        <ArrowDownToLine className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span className="text-[11px] text-slate-500 hidden sm:inline">Pull to:</span>
+                        <select
+                          value={activeWeeklyPlan.id}
+                          onChange={e => setPullTargetWeekId(e.target.value)}
+                          className="bg-transparent text-amber-300 font-bold text-xs focus:outline-none cursor-pointer"
+                          title="Choose which Weekly Plan receives pulled items"
+                        >
+                          {sortedWeeklyPlans.map(wp => (
+                            <option key={wp.id} value={wp.id} className="bg-slate-950 text-slate-200">
+                              Week {wp.weekNumber} ({wp.startDate.slice(5)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => setEditLockedMode(prev => !prev)}
@@ -550,6 +597,23 @@ export const StrategyRoadmapsView: React.FC = () => {
                 </div>
 
                 {/* Linear Written Stage Jump Strip */}
+                {pullNotice && (
+                  <div className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-xs font-bold text-emerald-300">
+                    <span>✓ {pullNotice}</span>
+                    {activeWeeklyPlan && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedWeekId(activeWeeklyPlan.id);
+                          setPlanningSubTab('weekly');
+                        }}
+                        className="underline hover:text-emerald-200 shrink-0"
+                      >
+                        Open Week {activeWeeklyPlan.weekNumber} →
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center gap-2 overflow-x-auto pt-3 border-t border-slate-800/80 pb-1">
                   {activePlan.stages.map((stage, idx) => {
                     const activeStageIdx = getActiveStageIndex(activePlan);
@@ -792,7 +856,7 @@ export const StrategyRoadmapsView: React.FC = () => {
                                 ) : (
                                   <div className="space-y-1.5">
                                     {stage.proximalGoals.map(goal => {
-                                      const inWeek = isGoalInActiveWeek(goal.text);
+                                      const inWeek = isGoalInActiveWeek(goal.text, goal.id);
                                       return (
                                         <div
                                           key={goal.id}
@@ -840,20 +904,28 @@ export const StrategyRoadmapsView: React.FC = () => {
                                           {activeWeeklyPlan && (
                                             <button
                                               type="button"
-                                              onClick={() => handlePullGoalToWeek(goal.text)}
+                                              onClick={() =>
+                                                handlePullGoalToWeek(goal.text, {
+                                                  strategyPlanId: activePlan.id,
+                                                  strategyStageId: stage.id,
+                                                  strategyGoalId: goal.id,
+                                                  sourceLabel: `${activePlan.title} · Stage ${idx}`,
+                                                  completed: goal.completed
+                                                })
+                                              }
                                               title={
                                                 inWeek
                                                   ? `In Week ${activeWeeklyPlan.weekNumber} — open Weekly Plan`
                                                   : `Pull into Week ${activeWeeklyPlan.weekNumber}`
                                               }
-                                              className={`shrink-0 inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
+                                              className={`shrink-0 inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
                                                 inWeek
                                                   ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                                  : 'bg-slate-950 text-amber-400 border-slate-800 hover:bg-slate-800'
+                                                  : 'bg-slate-950 text-amber-400 border-amber-500/30 hover:bg-amber-500/15'
                                               }`}
                                             >
                                               {!inWeek && <ArrowDownToLine className="w-2.5 h-2.5" />}
-                                              <span>{inWeek ? `✓ W${activeWeeklyPlan.weekNumber}` : '+ Week'}</span>
+                                              <span>{inWeek ? `✓ W${activeWeeklyPlan.weekNumber}` : `+ W${activeWeeklyPlan.weekNumber}`}</span>
                                             </button>
                                           )}
                                           <button
@@ -901,7 +973,7 @@ export const StrategyRoadmapsView: React.FC = () => {
                             </div>
 
                             {/* 2. WHAT IT LOOKS LIKE */}
-                            <div className="rounded-2xl bg-slate-950/80 border border-slate-800 p-4 space-y-2">
+                            <div className="rounded-2xl bg-slate-950/80 border border-slate-800 p-4 space-y-2.5">
                               <label className="inline-flex items-center space-x-1.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
                                 <Eye className="w-3.5 h-3.5" />
                                 <span>What It Looks Like</span>
@@ -915,6 +987,38 @@ export const StrategyRoadmapsView: React.FC = () => {
                                 placeholder="- Clear entry and exit parameters&#10;- Repeatable tasks & obvious course correction&#10;- Concrete observable signals of this stage..."
                                 className="w-full bg-slate-900/70 border border-slate-800 focus:border-amber-500/50 rounded-xl p-3 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none leading-relaxed resize-y"
                               />
+                              {activeWeeklyPlan && parseLookLines(stage.whatItLooksLike).length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-800/70">
+                                  <span className="text-[10px] font-bold text-slate-500">
+                                    Pull to W{activeWeeklyPlan.weekNumber}:
+                                  </span>
+                                  {parseLookLines(stage.whatItLooksLike).map((line, lIdx) => {
+                                    const inWeek = isGoalInActiveWeek(line);
+                                    return (
+                                      <button
+                                        key={lIdx}
+                                        type="button"
+                                        onClick={() =>
+                                          handlePullGoalToWeek(line, {
+                                            strategyPlanId: activePlan.id,
+                                            strategyStageId: stage.id,
+                                            sourceLabel: `${activePlan.title} · Stage ${idx}`
+                                          })
+                                        }
+                                        title={inWeek ? `Already in Week ${activeWeeklyPlan.weekNumber}` : `Pull "${line}" into Week ${activeWeeklyPlan.weekNumber}`}
+                                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg border text-[10px] font-semibold max-w-[220px] transition-colors ${
+                                          inWeek
+                                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                            : 'bg-slate-900 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border-slate-800 hover:border-amber-500/30'
+                                        }`}
+                                      >
+                                        <span className="shrink-0 font-bold">{inWeek ? '✓' : '+'}</span>
+                                        <span className="truncate">{line}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
 
                             {/* 3. WHAT ISN'T POSSIBLE UNTIL THEN (DISCIPLINE GUARDRAIL) */}
@@ -987,40 +1091,71 @@ export const StrategyRoadmapsView: React.FC = () => {
                               />
                             </div>
 
-                            <button
-                              type="button"
-                              disabled={isLocked && !stage.gatePassed}
-                              onClick={() => updateStage(stage.id, { gatePassed: !stage.gatePassed })}
-                              title={
-                                isLocked && !stage.gatePassed
-                                  ? `Pass Stage ${idx - 1}'s gate first`
-                                  : undefined
-                              }
-                              className={`shrink-0 flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-extrabold border transition-all ${
-                                isLocked && !stage.gatePassed
-                                  ? 'bg-slate-900/60 text-slate-600 border-slate-800 cursor-not-allowed'
-                                  : stage.gatePassed
-                                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-400 shadow-md shadow-emerald-500/20 active:scale-95'
-                                  : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40 active:scale-95'
-                              }`}
-                            >
-                              {stage.gatePassed ? (
-                                <>
-                                  <CheckCircle2 className="w-4 h-4" />
-                                  <span>Gate Passed</span>
-                                </>
-                              ) : isLocked ? (
-                                <>
-                                  <Lock className="w-4 h-4" />
-                                  <span>Locked</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Unlock className="w-4 h-4" />
-                                  <span>Pass Gate</span>
-                                </>
-                              )}
-                            </button>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              {activeWeeklyPlan && stage.gateCriterion.trim().length > 0 && (() => {
+                                const gateInWeek = isGoalInActiveWeek(stage.gateCriterion.trim());
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handlePullGoalToWeek(stage.gateCriterion.trim(), {
+                                        strategyPlanId: activePlan.id,
+                                        strategyStageId: stage.id,
+                                        sourceLabel: `${activePlan.title} · Stage ${idx} Gate`
+                                      })
+                                    }
+                                    className={`inline-flex items-center space-x-1.5 px-3 py-2.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                                      gateInWeek
+                                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                                        : 'bg-slate-900 hover:bg-amber-500/15 text-amber-300 border-amber-500/35'
+                                    }`}
+                                    title={
+                                      gateInWeek
+                                        ? `In Week ${activeWeeklyPlan.weekNumber} — click to open Weekly Plan`
+                                        : `Pull this Gate criterion into Week ${activeWeeklyPlan.weekNumber} goals`
+                                    }
+                                  >
+                                    {!gateInWeek && <ArrowDownToLine className="w-3.5 h-3.5" />}
+                                    <span>{gateInWeek ? `✓ In W${activeWeeklyPlan.weekNumber}` : `+ Week ${activeWeeklyPlan.weekNumber}`}</span>
+                                  </button>
+                                );
+                              })()}
+
+                              <button
+                                type="button"
+                                disabled={isLocked && !stage.gatePassed}
+                                onClick={() => updateStage(stage.id, { gatePassed: !stage.gatePassed })}
+                                title={
+                                  isLocked && !stage.gatePassed
+                                    ? `Pass Stage ${idx - 1}'s gate first`
+                                    : undefined
+                                }
+                                className={`shrink-0 flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-extrabold border transition-all ${
+                                  isLocked && !stage.gatePassed
+                                    ? 'bg-slate-900/60 text-slate-600 border-slate-800 cursor-not-allowed'
+                                    : stage.gatePassed
+                                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-400 shadow-md shadow-emerald-500/20 active:scale-95'
+                                    : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/40 active:scale-95'
+                                }`}
+                              >
+                                {stage.gatePassed ? (
+                                  <>
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    <span>Gate Passed</span>
+                                  </>
+                                ) : isLocked ? (
+                                  <>
+                                    <Lock className="w-4 h-4" />
+                                    <span>Locked</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Unlock className="w-4 h-4" />
+                                    <span>Pass Gate</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}
