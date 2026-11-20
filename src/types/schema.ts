@@ -180,7 +180,7 @@ export interface ReviewEntry {
   updatedAt?: string;
 }
 
-export type ChecklistRecurrence = 'daily' | 'weekly' | 'monthly' | 'none';
+export type ChecklistRecurrence = 'daily' | 'weekly' | 'monthly' | 'tally' | 'none';
 
 export interface ChecklistCategory {
   id: string;
@@ -193,6 +193,7 @@ export interface ChecklistItem {
   text: string;
   recurrence: ChecklistRecurrence;
   completed: boolean; // Used when recurrence === 'none'
-  completedPeriods?: string[]; // Stores 'YYYY-MM-DD' for daily, 'week_N' for weekly, 'YYYY-MM' for monthly
+  completedPeriods?: string[]; // Stores 'YYYY-MM-DD' for daily/tally logs, 'week_N' for weekly, 'YYYY-MM' for monthly
+  totalCount?: number; // Used when recurrence === 'tally' (cumulative total done — never resets, excluded from weekly matrix)
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }

@@ -4,9 +4,9 @@ import {
   getActiveDailyChecklistItemsForDate
 } from '../../context/StorageContext';
 import { ChecklistItem, ChecklistRecurrence } from '../../types/schema';
-import { CheckCircle2, Circle, Flame, ListChecks, Plus, Repeat, Trash2 } from 'lucide-react';
+import { CheckCircle2, Circle, Flame, ListChecks, Minus, Plus, Repeat, Trash2, Hash } from 'lucide-react';
 
-type ViewFilter = 'all' | 'recurring' | 'none';
+type ViewFilter = 'all' | 'recurring' | 'tally' | 'none';
 type StreakUnit = 'd' | 'w' | 'm' | '';
 
 interface SectionConfig {
@@ -46,6 +46,15 @@ const SECTIONS: SectionConfig[] = [
     accentBorder: 'border-purple-500/20',
     streakUnit: 'm',
     placeholder: 'Add monthly recurring task...'
+  },
+  {
+    recurrence: 'tally',
+    title: 'Anytime Reps (Total Done)',
+    subtitle: 'Counts total times completed — never resets & hidden from Weeks Matrix',
+    badgeClass: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+    accentBorder: 'border-cyan-500/25',
+    streakUnit: '',
+    placeholder: 'Add anytime rep (e.g. 5 min guitar session, hydrate)...'
   },
   {
     recurrence: 'none',
@@ -106,7 +115,7 @@ function computeStreak(
   const unit: StreakUnit =
     item.recurrence === 'daily' ? 'd' : item.recurrence === 'weekly' ? 'w' : item.recurrence === 'monthly' ? 'm' : '';
 
-  if (item.recurrence === 'none') {
+  if (item.recurrence === 'none' || item.recurrence === 'tally') {
     return { count: 0, unit: '', completedCurrent: item.completed };
   }
 
@@ -146,16 +155,32 @@ export const ChecklistView: React.FC = () => {
     daily: '',
     weekly: '',
     monthly: '',
+    tally: '',
     none: ''
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [editingCountId, setEditingCountId] = useState<string | null>(null);
+  const [editingCountText, setEditingCountText] = useState('');
+  const [recentlyIncrementedId, setRecentlyIncrementedId] = useState<string | null>(null);
 
   const monthKey = selectedDate.slice(0, 7);
   const weekLabel = selectedWeekId.replace('week_', 'Week ');
 
+  const getTallyTotal = (item: ChecklistItem): number => {
+    if (typeof item.totalCount === 'number' && !Number.isNaN(item.totalCount)) {
+      return Math.max(0, Math.floor(item.totalCount));
+    }
+    return (item.completedPeriods || []).length;
+  };
+
+  const getTallyCountForSelectedDate = (item: ChecklistItem): number => {
+    return (item.completedPeriods || []).filter((p) => p === selectedDate).length;
+  };
+
   const isItemDone = (item: ChecklistItem): boolean => {
     if (item.recurrence === 'none') return item.completed;
+    if (item.recurrence === 'tally') return getTallyCountForSelectedDate(item) > 0;
     const key = getPeriodKey(item.recurrence, selectedDate, selectedWeekId);
     return (item.completedPeriods || []).includes(key);
   };
@@ -173,7 +198,64 @@ export const ChecklistView: React.FC = () => {
     }
   };
 
+  const handleAdjustTally = (itemId: string, delta: 1 | -1) => {
+    const updated = checklistItems.map((item) => {
+      if (item.id !== itemId) return item;
+      const curTotal = getTallyTotal(item);
+      const nextTotal = Math.max(0, curTotal + delta);
+      const periods = [...(item.completedPeriods || [])];
+      if (delta === 1) {
+        periods.push(selectedDate);
+      } else if (curTotal > 0) {
+        // Remove the most recent log for selectedDate if present, otherwise pop last log
+        const idx = periods.lastIndexOf(selectedDate);
+        if (idx !== -1) {
+          periods.splice(idx, 1);
+        } else if (periods.length > 0) {
+          periods.pop();
+        }
+      }
+      return {
+        ...item,
+        totalCount: nextTotal,
+        completedPeriods: periods
+      };
+    });
+
+    saveChecklistItems(updated);
+    if (delta === 1) {
+      setRecentlyIncrementedId(itemId);
+      setTimeout(() => {
+        setRecentlyIncrementedId((prev) => (prev === itemId ? null : prev));
+      }, 450);
+    }
+  };
+
+  const startEditingCount = (item: ChecklistItem) => {
+    setEditingCountId(item.id);
+    setEditingCountText(String(getTallyTotal(item)));
+  };
+
+  const commitEditCount = () => {
+    if (!editingCountId) return;
+    const parsed = parseInt(editingCountText.trim(), 10);
+    if (!Number.isNaN(parsed) && parsed >= 0) {
+      const updated = checklistItems.map((item) =>
+        item.id === editingCountId ? { ...item, totalCount: parsed } : item
+      );
+      saveChecklistItems(updated);
+    }
+    setEditingCountId(null);
+    setEditingCountText('');
+  };
+
   const handleToggleItem = (itemId: string) => {
+    const target = checklistItems.find((i) => i.id === itemId);
+    if (target?.recurrence === 'tally') {
+      handleAdjustTally(itemId, 1);
+      return;
+    }
+
     const updated = checklistItems.map((item) => {
       if (item.id !== itemId) return item;
       if (item.recurrence === 'none') {
@@ -198,11 +280,17 @@ export const ChecklistView: React.FC = () => {
 
     const newItem: ChecklistItem = {
       id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring',
+      categoryId:
+        recurrence === 'none'
+          ? 'cat_oneoff'
+          : recurrence === 'tally'
+          ? 'cat_tally'
+          : 'cat_recurring',
       text,
       recurrence,
       completed: false,
       completedPeriods: [],
+      ...(recurrence === 'tally' ? { totalCount: 0 } : {}),
       createdAt: todayDate
     };
 
@@ -224,7 +312,15 @@ export const ChecklistView: React.FC = () => {
         ? {
             ...item,
             recurrence,
-            categoryId: recurrence === 'none' ? 'cat_oneoff' : 'cat_recurring',
+            categoryId:
+              recurrence === 'none'
+                ? 'cat_oneoff'
+                : recurrence === 'tally'
+                ? 'cat_tally'
+                : 'cat_recurring',
+            ...(recurrence === 'tally'
+              ? { totalCount: Math.max(item.totalCount || 0, (item.completedPeriods || []).length) }
+              : {}),
             ...(recurrence === 'daily' && item.recurrence !== 'daily' ? { createdAt: todayDate } : {})
           }
         : item
@@ -267,7 +363,7 @@ export const ChecklistView: React.FC = () => {
   const bestActiveStreak = useMemo(() => {
     let best: { count: number; unit: StreakUnit } = { count: 0, unit: 'd' };
     for (const item of checklistItems) {
-      if (item.recurrence === 'none') continue;
+      if (item.recurrence === 'none' || item.recurrence === 'tally') continue;
       const streak = streaksById.get(item.id);
       if (streak && streak.count > best.count) {
         best = { count: streak.count, unit: streak.unit };
@@ -276,16 +372,26 @@ export const ChecklistView: React.FC = () => {
     return best;
   }, [checklistItems, streaksById]);
 
-  const totalCount = checklistItems.length;
-  const doneCount = checklistItems.filter(isItemDone).length;
+  const standardChecklistItems = checklistItems.filter((i) => i.recurrence !== 'tally');
+  const tallyItems = checklistItems.filter((i) => i.recurrence === 'tally');
+  const totalCount = standardChecklistItems.length;
+  const doneCount = standardChecklistItems.filter(isItemDone).length;
+  const totalTallyReps = tallyItems.reduce((acc, i) => acc + getTallyTotal(i), 0);
   const completedOneOffCount = checklistItems.filter((i) => i.recurrence === 'none' && i.completed).length;
 
-  const recurringSections = SECTIONS.filter((s) => s.recurrence !== 'none');
+  const recurringSections = SECTIONS.filter(
+    (s) => s.recurrence === 'daily' || s.recurrence === 'weekly' || s.recurrence === 'monthly'
+  );
+  const tallySection = SECTIONS.find((s) => s.recurrence === 'tally')!;
   const oneOffSection = SECTIONS.find((s) => s.recurrence === 'none')!;
 
   const renderSectionCard = (section: SectionConfig) => {
     const items = checklistItems.filter((i) => i.recurrence === section.recurrence);
+    const isTallySection = section.recurrence === 'tally';
     const sectionDone = items.filter(isItemDone).length;
+    const sectionTotalReps = isTallySection
+      ? items.reduce((acc, i) => acc + getTallyTotal(i), 0)
+      : 0;
 
     return (
       <div
@@ -297,7 +403,7 @@ export const ChecklistView: React.FC = () => {
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-100">{section.title}</h2>
               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${section.badgeClass}`}>
-                {sectionDone}/{items.length}
+                {isTallySection ? `${sectionTotalReps} total reps` : `${sectionDone}/${items.length}`}
               </span>
             </div>
             <p className="mt-0.5 text-xs text-slate-400">{section.subtitle}</p>
@@ -307,35 +413,58 @@ export const ChecklistView: React.FC = () => {
         <div className="flex-1 space-y-1.5">
           {items.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-800 px-3 py-4 text-center text-xs text-slate-500">
-              No tasks yet
+              {isTallySection
+                ? 'No anytime reps yet — add something like "5 min guitar session" or "Hydrate"'
+                : 'No tasks yet'}
             </div>
           ) : (
             items.map((item) => {
+              const isTally = item.recurrence === 'tally';
               const done = isItemDone(item);
               const streak = streaksById.get(item.id);
               const isEditing = editingId === item.id;
+              const tallyTotal = isTally ? getTallyTotal(item) : 0;
+              const tallyToday = isTally ? getTallyCountForSelectedDate(item) : 0;
+              const justBumped = recentlyIncrementedId === item.id;
 
               return (
                 <div
                   key={item.id}
-                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
-                    done
+                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-all ${
+                    justBumped
+                      ? 'border-emerald-500/60 bg-emerald-500/10'
+                      : !isTally && done
                       ? 'border-slate-800/70 bg-slate-950/40'
                       : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
                   }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => handleToggleItem(item.id)}
-                    className="shrink-0 text-slate-400 transition-colors hover:text-emerald-400"
-                    aria-label={done ? 'Mark incomplete' : 'Mark complete'}
-                  >
-                    {done ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                    ) : (
-                      <Circle className="h-4 w-4" />
-                    )}
-                  </button>
+                  {isTally ? (
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustTally(item.id, 1)}
+                      className={`inline-flex shrink-0 items-center justify-center rounded-md border px-2 py-1 text-xs font-bold transition-all active:scale-95 ${
+                        justBumped
+                          ? 'border-emerald-400 bg-emerald-500 text-slate-950'
+                          : 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25'
+                      }`}
+                      title="Check off (+1 rep)"
+                    >
+                      +1
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleItem(item.id)}
+                      className="shrink-0 text-slate-400 transition-colors hover:text-emerald-400"
+                      aria-label={done ? 'Mark incomplete' : 'Mark complete'}
+                    >
+                      {done ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                      ) : (
+                        <Circle className="h-4 w-4" />
+                      )}
+                    </button>
+                  )}
 
                   {isEditing ? (
                     <input
@@ -358,7 +487,7 @@ export const ChecklistView: React.FC = () => {
                       type="button"
                       onClick={() => startEditing(item)}
                       className={`min-w-0 flex-1 text-left text-sm ${
-                        done ? 'text-slate-500 line-through' : 'text-slate-200'
+                        !isTally && done ? 'text-slate-500 line-through' : 'text-slate-200'
                       }`}
                       title="Click to rename"
                     >
@@ -366,7 +495,66 @@ export const ChecklistView: React.FC = () => {
                     </button>
                   )}
 
-                  {item.recurrence !== 'none' && streak && (
+                  {/* Tally Cumulative Rep Counter & Quick Undo */}
+                  {isTally && (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {tallyToday > 0 && (
+                        <span
+                          className="hidden sm:inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono font-semibold text-emerald-300"
+                          title={`Completed ${tallyToday} time(s) on ${selectedDate}`}
+                        >
+                          +{tallyToday} today
+                        </span>
+                      )}
+
+                      {editingCountId === item.id ? (
+                        <input
+                          type="number"
+                          min={0}
+                          value={editingCountText}
+                          autoFocus
+                          onChange={(e) => setEditingCountText(e.target.value)}
+                          onBlur={commitEditCount}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitEditCount();
+                            if (e.key === 'Escape') {
+                              setEditingCountId(null);
+                              setEditingCountText('');
+                            }
+                          }}
+                          className="w-16 rounded border border-cyan-500/50 bg-slate-900 px-2 py-0.5 text-center font-mono text-xs font-bold text-cyan-200 outline-none"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startEditingCount(item)}
+                          title="Total times completed (click to edit count directly)"
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-bold transition-colors ${
+                            tallyTotal > 0
+                              ? 'border-cyan-500/35 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25'
+                              : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <span>{tallyTotal}</span>
+                          <span className="font-sans text-[10px] font-normal opacity-80">
+                            {tallyTotal === 1 ? 'time' : 'times'}
+                          </span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => handleAdjustTally(item.id, -1)}
+                        disabled={tallyTotal === 0}
+                        title="Undo (-1)"
+                        className="rounded border border-slate-800 bg-slate-900 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:opacity-30"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+
+                  {!isTally && item.recurrence !== 'none' && streak && (
                     <span
                       title={
                         streak.count > 0
@@ -394,6 +582,7 @@ export const ChecklistView: React.FC = () => {
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
+                    <option value="tally">Reps</option>
                     <option value="none">One-Off</option>
                   </select>
 
@@ -452,6 +641,12 @@ export const ChecklistView: React.FC = () => {
               <Flame className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
               Best Streak: {bestActiveStreak.count > 0 ? `${bestActiveStreak.count}${bestActiveStreak.unit}` : '0'}
             </span>
+            {tallyItems.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
+                <Hash className="h-3.5 w-3.5 text-cyan-400" />
+                {totalTallyReps} Reps
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400">
             {selectedDate} • {weekLabel} • {monthKey}
@@ -464,6 +659,7 @@ export const ChecklistView: React.FC = () => {
               [
                 { id: 'all', label: 'All' },
                 { id: 'recurring', label: 'Recurring' },
+                { id: 'tally', label: 'Reps' },
                 { id: 'none', label: 'One-Off' }
               ] as { id: ViewFilter; label: string }[]
             ).map((tab) => (
@@ -494,8 +690,8 @@ export const ChecklistView: React.FC = () => {
         </div>
       </div>
 
-      {/* Recurring Sections */}
-      {viewFilter !== 'none' && (
+      {/* Recurring Sections (Daily / Weekly / Monthly with Consecutive Streaks) */}
+      {(viewFilter === 'all' || viewFilter === 'recurring') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
             <Repeat className="h-4 w-4 text-amber-400" />
@@ -509,8 +705,21 @@ export const ChecklistView: React.FC = () => {
         </section>
       )}
 
+      {/* Anytime Reps / Cumulative Total Counter Section (Never resets, excluded from Weeks Matrix) */}
+      {(viewFilter === 'all' || viewFilter === 'tally') && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <Hash className="h-4 w-4 text-cyan-400" />
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Anytime Reps • Cumulative Total (Hidden from Weeks Matrix)
+            </h2>
+          </div>
+          {renderSectionCard(tallySection)}
+        </section>
+      )}
+
       {/* One-Off Section */}
-      {viewFilter !== 'recurring' && (
+      {(viewFilter === 'all' || viewFilter === 'none') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
             <CheckCircle2 className="h-4 w-4 text-slate-400" />
