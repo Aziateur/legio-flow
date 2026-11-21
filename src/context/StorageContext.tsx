@@ -91,8 +91,33 @@ const LAST_ACTIVE_TODAY_KEY = 'legio_last_active_today_v1';
 const LAST_MUTATION_AT_KEY = 'legio_last_mutation_at_v1';
 const PENDING_CLOUD_PUSH_KEY = 'legio_pending_cloud_push_v1';
 const LAST_CLOUD_USER_ID_KEY = 'legio_last_cloud_user_id_v1';
+const LAST_CLOUD_UPDATED_AT_KEY = 'legio_last_cloud_updated_at_v1';
+const DELETED_IDS_KEY = 'legio_deleted_ids_v1';
+const AUTO_SNAPSHOTS_KEY = 'legio_auto_snapshots_v1';
 const SELECTED_WEEK_ID_KEY = 'legio_selected_week_id';
 const EMPTY_WEEK_TIMESTAMP = '1970-01-01T00:00:00.000Z';
+const MAX_AUTO_SNAPSHOTS = 8;
+const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+export interface LocalRecoverySnapshot {
+  id: string;
+  savedAt: string;
+  reason: string;
+  summary: string;
+  state: Record<string, any>;
+}
+
+const pruneTombstones = (map: Record<string, string>): Record<string, string> => {
+  const cutoff = Date.now() - TOMBSTONE_RETENTION_MS;
+  const cleaned: Record<string, string> = {};
+  Object.entries(map || {}).forEach(([id, ts]) => {
+    const ms = Date.parse(ts || '');
+    if (id && !Number.isNaN(ms) && ms >= cutoff) {
+      cleaned[id] = ts;
+    }
+  });
+  return cleaned;
+};
 
 const readStorageSafe = <T,>(key: string, fallback: T): T => {
   try {
@@ -572,7 +597,9 @@ interface StorageContextType {
   saveChecklistCategories: (cats: ChecklistCategory[]) => void;
   saveChecklistItems: (items: ChecklistItem[]) => void;
 
-  // Data portability
+  // Data portability & local recovery safety net
+  localSnapshots: LocalRecoverySnapshot[];
+  restoreLocalSnapshot: (snapshotId: string) => boolean;
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
   resetAllData: () => void;
@@ -849,11 +876,44 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
   const systemLevelRef = useRef(systemLevel);
+  const todayDateRef = useRef(todayDate);
   const selectedDateRef = useRef(selectedDate);
   const selectedWeekIdRef = useRef(selectedWeekId);
+  const deletedIdsRef = useRef<Record<string, string>>(
+    pruneTombstones(readStorageSafe<Record<string, string>>(DELETED_IDS_KEY, {}))
+  );
+  const [localSnapshots, setLocalSnapshots] = useState<LocalRecoverySnapshot[]>(() => {
+    const raw = readStorageSafe<LocalRecoverySnapshot[]>(AUTO_SNAPSHOTS_KEY, []);
+    return Array.isArray(raw) ? raw : [];
+  });
+  const localSnapshotsRef = useRef<LocalRecoverySnapshot[]>(localSnapshots);
 
+  todayDateRef.current = todayDate;
   selectedDateRef.current = selectedDate;
   selectedWeekIdRef.current = selectedWeekId;
+
+  const commitDeletedIds = (next: Record<string, string>) => {
+    const pruned = pruneTombstones(next);
+    deletedIdsRef.current = pruned;
+    writeStorageSafe(DELETED_IDS_KEY, pruned);
+  };
+
+  const recordDeletedIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const nowIso = new Date().toISOString();
+    const next = { ...deletedIdsRef.current };
+    ids.forEach(id => {
+      if (id) next[id] = nowIso;
+    });
+    commitDeletedIds(next);
+  };
+
+  const clearDeletedId = (id: string) => {
+    if (!id || !deletedIdsRef.current[id]) return;
+    const next = { ...deletedIdsRef.current };
+    delete next[id];
+    commitDeletedIds(next);
+  };
 
   // --- SUPABASE AUTH & SYNC STATE ---
   const [rememberDevice, setRememberDeviceState] = useState<boolean>(() => getRememberDevicePreference());
@@ -878,6 +938,29 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPushingRef = useRef(false);
   const queuedPushRef = useRef(false);
+  const isPullingRef = useRef(false);
+  const lastResumeCheckAtRef = useRef(0);
+  const hasCompletedInitialCloudSyncRef = useRef(false);
+  const lastSyncedCloudUpdatedAtRef = useRef<string | null>((() => {
+    try {
+      return localStorage.getItem(LAST_CLOUD_UPDATED_AT_KEY);
+    } catch {
+      return null;
+    }
+  })());
+
+  const setLastSyncedCloudUpdatedAt = (ts: string | null) => {
+    lastSyncedCloudUpdatedAtRef.current = ts;
+    try {
+      if (ts) {
+        localStorage.setItem(LAST_CLOUD_UPDATED_AT_KEY, ts);
+      } else {
+        localStorage.removeItem(LAST_CLOUD_UPDATED_AT_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -1005,16 +1088,80 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
+      deletedIds: deletedIdsRef.current,
       systemLevel: systemLevelRef.current,
       clientUpdatedAt
     };
   };
 
-  const flushCloudPushNow = async () => {
+  const summarizeStateSnapshot = (st: Record<string, any>): string => {
+    const days = Object.keys(st.dailyEntries || {}).length;
+    const gws = Array.isArray(st.gwsSessions) ? st.gwsSessions.length : 0;
+    const plans = Array.isArray(st.strategyPlans) ? st.strategyPlans.length : 0;
+    const probs = Array.isArray(st.problems) ? st.problems.length : 0;
+    const checks = Array.isArray(st.checklistItems) ? st.checklistItems.length : 0;
+    return `${days}d · ${gws} GWS · ${plans} plans · ${probs} probs · ${checks} habits`;
+  };
+
+  const saveAutoLocalSnapshot = (reason: string) => {
+    try {
+      const payload = buildCloudPayloadFromRefs();
+      const summary = summarizeStateSnapshot(payload);
+      // Avoid duplicate back-to-back identical snapshots
+      const latest = localSnapshotsRef.current[0];
+      if (latest) {
+        const prevSig = JSON.stringify({
+          d: latest.state.dailyEntries,
+          g: latest.state.gwsSessions,
+          w: latest.state.weeklyPlans,
+          s: latest.state.strategyPlans,
+          p: latest.state.problems,
+          c: latest.state.checklistItems
+        });
+        const curSig = JSON.stringify({
+          d: payload.dailyEntries,
+          g: payload.gwsSessions,
+          w: payload.weeklyPlans,
+          s: payload.strategyPlans,
+          p: payload.problems,
+          c: payload.checklistItems
+        });
+        if (prevSig === curSig) return;
+      }
+      const snap: LocalRecoverySnapshot = {
+        id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        savedAt: new Date().toISOString(),
+        reason,
+        summary,
+        state: payload
+      };
+      const next = [snap, ...localSnapshotsRef.current].slice(0, MAX_AUTO_SNAPSHOTS);
+      localSnapshotsRef.current = next;
+      setLocalSnapshots(next);
+      writeStorageSafe(AUTO_SNAPSHOTS_KEY, next);
+    } catch {
+      // Never fail main flow if localStorage quota is tight
+    }
+  };
+
+  // Bridge ref so early-declared push/resume functions can call merge/apply safely without hoisting issues
+  const syncHelpersRef = useRef<{
+    applyCloudPayload: (state: any, options?: { skipSnapshot?: boolean; snapshotReason?: string }) => void;
+    mergeLocalAndCloudState: (cloudState: any, cloudRowUpdatedAt?: string) => { mergedState: any; needsCloudPush: boolean };
+    loadUserCloudState: (userId: string, options?: { initialPayloadOverride?: any; preferCloudDirectly?: boolean }) => Promise<void>;
+  } | null>(null);
+
+  const flushCloudPushNow = async (options?: { skipPrePullCheck?: boolean }) => {
     const user = authUserRef.current;
     if (!user) return;
     const supabase = getSupabaseClient();
     if (!supabase) return;
+
+    // BOOT SYNC GATE: Never push stale local cache before initial cloud hydration completes!
+    if (!hasCompletedInitialCloudSyncRef.current && !options?.skipPrePullCheck) {
+      queuedPushRef.current = true;
+      return;
+    }
 
     if (isPushingRef.current) {
       queuedPushRef.current = true;
@@ -1036,15 +1183,54 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     try {
+      // PULL-BEFORE-PUSH CONCURRENCY GUARD:
+      // Check if another device (e.g. desktop vs phone) wrote a newer row since our last sync.
+      // If so, deep-merge per-item BEFORE pushing so a stale tab can NEVER overwrite newer data!
+      if (!options?.skipPrePullCheck && syncHelpersRef.current) {
+        const { data: headRow, error: headErr } = await supabase
+          .from('legio_user_state')
+          .select('updated_at')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (!headErr && headRow?.updated_at && headRow.updated_at !== lastSyncedCloudUpdatedAtRef.current) {
+          const { data: fullRow, error: fullErr } = await supabase
+            .from('legio_user_state')
+            .select('state, updated_at')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+          if (!fullErr && fullRow?.state) {
+            const { mergedState } = syncHelpersRef.current.mergeLocalAndCloudState(
+              fullRow.state,
+              fullRow.updated_at
+            );
+            syncHelpersRef.current.applyCloudPayload(mergedState, {
+              snapshotReason: 'Before multi-device merge'
+            });
+            setLastSyncedCloudUpdatedAt(fullRow.updated_at);
+            snapshotMutationAt = new Date().toISOString();
+            try {
+              localStorage.setItem(LAST_MUTATION_AT_KEY, snapshotMutationAt);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+
       const payload = buildCloudPayloadFromRefs(snapshotMutationAt);
-      const { error } = await supabase
+      const pushTimestamp = new Date().toISOString();
+      const { data: savedRow, error } = await supabase
         .from('legio_user_state')
         .upsert({
           user_id: user.id,
           display_name: user.displayName || user.email,
           state: payload,
-          updated_at: new Date().toISOString()
-        });
+          updated_at: pushTimestamp
+        })
+        .select('updated_at')
+        .maybeSingle();
 
       if (error) {
         setSyncStatus('error');
@@ -1052,6 +1238,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } else {
         setSyncStatus('synced');
         setSyncError(null);
+        setLastSyncedCloudUpdatedAt(savedRow?.updated_at || pushTimestamp);
         try {
           const latestMutation = localStorage.getItem(LAST_MUTATION_AT_KEY) || '';
           if (!queuedPushRef.current && (!latestMutation || latestMutation === snapshotMutationAt)) {
@@ -1079,11 +1266,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (pushTimerRef.current) {
       clearTimeout(pushTimerRef.current);
     }
-    // 50ms micro-coalesce so rapid updates batch into one push and persist virtually instantaneously
+    // 120ms micro-coalesce so rapid updates batch into one guarded push
     pushTimerRef.current = setTimeout(() => {
       pushTimerRef.current = null;
       void flushCloudPushNow();
-    }, 50);
+    }, 120);
   };
 
   const markLocalMutation = (triggerCloudPush = true) => {
@@ -1104,6 +1291,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const flushCloudPushKeepalive = () => {
     const user = authUserRef.current;
     if (!user) return;
+    // Never fire an unguarded keepalive overwrite if initial cloud sync hasn't finished or no synced baseline exists!
+    if (!hasCompletedInitialCloudSyncRef.current || !lastSyncedCloudUpdatedAtRef.current) return;
 
     let hasPending = false;
     try {
@@ -1124,6 +1313,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     try {
       const payload = buildCloudPayloadFromRefs();
+      const pushTimestamp = new Date().toISOString();
       fetch(`${url}/rest/v1/legio_user_state?on_conflict=user_id`, {
         method: 'POST',
         headers: {
@@ -1136,7 +1326,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           user_id: user.id,
           display_name: user.displayName || user.email,
           state: payload,
-          updated_at: new Date().toISOString()
+          updated_at: pushTimestamp
         }),
         keepalive: true
       }).catch(() => {
@@ -1144,6 +1334,46 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
     } catch {
       // ignore
+    }
+  };
+
+  // Automatic wake-up sync when returning to a sleeping mobile/desktop tab or regaining connection
+  const checkAndPullCloudOnResume = async () => {
+    const realToday = getTodayDateString();
+    if (realToday !== todayDateRef.current) {
+      const prevToday = todayDateRef.current;
+      setTodayDate(realToday);
+      if (selectedDateRef.current === prevToday) {
+        selectedDateRef.current = realToday;
+        setSelectedDateState(realToday);
+      }
+    }
+
+    const user = authUserRef.current;
+    if (!user || isPullingRef.current || isPushingRef.current) return;
+    const now = Date.now();
+    if (now - lastResumeCheckAtRef.current < 4000) return;
+    lastResumeCheckAtRef.current = now;
+
+    const supabase = getSupabaseClient();
+    if (!supabase || !syncHelpersRef.current) return;
+
+    try {
+      const { data: headRow, error } = await supabase
+        .from('legio_user_state')
+        .select('updated_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (error) return;
+      if (
+        !hasCompletedInitialCloudSyncRef.current ||
+        (headRow?.updated_at && headRow.updated_at !== lastSyncedCloudUpdatedAtRef.current)
+      ) {
+        await syncHelpersRef.current.loadUserCloudState(user.id);
+      }
+    } catch {
+      // Offline / transient network hiccup — ignore silently
     }
   };
 
@@ -1165,21 +1395,39 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [selectedDate]);
 
-  // Flush pending cloud mutations immediately on tab hide / reload / unload
+  // Wake-up sync on mobile tab resume / focus / online + guarded flush on hide / unload
   useEffect(() => {
-    const handleVisibilityHide = () => {
-      if (document.visibilityState === 'hidden') {
-        flushCloudPushKeepalive();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void checkAndPullCloudOnResume();
+      } else if (document.visibilityState === 'hidden') {
+        // Use pull-before-push guarded flush if any mutation is pending
+        let hasPending = false;
+        try {
+          hasPending = localStorage.getItem(PENDING_CLOUD_PUSH_KEY) === 'true' || !!pushTimerRef.current;
+        } catch {
+          hasPending = !!pushTimerRef.current;
+        }
+        if (hasPending && hasCompletedInitialCloudSyncRef.current) {
+          void flushCloudPushNow();
+        }
       }
+    };
+    const handleFocusOrOnline = () => {
+      void checkAndPullCloudOnResume();
     };
     const handleUnload = () => {
       flushCloudPushKeepalive();
     };
-    document.addEventListener('visibilitychange', handleVisibilityHide);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocusOrOnline);
+    window.addEventListener('online', handleFocusOrOnline);
     window.addEventListener('pagehide', handleUnload);
     window.addEventListener('beforeunload', handleUnload);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityHide);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocusOrOnline);
+      window.removeEventListener('online', handleFocusOrOnline);
       window.removeEventListener('pagehide', handleUnload);
       window.removeEventListener('beforeunload', handleUnload);
     };
@@ -1723,6 +1971,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteGWSSession = (id: string) => {
+    recordDeletedIds([id]);
     commitGwsSessions(gwsSessionsRef.current.filter(s => s.id !== id));
 
     const currentDaily = dailyEntriesRef.current;
@@ -1944,11 +2193,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     const idx = prev.findIndex(p => p.id === updatedPlan.id);
     const next = idx >= 0 ? prev.map((p, i) => (i === idx ? updatedPlan : p)) : [...prev, updatedPlan];
+    clearDeletedId(updatedPlan.id);
     commitStrategyPlans(next);
     markLocalMutation();
   };
 
   const deleteStrategyPlan = (id: string) => {
+    recordDeletedIds([id]);
     commitStrategyPlans(strategyPlansRef.current.filter(p => p.id !== id));
     markLocalMutation();
   };
@@ -2119,6 +2370,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteProblem = (id: string) => {
+    recordDeletedIds([id]);
     const nowIso = new Date().toISOString();
     const next = problemsRef.current
       .filter(p => p.id !== id)
@@ -2229,6 +2481,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteTemplate = (id: string) => {
+    recordDeletedIds([id]);
     commitTemplates(templatesRef.current.filter(t => t.id !== id));
     markLocalMutation();
   };
@@ -2248,16 +2501,27 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteReview = (id: string) => {
+    recordDeletedIds([id]);
     commitReviews(reviewsRef.current.filter(r => r.id !== id));
     markLocalMutation();
   };
 
   const saveChecklistCategories = (cats: ChecklistCategory[]) => {
+    const nextIds = new Set(cats.map(c => c.id));
+    const removed = checklistCategoriesRef.current
+      .filter(c => !nextIds.has(c.id))
+      .map(c => c.id);
+    if (removed.length > 0) recordDeletedIds(removed);
     commitChecklistCategories(cats);
     markLocalMutation();
   };
 
   const saveChecklistItems = (items: ChecklistItem[]) => {
+    const nextIds = new Set(items.map(i => i.id));
+    const removed = checklistItemsRef.current
+      .filter(i => !nextIds.has(i.id))
+      .map(i => i.id);
+    if (removed.length > 0) recordDeletedIds(removed);
     commitChecklistItems(items);
 
     const curDate = selectedDateRef.current;
@@ -2332,6 +2596,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         Array.isArray(src.checklistItems);
 
       if (!hasRecognizedField) return false;
+      saveAutoLocalSnapshot('Before JSON import');
 
       const epoch = src.onboardingStartDate || src.weeklyPlans?.['week_1']?.startDate;
       if (epoch && typeof epoch === 'string') {
@@ -2385,6 +2650,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const resetAllData = () => {
+    saveAutoLocalSnapshot('Before reset sample data');
     const nowStr = getTodayDateString();
     try {
       localStorage.setItem(ONBOARDING_EPOCH_KEY, '2026-10-12');
@@ -2479,6 +2745,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Start a clean blank workspace (used for new friend accounts or explicit fresh start)
   const startFreshWorkspace = () => {
+    saveAutoLocalSnapshot('Before Start Fresh');
+    commitDeletedIds({});
     applyFreshWorkspaceState();
     if (authUserRef.current) {
       markLocalMutation();
@@ -2564,8 +2832,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [browserNotificationsEnabled, todayDate, missingPlanAlerts.length]);
 
-  const applyCloudPayload = (state: any) => {
+  const applyCloudPayload = (
+    state: any,
+    options?: { skipSnapshot?: boolean; snapshotReason?: string }
+  ) => {
     if (!state || typeof state !== 'object') return;
+    if (!options?.skipSnapshot) {
+      saveAutoLocalSnapshot(options?.snapshotReason || 'Before cloud sync');
+    }
     const cloudEpoch = state.onboardingStartDate || state.weeklyPlans?.['week_1']?.startDate || '2026-10-12';
     try {
       localStorage.setItem(ONBOARDING_EPOCH_KEY, cloudEpoch);
@@ -2603,6 +2877,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (Array.isArray(state.reviews)) commitReviews(state.reviews);
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
+    if (state.deletedIds && typeof state.deletedIds === 'object') {
+      commitDeletedIds(state.deletedIds);
+    }
     if (state.systemLevel >= 1 && state.systemLevel <= 5) {
       const nextLvl =
         (state.systemLevel === 3 || state.systemLevel === 4) && !localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL)
@@ -2610,6 +2887,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           : state.systemLevel;
       commitSystemLevel(nextLvl as SystemLevel);
     }
+  };
+
+  const restoreLocalSnapshot = (snapshotId: string): boolean => {
+    const snap = localSnapshotsRef.current.find(s => s.id === snapshotId);
+    if (!snap || !snap.state) return false;
+    saveAutoLocalSnapshot('Before restoring snapshot');
+    applyCloudPayload(snap.state, { skipSnapshot: true });
+    markLocalMutation();
+    return true;
   };
 
   const mergeLocalAndCloudState = (
@@ -2631,19 +2917,124 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const cloudMs = Date.parse(cloudUpdatedAt) || 0;
     const localIsNewer = hasPendingPush || localMs > cloudMs;
 
-    let needsCloudPush = hasPendingPush || localMs > cloudMs;
+    let needsCloudPush = hasPendingPush;
 
-    // 1. Merge dailyEntries per date by newer updatedAt
+    // 0. Merge deletion tombstones (id -> latest deletedAt ISO) so explicit deletions sync across devices without ever clobbering unrelated items
+    const localDeleted: Record<string, string> = local.deletedIds || {};
+    const cloudDeleted: Record<string, string> =
+      cloudState?.deletedIds && typeof cloudState.deletedIds === 'object'
+        ? cloudState.deletedIds
+        : {};
+    const mergedDeletedIds: Record<string, string> = pruneTombstones({ ...cloudDeleted });
+    Object.entries(localDeleted).forEach(([id, ts]) => {
+      const lDelMs = Date.parse(ts || '') || 0;
+      const cDelMs = Date.parse(mergedDeletedIds[id] || '') || 0;
+      if (lDelMs > cDelMs) {
+        mergedDeletedIds[id] = ts;
+        needsCloudPush = true;
+      }
+    });
+
+    // Helper: True per-item union merge by ID with tombstone support (NEVER clobbers entire arrays across devices!)
+    const mergeCollectionById = <T extends { id: string }>(
+      localArr: T[],
+      cloudArrRaw: any,
+      getTimeMs: (item: T) => number,
+      mergeBoth?: (lItem: T, cItem: T) => T
+    ): T[] => {
+      if (!Array.isArray(cloudArrRaw)) {
+        if (localArr.length > 0) needsCloudPush = true;
+        return localArr;
+      }
+      const cloudArr = cloudArrRaw as T[];
+      const localMap = new Map<string, T>();
+      const cloudMap = new Map<string, T>();
+      localArr.forEach(item => {
+        if (item?.id) localMap.set(item.id, item);
+      });
+      cloudArr.forEach(item => {
+        if (item?.id) cloudMap.set(item.id, item);
+      });
+
+      const orderedIds: string[] = [];
+      const seen = new Set<string>();
+      const pushId = (id: string) => {
+        if (!seen.has(id)) {
+          seen.add(id);
+          orderedIds.push(id);
+        }
+      };
+      // Preserve order from newer device first, then append any items unique to the other device
+      (localIsNewer ? localArr : cloudArr).forEach(i => i?.id && pushId(i.id));
+      (localIsNewer ? cloudArr : localArr).forEach(i => i?.id && pushId(i.id));
+
+      const result: T[] = [];
+      orderedIds.forEach(id => {
+        const lItem = localMap.get(id);
+        const cItem = cloudMap.get(id);
+        const delMs = Date.parse(mergedDeletedIds[id] || '') || 0;
+
+        if (lItem && cItem) {
+          if (mergeBoth) {
+            const merged = mergeBoth(lItem, cItem);
+            if (JSON.stringify(merged) !== JSON.stringify(cItem)) {
+              needsCloudPush = true;
+            }
+            result.push(merged);
+          } else {
+            const lT = getTimeMs(lItem);
+            const cT = getTimeMs(cItem);
+            if (lT > cT || (lT === cT && localIsNewer)) {
+              if (JSON.stringify(lItem) !== JSON.stringify(cItem)) needsCloudPush = true;
+              result.push(lItem);
+            } else {
+              result.push(cItem);
+            }
+          }
+        } else if (lItem && !cItem) {
+          const lT = getTimeMs(lItem) || localMs;
+          // Respect cloud deletion ONLY if tombstoned after this item was created/updated
+          if (delMs > 0 && delMs >= lT) {
+            return;
+          }
+          result.push(lItem);
+          needsCloudPush = true;
+        } else if (cItem && !lItem) {
+          const cT = getTimeMs(cItem) || cloudMs;
+          // Respect local deletion ONLY if tombstoned after this cloud item was created/updated
+          if (delMs > 0 && delMs >= cT) {
+            needsCloudPush = true;
+            return;
+          }
+          result.push(cItem);
+        }
+      });
+
+      return result;
+    };
+
+    // 1. Merge dailyEntries per date (prefer populated content + newer updatedAt + union gwsSessionIds)
     const mergedDailyEntries: Record<string, DailyEntry> = {};
     const cloudDaily = (cloudState?.dailyEntries || {}) as Record<string, DailyEntry>;
     const allDates = new Set([...Object.keys(local.dailyEntries), ...Object.keys(cloudDaily)]);
+
+    const hasDailyContent = (d: DailyEntry) =>
+      Boolean(
+        (d.priorityItems && d.priorityItems.length > 0) ||
+          (d.planNotes && d.planNotes.trim().length > 0) ||
+          (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
+          (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
+          d.executionScore > 0 ||
+          d.automaticTasksCompleted ||
+          (d.gwsSessionIds && d.gwsSessionIds.length > 0)
+      );
 
     allDates.forEach(date => {
       const lRaw = local.dailyEntries[date];
       const cRaw = cloudDaily[date];
       if (lRaw && !cRaw) {
         mergedDailyEntries[date] = normalizeDailyEntryFields(date, lRaw);
-        needsCloudPush = true;
+        if (hasDailyContent(mergedDailyEntries[date])) needsCloudPush = true;
       } else if (cRaw && !lRaw) {
         mergedDailyEntries[date] = normalizeDailyEntryFields(date, cRaw);
       } else if (lRaw && cRaw) {
@@ -2651,22 +3042,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const c = normalizeDailyEntryFields(date, cRaw);
         const lTime = Date.parse(l.updatedAt || '') || 0;
         const cTime = Date.parse(c.updatedAt || '') || 0;
-        const lHasPlan = l.priorityItems && l.priorityItems.length > 0;
-        const cHasPlan = c.priorityItems && c.priorityItems.length > 0;
+        const lHas = hasDailyContent(l);
+        const cHas = hasDailyContent(c);
+        const unionGwsIds = Array.from(new Set([...(c.gwsSessionIds || []), ...(l.gwsSessionIds || [])]));
 
-        if (lTime > cTime) {
-          mergedDailyEntries[date] = l;
+        let chosen: DailyEntry;
+        if (lHas && !cHas) {
+          chosen = l;
+          needsCloudPush = true;
+        } else if (cHas && !lHas) {
+          chosen = c;
+        } else if (lTime > cTime) {
+          chosen = l;
           needsCloudPush = true;
         } else if (cTime > lTime) {
-          if (hasPendingPush && lHasPlan && !cHasPlan) {
-            mergedDailyEntries[date] = l;
-            needsCloudPush = true;
-          } else {
-            mergedDailyEntries[date] = c;
-          }
+          chosen = c;
         } else {
-          mergedDailyEntries[date] = hasPendingPush || (lHasPlan && !cHasPlan) ? l : c;
+          chosen = hasPendingPush ? l : c;
         }
+
+        if (unionGwsIds.length > (chosen.gwsSessionIds || []).length) {
+          chosen = { ...chosen, gwsSessionIds: unionGwsIds };
+          needsCloudPush = true;
+        }
+        mergedDailyEntries[date] = chosen;
       }
     });
 
@@ -2690,7 +3089,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const cTime = Date.parse(c.updatedAt || '') || 0;
 
         if (lHasContent && !cHasContent) {
-          // Prefer populated local unless cloud had an explicit deletion timestamp strictly after local
           if (cTime > lTime && c.updatedAt !== EMPTY_WEEK_TIMESTAMP && !hasPendingPush && cloudMs > localMs) {
             mergedWeeklyPlans[weekId] = c;
           } else {
@@ -2698,7 +3096,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             needsCloudPush = true;
           }
         } else if (cHasContent && !lHasContent) {
-          // Prefer populated cloud unless user explicitly cleared/deleted tasks locally while pending push
           if (hasPendingPush && lTime > cTime && l.updatedAt !== EMPTY_WEEK_TIMESTAMP) {
             mergedWeeklyPlans[weekId] = l;
             needsCloudPush = true;
@@ -2716,7 +3113,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     });
 
-    // 3. Merge monthlyPlans & yearlyPlans per periodKey (prefer content over empty placeholders, otherwise newer updatedAt)
+    // 3. Merge monthlyPlans & yearlyPlans per periodKey
     const mergePeriodPlanMap = <T extends MonthlyPlan | YearlyPlan>(
       localMap: Record<string, T>,
       cloudMapRaw: any,
@@ -2784,26 +3181,93 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       normalizeYearlyPlanEntry
     );
 
-    // 4. Merge reviews per id (respecting local deletions if localIsNewer)
-    const mergedReviews = localIsNewer || !Array.isArray(cloudState?.reviews)
-      ? local.reviews
-      : (() => {
-          const map = new Map<string, ReviewEntry>();
-          (cloudState.reviews as ReviewEntry[]).forEach(r => map.set(r.id, r));
-          local.reviews.forEach(r => {
-            const c = map.get(r.id);
-            const rMs = Date.parse(r.updatedAt || r.createdAt || '') || 0;
-            const cMs = c ? Date.parse(c.updatedAt || c.createdAt || '') || 0 : 0;
-            if (!c && localMs > cloudMs) {
-              map.set(r.id, r);
-              needsCloudPush = true;
-            } else if (c && rMs > cMs) {
-              map.set(r.id, r);
-              needsCloudPush = true;
-            }
-          });
-          return Array.from(map.values());
-        })();
+    // 4. Per-item union merges for ALL collections (so Phone + Desktop edits NEVER wipe each other!)
+    const mergedTemplates = mergeCollectionById<Template>(
+      local.templates,
+      cloudState?.templates,
+      t => Date.parse(t.updatedAt || t.createdAt || '') || 0
+    );
+
+    const mergedGwsSessions = mergeCollectionById<GWSSession>(
+      local.gwsSessions,
+      cloudState?.gwsSessions,
+      s => Date.parse(s.createdAt || '') || 0
+    );
+
+    const mergedStrategyPlans = mergeCollectionById<StrategyPlan>(
+      local.strategyPlans,
+      cloudState?.strategyPlans,
+      p => Date.parse(p.updatedAt || p.createdAt || '') || 0
+    );
+
+    const mergedProblems = mergeCollectionById<ProblemEntry>(
+      local.problems,
+      cloudState?.problems,
+      p => Date.parse(p.updatedAt || p.createdAt || '') || 0,
+      (l, c) => {
+        const lT = Date.parse(l.updatedAt || l.createdAt || '') || 0;
+        const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        const primary = lT >= cT ? l : c;
+        const secondary = lT >= cT ? c : l;
+        // Union occurrences (deduped by date|sourceType|sourceRef), tags, and dispatchedTo
+        const occSeen = new Set<string>();
+        const mergedOccurrences: ProblemOccurrence[] = [];
+        [...(c.occurrences || []), ...(l.occurrences || [])].forEach(occ => {
+          const sig = `${occ.date}|${occ.sourceType}|${occ.sourceRef || ''}|${occ.note || ''}`;
+          if (!occSeen.has(sig)) {
+            occSeen.add(sig);
+            mergedOccurrences.push(occ);
+          }
+        });
+        const mergedTags = Array.from(new Set([...(primary.tags || []), ...(secondary.tags || [])]));
+        const mergedDispatched = Array.from(
+          new Set([...(primary.dispatchedTo || []), ...(secondary.dispatchedTo || [])])
+        );
+        return {
+          ...primary,
+          occurrences: mergedOccurrences,
+          tags: mergedTags,
+          ...(mergedDispatched.length > 0 ? { dispatchedTo: mergedDispatched } : {})
+        };
+      }
+    );
+
+    const mergedReviews = mergeCollectionById<ReviewEntry>(
+      local.reviews,
+      cloudState?.reviews,
+      r => Date.parse(r.updatedAt || r.createdAt || '') || 0
+    );
+
+    const mergedChecklistCategories = mergeCollectionById<ChecklistCategory>(
+      local.checklistCategories,
+      cloudState?.checklistCategories,
+      () => (localIsNewer ? localMs : cloudMs)
+    );
+
+    const realToday = getTodayDateString();
+    const mergedChecklistItems = mergeCollectionById<ChecklistItem>(
+      local.checklistItems,
+      cloudState?.checklistItems,
+      i => Date.parse(i.createdAt || '') || 0,
+      (l, c) => {
+        const primary = localIsNewer ? l : c;
+        const secondary = localIsNewer ? c : l;
+        // Union completedPeriods across different dates while letting the newer device control today's toggle
+        const periodSet = new Set<string>([
+          ...(primary.completedPeriods || []),
+          ...(secondary.completedPeriods || []).filter(p => p !== realToday)
+        ]);
+        const mergedTotal =
+          primary.recurrence === 'tally'
+            ? Math.max(l.totalCount || 0, c.totalCount || 0)
+            : primary.totalCount;
+        return {
+          ...primary,
+          completedPeriods: Array.from(periodSet),
+          ...(mergedTotal !== undefined ? { totalCount: mergedTotal } : {})
+        };
+      }
+    );
 
     const onboardingStartDate =
       mergedWeeklyPlans['week_1']?.startDate ||
@@ -2812,29 +3276,18 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const mergedState = {
       onboardingStartDate,
-      templates: localIsNewer || !Array.isArray(cloudState?.templates) ? local.templates : cloudState.templates,
+      templates: mergedTemplates,
       dailyEntries: mergedDailyEntries,
-      gwsSessions: localIsNewer || !Array.isArray(cloudState?.gwsSessions) ? local.gwsSessions : cloudState.gwsSessions,
+      gwsSessions: mergedGwsSessions,
       weeklyPlans: mergedWeeklyPlans,
       monthlyPlans: mergedMonthlyPlans,
       yearlyPlans: mergedYearlyPlans,
-      strategyPlans:
-        localIsNewer || !Array.isArray(cloudState?.strategyPlans)
-          ? local.strategyPlans
-          : cloudState.strategyPlans,
-      problems:
-        localIsNewer || !Array.isArray(cloudState?.problems)
-          ? local.problems
-          : cloudState.problems,
+      strategyPlans: mergedStrategyPlans,
+      problems: mergedProblems,
       reviews: mergedReviews,
-      checklistCategories:
-        localIsNewer || !Array.isArray(cloudState?.checklistCategories)
-          ? local.checklistCategories
-          : cloudState.checklistCategories,
-      checklistItems:
-        localIsNewer || !Array.isArray(cloudState?.checklistItems)
-          ? local.checklistItems
-          : cloudState.checklistItems,
+      checklistCategories: mergedChecklistCategories,
+      checklistItems: mergedChecklistItems,
+      deletedIds: mergedDeletedIds,
       systemLevel: localIsNewer || !cloudState?.systemLevel ? local.systemLevel : cloudState.systemLevel,
       clientUpdatedAt: new Date(Math.max(localMs, cloudMs, Date.now())).toISOString()
     };
@@ -2848,6 +3301,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   ) => {
     const supabase = getSupabaseClient();
     if (!supabase) return;
+    if (isPullingRef.current && !options?.initialPayloadOverride) return;
+    isPullingRef.current = true;
     setSyncStatus('syncing');
     setSyncError(null);
     try {
@@ -2870,14 +3325,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       if (options?.initialPayloadOverride) {
-        applyCloudPayload(options.initialPayloadOverride);
-        await flushCloudPushNow();
+        applyCloudPayload(options.initialPayloadOverride, { snapshotReason: 'Before new account setup' });
+        hasCompletedInitialCloudSyncRef.current = true;
+        await flushCloudPushNow({ skipPrePullCheck: true });
         return;
       }
 
       if (data && data.state) {
+        setLastSyncedCloudUpdatedAt(data.updated_at || null);
         if (options?.preferCloudDirectly) {
-          applyCloudPayload(data.state);
+          applyCloudPayload(data.state, { snapshotReason: 'Before sign-in cloud load' });
+          hasCompletedInitialCloudSyncRef.current = true;
           try {
             localStorage.setItem(PENDING_CLOUD_PUSH_KEY, 'false');
           } catch {
@@ -2886,9 +3344,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setSyncStatus('synced');
         } else {
           const { mergedState, needsCloudPush } = mergeLocalAndCloudState(data.state, data.updated_at);
-          applyCloudPayload(mergedState);
-          if (needsCloudPush) {
-            await flushCloudPushNow();
+          applyCloudPayload(mergedState, { snapshotReason: 'Before cloud merge' });
+          hasCompletedInitialCloudSyncRef.current = true;
+          if (needsCloudPush || queuedPushRef.current) {
+            queuedPushRef.current = false;
+            await flushCloudPushNow({ skipPrePullCheck: true });
           } else {
             try {
               localStorage.setItem(PENDING_CLOUD_PUSH_KEY, 'false');
@@ -2900,12 +3360,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       } else {
         // First time this user has no cloud row yet -> push current local workspace immediately
-        await flushCloudPushNow();
+        hasCompletedInitialCloudSyncRef.current = true;
+        await flushCloudPushNow({ skipPrePullCheck: true });
       }
     } catch (err: any) {
       setSyncStatus('error');
       setSyncError(err?.message || 'Unable to reach Supabase');
+    } finally {
+      isPullingRef.current = false;
     }
+  };
+
+  // Keep synchronous bridge ref up to date for pull-before-push & resume-sync handlers
+  syncHelpersRef.current = {
+    applyCloudPayload,
+    mergeLocalAndCloudState,
+    loadUserCloudState
   };
 
   // Subscribe to Supabase auth session on mount
@@ -2979,10 +3449,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!supabase) return { ok: false, error: 'Supabase client is not configured.' };
     try {
       let prevCloudUser: string | null = null;
-      let hasLocalMutation = false;
       try {
         prevCloudUser = localStorage.getItem(LAST_CLOUD_USER_ID_KEY);
-        hasLocalMutation = !!localStorage.getItem(LAST_MUTATION_AT_KEY);
       } catch {
         // ignore
       }
@@ -2996,8 +3464,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           email: data.user.email || email,
           displayName: data.user.user_metadata?.display_name
         });
-        const isSwitchingUser = !!(prevCloudUser && prevCloudUser !== data.user.id);
-        const shouldPreferCloudDirectly = isSwitchingUser || (!prevCloudUser && !hasLocalMutation);
+        // If signing in on a new/unlinked device (or switching accounts), ALWAYS load cloud account directly
+        // so guest/sample data on a phone can never contaminate or overwrite the real account!
+        const shouldPreferCloudDirectly = !prevCloudUser || prevCloudUser !== data.user.id;
         await loadUserCloudState(data.user.id, { preferCloudDirectly: shouldPreferCloudDirectly });
       }
       return { ok: true };
@@ -3046,11 +3515,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const signOut = async () => {
-    flushCloudPushKeepalive();
+    if (hasCompletedInitialCloudSyncRef.current) {
+      await flushCloudPushNow();
+    }
     const supabase = getSupabaseClient();
     if (supabase) {
       await supabase.auth.signOut();
     }
+    hasCompletedInitialCloudSyncRef.current = false;
+    setLastSyncedCloudUpdatedAt(null);
+    commitDeletedIds({});
     accessTokenRef.current = null;
     setAuthUser(null);
     setSyncStatus('idle');
@@ -3286,6 +3760,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         deleteReview,
         saveChecklistCategories,
         saveChecklistItems,
+        localSnapshots,
+        restoreLocalSnapshot,
         exportData,
         importData,
         resetAllData

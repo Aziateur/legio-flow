@@ -58,11 +58,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     signUp,
     signOut,
     syncNow,
+    localSnapshots,
+    restoreLocalSnapshot,
     exportData,
     startFreshWorkspace
   } = useStorage();
 
   const [profileTab, setProfileTab] = useState<'account' | 'parameters'>('account');
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshotRestoredMsg, setSnapshotRestoredMsg] = useState<string | null>(null);
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -399,6 +403,77 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     )}
                   </div>
                 )}
+
+                {/* Local Auto-Recovery Snapshots (Safety Net on This Device) */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSnapshots(prev => !prev)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Local Auto-Recovery Snapshots ({localSnapshots.length})</span>
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-400">
+                      {showSnapshots ? 'Hide' : 'Show'}
+                    </span>
+                  </button>
+
+                  {snapshotRestoredMsg && (
+                    <div className="px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-[11px] font-bold text-emerald-300">
+                      ✓ {snapshotRestoredMsg}
+                    </div>
+                  )}
+
+                  {showSnapshots && (
+                    <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2 max-h-56 overflow-y-auto">
+                      {localSnapshots.length === 0 ? (
+                        <p className="text-[11px] text-slate-500">
+                          Automatic snapshots are captured on this device before every cloud merge or import.
+                        </p>
+                      ) : (
+                        localSnapshots.map(snap => (
+                          <div
+                            key={snap.id}
+                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px]"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-bold text-slate-200 truncate">
+                                {snap.reason}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                {new Date(snap.savedAt).toLocaleString()}
+                              </div>
+                              <div className="text-[10px] text-amber-300/80 truncate">
+                                {snap.summary}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (
+                                  confirm(
+                                    `Restore snapshot from ${new Date(snap.savedAt).toLocaleString()}? (Your current state will be saved as a new snapshot first.)`
+                                  )
+                                ) {
+                                  const ok = restoreLocalSnapshot(snap.id);
+                                  if (ok) {
+                                    setSnapshotRestoredMsg('Snapshot restored and synced to cloud.');
+                                    setTimeout(() => setSnapshotRestoredMsg(null), 3000);
+                                  }
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 font-bold shrink-0"
+                            >
+                              Restore
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {/* Admin-Only Danger Zone with 2-Layer Confirmation for Start Fresh */}
                 {isAdmin && (
