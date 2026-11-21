@@ -298,14 +298,21 @@ export const ReviewHub: React.FC = () => {
     setReviewTargetWeekId(selectedWeekId);
   }, [selectedWeekId]);
 
-  // Auto-sync weekly review form when target plan changes
+  // Auto-sync weekly review form when target plan changes OR updates from cloud sync
   useEffect(() => {
     const plan = weeklyPlans[reviewTargetWeekId] || currentWeeklyPlan;
     setReviewTitle(`Week ${plan.weekNumber} Retrospective${plan.focusTheme ? `: ${plan.focusTheme}` : ''}`);
     setWinsText(plan.winsNotes || '');
     setBlockersText('');
     setCourseCorrectionsText(plan.courseCorrectionNotes || plan.reviewNotes || '');
-  }, [reviewTargetWeekId, currentWeeklyPlan.id]);
+  }, [
+    reviewTargetWeekId,
+    currentWeeklyPlan.id,
+    targetPlanForReview.updatedAt,
+    targetPlanForReview.winsNotes,
+    targetPlanForReview.courseCorrectionNotes,
+    targetPlanForReview.reviewNotes
+  ]);
 
   // Computed GWS metrics
   const totalGwsHours = (gwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0) / 60).toFixed(1);

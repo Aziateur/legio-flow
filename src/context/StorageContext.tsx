@@ -96,7 +96,8 @@ const DELETED_IDS_KEY = 'legio_deleted_ids_v1';
 const AUTO_SNAPSHOTS_KEY = 'legio_auto_snapshots_v1';
 const SELECTED_WEEK_ID_KEY = 'legio_selected_week_id';
 const EMPTY_WEEK_TIMESTAMP = '1970-01-01T00:00:00.000Z';
-const MAX_AUTO_SNAPSHOTS = 8;
+const MAX_AUTO_SNAPSHOTS = 4;
+const MAX_SNAPSHOTS_TOTAL_BYTES = 600 * 1024; // ~600KB cap so snapshots never threaten 5MB iOS Safari localStorage quota
 const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface LocalRecoverySnapshot {
@@ -129,9 +130,21 @@ const readStorageSafe = <T,>(key: string, fallback: T): T => {
 };
 
 const writeStorageSafe = (key: string, value: unknown): void => {
+  const serialized = JSON.stringify(value);
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, serialized);
   } catch (e) {
+    // If localStorage quota is tight (e.g. iOS Safari 5MB cap), evict auto-snapshots and retry critical data writes!
+    if (key !== AUTO_SNAPSHOTS_KEY) {
+      try {
+        localStorage.removeItem(AUTO_SNAPSHOTS_KEY);
+        localStorage.setItem(key, serialized);
+        return;
+      } catch (retryErr) {
+        console.error(`Failed to persist ${key} even after freeing snapshots`, retryErr);
+        return;
+      }
+    }
     console.error(`Failed to persist ${key}`, e);
   }
 };
@@ -1135,7 +1148,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         summary,
         state: payload
       };
-      const next = [snap, ...localSnapshotsRef.current].slice(0, MAX_AUTO_SNAPSHOTS);
+      let next = [snap, ...localSnapshotsRef.current].slice(0, MAX_AUTO_SNAPSHOTS);
+      while (next.length > 1 && JSON.stringify(next).length > MAX_SNAPSHOTS_TOTAL_BYTES) {
+        next = next.slice(0, -1);
+      }
       localSnapshotsRef.current = next;
       setLocalSnapshots(next);
       writeStorageSafe(AUTO_SNAPSHOTS_KEY, next);
@@ -1223,12 +1239,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const pushTimestamp = new Date().toISOString();
       const { data: savedRow, error } = await supabase
         .from('legio_user_state')
-        .upsert({
-          user_id: user.id,
-          display_name: user.displayName || user.email,
-          state: payload,
-          updated_at: pushTimestamp
-        })
+        .upsert(
+          {
+            user_id: user.id,
+            display_name: user.displayName || user.email,
+            state: payload,
+            updated_at: pushTimestamp
+          },
+          { onConflict: 'user_id' }
+        )
         .select('updated_at')
         .maybeSingle();
 
@@ -1419,15 +1438,99 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const handleUnload = () => {
       flushCloudPushKeepalive();
     };
+    // Cross-tab live sync on the same browser so two open tabs never push stale in-memory refs over each other
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (!e.key || e.newValue === null) return;
+      try {
+        if (e.key === STORAGE_KEYS.DAILY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            dailyEntriesRef.current = parsed;
+            setDailyEntries(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.GWS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            gwsSessionsRef.current = parsed;
+            setGwsSessions(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.WEEKLY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            weeklyPlansRef.current = parsed;
+            setWeeklyPlans(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.MONTHLY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            monthlyPlansRef.current = parsed;
+            setMonthlyPlans(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.YEARLY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            yearlyPlansRef.current = parsed;
+            setYearlyPlans(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.STRATEGY_PLANS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            strategyPlansRef.current = parsed;
+            setStrategyPlans(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.PROBLEMS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            problemsRef.current = parsed;
+            setProblems(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.REVIEWS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            reviewsRef.current = parsed;
+            setReviews(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.CHECKLIST_ITEMS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            checklistItemsRef.current = parsed;
+            setChecklistItems(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.CHECKLIST_CATEGORIES) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            checklistCategoriesRef.current = parsed;
+            setChecklistCategories(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.TEMPLATES) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            templatesRef.current = parsed;
+            setTemplates(parsed);
+          }
+        } else if (e.key === DELETED_IDS_KEY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            deletedIdsRef.current = pruneTombstones(parsed);
+          }
+        } else if (e.key === LAST_CLOUD_UPDATED_AT_KEY) {
+          lastSyncedCloudUpdatedAtRef.current = e.newValue;
+        }
+      } catch {
+        // Ignore malformed cross-tab payloads
+      }
+    };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocusOrOnline);
     window.addEventListener('online', handleFocusOrOnline);
+    window.addEventListener('storage', handleStorageEvent);
     window.addEventListener('pagehide', handleUnload);
     window.addEventListener('beforeunload', handleUnload);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocusOrOnline);
       window.removeEventListener('online', handleFocusOrOnline);
+      window.removeEventListener('storage', handleStorageEvent);
       window.removeEventListener('pagehide', handleUnload);
       window.removeEventListener('beforeunload', handleUnload);
     };
@@ -1876,6 +1979,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (updates.priorityItems !== undefined || updates.planNotes !== undefined) {
       const prevItems = getPriorityItemsForEntry(prevEntry);
       const nextItems = getPriorityItemsForEntry(nextEntry);
+      const nextIds = new Set(nextItems.map(i => i.id));
+      const removedPrioIds = prevItems.filter(p => p.id && !nextIds.has(p.id)).map(p => p.id);
+      if (removedPrioIds.length > 0) recordDeletedIds(removedPrioIds);
 
       const toggledItems = nextItems.filter(nextItem => {
         const prevMatch =
@@ -2019,6 +2125,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const saveWeeklyPlan = (plan: WeeklyPlan) => {
     const prevPlan = weeklyPlansRef.current[plan.id];
+    if (prevPlan) {
+      const nextTaskIds = new Set((plan.tasks || []).map(t => t.id));
+      const nextSubIds = new Set(
+        (plan.tasks || []).flatMap(t => (t.subTasks || []).map(s => s.id))
+      );
+      const removedIds: string[] = [];
+      (prevPlan.tasks || []).forEach(t => {
+        if (t.id && !nextTaskIds.has(t.id)) removedIds.push(t.id);
+        (t.subTasks || []).forEach(s => {
+          if (s.id && !nextSubIds.has(s.id)) removedIds.push(s.id);
+        });
+      });
+      if (removedIds.length > 0) recordDeletedIds(removedIds);
+    }
     const savedPlan = applyWeeklyPlanUpdate(plan);
 
     // Two-way sync: propagate weekly goal / sub-goal completions and ID-linked renames to days in that week
@@ -2135,6 +2255,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const saveMonthlyPlan = (plan: MonthlyPlan) => {
     const key = plan.monthKey || plan.id;
     const prevPlan = monthlyPlansRef.current[key];
+    if (prevPlan) {
+      const nextIds = new Set((plan.tasks || []).map(t => t.id));
+      const removed = (prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id);
+      if (removed.length > 0) recordDeletedIds(removed);
+    }
     const saved = {
       ...normalizeMonthlyPlanEntry(key, plan),
       updatedAt: new Date().toISOString()
@@ -2171,6 +2296,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const saveYearlyPlan = (plan: YearlyPlan) => {
     const key = plan.yearKey || plan.id;
+    const prevPlan = yearlyPlansRef.current[key];
+    if (prevPlan) {
+      const nextIds = new Set((plan.tasks || []).map(t => t.id));
+      const removed = (prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id);
+      if (removed.length > 0) recordDeletedIds(removed);
+    }
     const saved = {
       ...normalizeYearlyPlanEntry(key, plan),
       updatedAt: new Date().toISOString()
@@ -2184,6 +2315,21 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const saveStrategyPlan = (plan: StrategyPlan) => {
     const prev = strategyPlansRef.current;
+    const prevPlan = prev.find(p => p.id === plan.id);
+    if (prevPlan) {
+      const nextStageIds = new Set((plan.stages || []).map(s => s.id));
+      const nextGoalIds = new Set(
+        (plan.stages || []).flatMap(s => (s.proximalGoals || []).map(g => g.id))
+      );
+      const removedIds: string[] = [];
+      (prevPlan.stages || []).forEach(s => {
+        if (s.id && !nextStageIds.has(s.id)) removedIds.push(s.id);
+        (s.proximalGoals || []).forEach(g => {
+          if (g.id && !nextGoalIds.has(g.id)) removedIds.push(g.id);
+        });
+      });
+      if (removedIds.length > 0) recordDeletedIds(removedIds);
+    }
     const nowIso = new Date().toISOString();
     const updatedPlan: StrategyPlan = {
       ...plan,
@@ -3047,29 +3193,111 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const unionGwsIds = Array.from(new Set([...(c.gwsSessionIds || []), ...(l.gwsSessionIds || [])]));
 
         let chosen: DailyEntry;
+        let other: DailyEntry;
         if (lHas && !cHas) {
           chosen = l;
+          other = c;
           needsCloudPush = true;
         } else if (cHas && !lHas) {
           chosen = c;
+          other = l;
         } else if (lTime > cTime) {
           chosen = l;
+          other = c;
           needsCloudPush = true;
         } else if (cTime > lTime) {
           chosen = c;
+          other = l;
         } else {
           chosen = hasPendingPush ? l : c;
+          other = hasPendingPush ? c : l;
         }
 
-        if (unionGwsIds.length > (chosen.gwsSessionIds || []).length) {
-          chosen = { ...chosen, gwsSessionIds: unionGwsIds };
+        // Deep-merge priorities by ID (respecting deletedIds) + preserve non-empty review/notes/score + union GWS IDs
+        const primaryItems = chosen.priorityItems || [];
+        const secondaryItems = other.priorityItems || [];
+        const mergedPrios: DailyPriorityItem[] = [...primaryItems];
+        const prioIds = new Set(primaryItems.map(i => i.id));
+        const prioTexts = new Set(primaryItems.map(i => i.text.trim().toLowerCase()));
+        secondaryItems.forEach(item => {
+          const delMs = Date.parse(mergedDeletedIds[item.id] || '') || 0;
+          const otherT = Date.parse(other.updatedAt || '') || 0;
+          if (delMs > 0 && delMs >= otherT) return;
+          if (!prioIds.has(item.id) && !prioTexts.has(item.text.trim().toLowerCase())) {
+            mergedPrios.push(item);
+            prioIds.add(item.id);
+            prioTexts.add(item.text.trim().toLowerCase());
+            needsCloudPush = true;
+          }
+        });
+
+        const mergedReviewNotes = chosen.reviewNotes?.trim() ? chosen.reviewNotes : other.reviewNotes || '';
+        const mergedProblems = chosen.problemsEncountered?.trim()
+          ? chosen.problemsEncountered
+          : other.problemsEncountered || '';
+        const mergedScore = chosen.executionScore > 0 ? chosen.executionScore : other.executionScore || 0;
+
+        if (
+          unionGwsIds.length > (c.gwsSessionIds || []).length ||
+          mergedPrios.length !== (c.priorityItems || []).length ||
+          mergedReviewNotes !== (c.reviewNotes || '')
+        ) {
           needsCloudPush = true;
         }
-        mergedDailyEntries[date] = chosen;
+
+        mergedDailyEntries[date] = normalizeDailyEntryFields(date, {
+          ...chosen,
+          priorityItems: mergedPrios,
+          planNotes: formatPriorityItemsToPlanNotes(mergedPrios),
+          gwsSessionIds: unionGwsIds,
+          reviewNotes: mergedReviewNotes,
+          problemsEncountered: mergedProblems,
+          executionScore: mergedScore
+        });
       }
     });
 
-    // 2. Merge weeklyPlans per weekId (prefer content over empty auto-created placeholders, otherwise newer updatedAt)
+    // Helper: deep-merge TaskItem lists (Weekly / Monthly / Yearly) by ID respecting tombstones
+    const mergeTaskItemLists = (
+      primaryTasks: TaskItem[],
+      secondaryTasks: TaskItem[],
+      secondaryUpdatedMs: number
+    ): TaskItem[] => {
+      const merged: TaskItem[] = primaryTasks.map(pt => {
+        const match = secondaryTasks.find(st => st.id === pt.id);
+        if (!match) return pt;
+        const pSubs = pt.subTasks || [];
+        const sSubs = match.subTasks || [];
+        if (sSubs.length === 0) return pt;
+        const mergedSubs = [...pSubs];
+        const pSubIds = new Set(pSubs.map(s => s.id));
+        sSubs.forEach(ss => {
+          const delMs = Date.parse(mergedDeletedIds[ss.id] || '') || 0;
+          if (delMs > 0 && delMs >= secondaryUpdatedMs) return;
+          if (!pSubIds.has(ss.id)) {
+            mergedSubs.push(ss);
+            pSubIds.add(ss.id);
+            needsCloudPush = true;
+          }
+        });
+        return mergedSubs.length > pSubs.length ? { ...pt, subTasks: mergedSubs } : pt;
+      });
+      const existingIds = new Set(primaryTasks.map(t => t.id));
+      const existingTexts = new Set(primaryTasks.map(t => t.text.trim().toLowerCase()));
+      secondaryTasks.forEach(st => {
+        const delMs = Date.parse(mergedDeletedIds[st.id] || '') || 0;
+        if (delMs > 0 && delMs >= secondaryUpdatedMs) return;
+        if (!existingIds.has(st.id) && !existingTexts.has(st.text.trim().toLowerCase())) {
+          merged.push(st);
+          existingIds.add(st.id);
+          existingTexts.add(st.text.trim().toLowerCase());
+          needsCloudPush = true;
+        }
+      });
+      return merged;
+    };
+
+    // 2. Merge weeklyPlans per weekId (deep-merging tasks + notes so concurrent edits on Phone & Desktop both survive!)
     const mergedWeeklyPlans: Record<string, WeeklyPlan> = {};
     const cloudWeekly = (cloudState?.weeklyPlans || {}) as Record<string, WeeklyPlan>;
     const allWeekIds = new Set([...Object.keys(local.weeklyPlans), ...Object.keys(cloudWeekly)]);
@@ -3088,32 +3316,63 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const lTime = Date.parse(l.updatedAt || '') || 0;
         const cTime = Date.parse(c.updatedAt || '') || 0;
 
+        let primary: WeeklyPlan;
+        let secondary: WeeklyPlan;
+        let secondaryTime: number;
         if (lHasContent && !cHasContent) {
           if (cTime > lTime && c.updatedAt !== EMPTY_WEEK_TIMESTAMP && !hasPendingPush && cloudMs > localMs) {
-            mergedWeeklyPlans[weekId] = c;
+            primary = c;
+            secondary = l;
+            secondaryTime = lTime;
           } else {
-            mergedWeeklyPlans[weekId] = l;
+            primary = l;
+            secondary = c;
+            secondaryTime = cTime;
             needsCloudPush = true;
           }
         } else if (cHasContent && !lHasContent) {
           if (hasPendingPush && lTime > cTime && l.updatedAt !== EMPTY_WEEK_TIMESTAMP) {
-            mergedWeeklyPlans[weekId] = l;
+            primary = l;
+            secondary = c;
+            secondaryTime = cTime;
             needsCloudPush = true;
           } else {
-            mergedWeeklyPlans[weekId] = c;
+            primary = c;
+            secondary = l;
+            secondaryTime = lTime;
           }
         } else if (lTime > cTime) {
-          mergedWeeklyPlans[weekId] = l;
+          primary = l;
+          secondary = c;
+          secondaryTime = cTime;
           needsCloudPush = true;
         } else if (cTime > lTime) {
-          mergedWeeklyPlans[weekId] = c;
+          primary = c;
+          secondary = l;
+          secondaryTime = lTime;
         } else {
-          mergedWeeklyPlans[weekId] = hasPendingPush ? l : c;
+          primary = hasPendingPush ? l : c;
+          secondary = hasPendingPush ? c : l;
+          secondaryTime = hasPendingPush ? cTime : lTime;
         }
+
+        const mergedTasks = mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime);
+        mergedWeeklyPlans[weekId] = {
+          ...primary,
+          focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
+          notes: primary.notes?.trim() ? primary.notes : secondary.notes || '',
+          winsNotes: primary.winsNotes?.trim() ? primary.winsNotes : secondary.winsNotes,
+          courseCorrectionNotes: primary.courseCorrectionNotes?.trim()
+            ? primary.courseCorrectionNotes
+            : secondary.courseCorrectionNotes,
+          reviewNotes: primary.reviewNotes?.trim() ? primary.reviewNotes : secondary.reviewNotes,
+          tasks: mergedTasks,
+          achievedScore: computeWeeklyAchievedScore(mergedTasks)
+        };
       }
     });
 
-    // 3. Merge monthlyPlans & yearlyPlans per periodKey
+    // 3. Merge monthlyPlans & yearlyPlans per periodKey (deep-merging tasks + notes)
     const mergePeriodPlanMap = <T extends MonthlyPlan | YearlyPlan>(
       localMap: Record<string, T>,
       cloudMapRaw: any,
@@ -3142,28 +3401,52 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const lTime = Date.parse(l.updatedAt || '') || 0;
           const cTime = Date.parse(c.updatedAt || '') || 0;
 
+          let primary: T;
+          let secondary: T;
+          let secondaryTime: number;
           if (lHasContent && !cHasContent) {
             if (cTime > lTime && c.updatedAt !== EMPTY_WEEK_TIMESTAMP && !hasPendingPush && cloudMs > localMs) {
-              merged[k] = c;
+              primary = c;
+              secondary = l;
+              secondaryTime = lTime;
             } else {
-              merged[k] = l;
+              primary = l;
+              secondary = c;
+              secondaryTime = cTime;
               needsCloudPush = true;
             }
           } else if (cHasContent && !lHasContent) {
             if (hasPendingPush && lTime > cTime && l.updatedAt !== EMPTY_WEEK_TIMESTAMP) {
-              merged[k] = l;
+              primary = l;
+              secondary = c;
+              secondaryTime = cTime;
               needsCloudPush = true;
             } else {
-              merged[k] = c;
+              primary = c;
+              secondary = l;
+              secondaryTime = lTime;
             }
           } else if (lTime > cTime) {
-            merged[k] = l;
+            primary = l;
+            secondary = c;
+            secondaryTime = cTime;
             needsCloudPush = true;
           } else if (cTime > lTime) {
-            merged[k] = c;
+            primary = c;
+            secondary = l;
+            secondaryTime = lTime;
           } else {
-            merged[k] = hasPendingPush ? l : c;
+            primary = hasPendingPush ? l : c;
+            secondary = hasPendingPush ? c : l;
+            secondaryTime = hasPendingPush ? cTime : lTime;
           }
+
+          merged[k] = {
+            ...primary,
+            focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
+            notes: primary.notes?.trim() ? primary.notes : secondary.notes || '',
+            tasks: mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime)
+          };
         }
       });
 
@@ -3197,7 +3480,49 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const mergedStrategyPlans = mergeCollectionById<StrategyPlan>(
       local.strategyPlans,
       cloudState?.strategyPlans,
-      p => Date.parse(p.updatedAt || p.createdAt || '') || 0
+      p => Date.parse(p.updatedAt || p.createdAt || '') || 0,
+      (l, c) => {
+        const lT = Date.parse(l.updatedAt || l.createdAt || '') || 0;
+        const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        const primary = lT >= cT ? l : c;
+        const secondary = lT >= cT ? c : l;
+        const secondaryTime = lT >= cT ? cT : lT;
+
+        const mergedStages = (primary.stages || []).map(ps => {
+          const match = (secondary.stages || []).find(ss => ss.id === ps.id);
+          if (!match) return ps;
+          const mergedGoals = [...(ps.proximalGoals || [])];
+          const gIds = new Set(mergedGoals.map(g => g.id));
+          (match.proximalGoals || []).forEach(sg => {
+            const delMs = Date.parse(mergedDeletedIds[sg.id] || '') || 0;
+            if (delMs > 0 && delMs >= secondaryTime) return;
+            if (!gIds.has(sg.id)) {
+              mergedGoals.push(sg);
+              gIds.add(sg.id);
+              needsCloudPush = true;
+            }
+          });
+          return {
+            ...ps,
+            proximalGoals: mergedGoals,
+            whatItLooksLike: ps.whatItLooksLike?.trim() ? ps.whatItLooksLike : match.whatItLooksLike || '',
+            notPossibleUntil: ps.notPossibleUntil?.trim() ? ps.notPossibleUntil : match.notPossibleUntil || '',
+            dayInALife: ps.dayInALife?.trim() ? ps.dayInALife : match.dayInALife || '',
+            gateCriterion: ps.gateCriterion?.trim() ? ps.gateCriterion : match.gateCriterion || ''
+          };
+        });
+        const stageIds = new Set(mergedStages.map(s => s.id));
+        (secondary.stages || []).forEach(ss => {
+          const delMs = Date.parse(mergedDeletedIds[ss.id] || '') || 0;
+          if (delMs > 0 && delMs >= secondaryTime) return;
+          if (!stageIds.has(ss.id)) {
+            mergedStages.push(ss);
+            stageIds.add(ss.id);
+            needsCloudPush = true;
+          }
+        });
+        return { ...primary, stages: mergedStages };
+      }
     );
 
     const mergedProblems = mergeCollectionById<ProblemEntry>(
@@ -3400,14 +3725,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             // ignore
           }
           const cachedId = authUserRef.current?.id;
-          const isDifferentAccount = !!(prevCloudUser && prevCloudUser !== u.id && cachedId !== u.id);
+          // If local storage was cleared/evicted (!prevCloudUser) or belongs to a different account,
+          // ALWAYS prefer authoritative cloud data instead of merging sample defaults into the cloud!
+          const shouldPreferCloudDirectly = !prevCloudUser || (prevCloudUser !== u.id && cachedId !== u.id);
 
           setAuthUser({
             id: u.id,
             email: u.email || '',
             displayName: u.user_metadata?.display_name
           });
-          void loadUserCloudState(u.id, { preferCloudDirectly: isDifferentAccount });
+          void loadUserCloudState(u.id, { preferCloudDirectly: shouldPreferCloudDirectly });
+        } else if (authUserRef.current) {
+          // Cached remember-device profile existed, but the Supabase session actually expired — notify clearly!
+          accessTokenRef.current = null;
+          hasCompletedInitialCloudSyncRef.current = false;
+          setAuthUser(null);
+          setSyncStatus('error');
+          setSyncError('Session expired — sign in again so your changes sync to cloud.');
         }
       })
       .catch(() => {
