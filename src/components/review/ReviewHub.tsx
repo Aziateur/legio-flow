@@ -45,9 +45,7 @@ import {
   Plus, 
   X, 
   FilePlus,
-  Compass,
-  Lock,
-  Unlock
+  Compass
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -209,7 +207,6 @@ export const ReviewHub: React.FC = () => {
     yearlyPlans,
     getYearlyPlan,
     saveYearlyPlan,
-    strategyPlans,
     checklistItems,
     saveChecklistItems,
     problems,
@@ -250,6 +247,8 @@ export const ReviewHub: React.FC = () => {
   const [selectedQuarter, setSelectedQuarter] = useState<string>(() => getMonthInfo(selectedDate.slice(0, 7)).quarterKey);
   const [selectedYear, setSelectedYear] = useState<string>(() => selectedDate.slice(0, 4));
   const [monthlyScaleFilter, setMonthlyScaleFilter] = useState<'all' | 'weekly' | 'daily' | 'gws'>('all');
+  const [quarterlyScaleFilter, setQuarterlyScaleFilter] = useState<'all' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
+  const [yearlyScaleFilter, setYearlyScaleFilter] = useState<'all' | 'quarterly' | 'monthly' | 'weekly' | 'daily' | 'gws'>('all');
   const [copiedMacroType, setCopiedMacroType] = useState<'monthly' | 'quarterly' | 'yearly' | null>(null);
 
   // GWS filter states
@@ -389,8 +388,6 @@ export const ReviewHub: React.FC = () => {
       wins: updates.wins ?? existing?.wins ?? '',
       blockers: updates.blockers ?? existing?.blockers ?? '',
       courseCorrections: updates.courseCorrections ?? existing?.courseCorrections ?? '',
-      stopDoing: updates.stopDoing ?? existing?.stopDoing ?? '',
-      doubleDown: updates.doubleDown ?? existing?.doubleDown ?? '',
       ratings: updates.ratings ?? existing?.ratings ?? { clarity: 4, consistency: 4, overall: 4 },
       createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -403,7 +400,7 @@ export const ReviewHub: React.FC = () => {
     const existing = getSavedYearlyReview(yearKey);
     const entry: ReviewEntry = {
       id: existing?.id || `rev_yearly_${info.yearKey}`,
-      title: updates.title ?? existing?.title ?? `${info.label} — Yearly Executive Review`,
+      title: updates.title ?? existing?.title ?? `${info.label} — Yearly Macro Review`,
       periodType: 'yearly',
       periodKey: info.yearKey,
       startDate: info.startDate,
@@ -412,7 +409,6 @@ export const ReviewHub: React.FC = () => {
       wins: updates.wins ?? existing?.wins ?? '',
       blockers: updates.blockers ?? existing?.blockers ?? '',
       courseCorrections: updates.courseCorrections ?? existing?.courseCorrections ?? '',
-      headline: updates.headline ?? existing?.headline ?? '',
       ratings: updates.ratings ?? existing?.ratings ?? { clarity: 4, consistency: 4, overall: 4 },
       createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1083,12 +1079,10 @@ export const ReviewHub: React.FC = () => {
       if (!hasActivity) return null;
 
       const structuredQuarterlyReview = [
-        qData.saved?.wins?.trim() ? `1. Biggest Wins & Breakthroughs:\n${qData.saved.wins.trim()}` : '',
-        qData.saved?.blockers?.trim() ? `2. Top Constraints & Bottlenecks:\n${qData.saved.blockers.trim()}` : '',
-        qData.saved?.stopDoing?.trim() ? `3. Stop Doing:\n${qData.saved.stopDoing.trim()}` : '',
-        qData.saved?.doubleDown?.trim() ? `4. Double Down On:\n${qData.saved.doubleDown.trim()}` : '',
+        qData.saved?.wins?.trim() ? `1. Quarterly Wins & Major Deliverables:\n${qData.saved.wins.trim()}` : '',
+        qData.saved?.blockers?.trim() ? `2. Structural Problems & Bottlenecks:\n${qData.saved.blockers.trim()}` : '',
         qData.saved?.courseCorrections?.trim()
-          ? `5. Next Quarter Thesis & Primary Focus:\n${qData.saved.courseCorrections.trim()}`
+          ? `3. Next Quarter Thesis & Course Corrections:\n${qData.saved.courseCorrections.trim()}`
           : ''
       ]
         .filter(Boolean)
@@ -1141,11 +1135,10 @@ export const ReviewHub: React.FC = () => {
       if (!hasActivity) return null;
 
       const structuredYearlyReview = [
-        yData.saved?.headline?.trim() ? `Year Chapter: "${yData.saved.headline.trim()}"` : '',
-        yData.saved?.wins?.trim() ? `1. Biggest Wins, Shipped Systems & Capacity Shift:\n${yData.saved.wins.trim()}` : '',
-        yData.saved?.blockers?.trim() ? `2. Core Patterns & Annual Bottlenecks:\n${yData.saved.blockers.trim()}` : '',
+        yData.saved?.wins?.trim() ? `1. Yearly Wins & Shipped Goals:\n${yData.saved.wins.trim()}` : '',
+        yData.saved?.blockers?.trim() ? `2. Structural Problems & Bottlenecks:\n${yData.saved.blockers.trim()}` : '',
         yData.saved?.courseCorrections?.trim()
-          ? `3. Next Year Singular Focus & Operating Rules:\n${yData.saved.courseCorrections.trim()}`
+          ? `3. Next Year Thesis & Course Corrections:\n${yData.saved.courseCorrections.trim()}`
           : ''
       ]
         .filter(Boolean)
@@ -1163,9 +1156,7 @@ export const ReviewHub: React.FC = () => {
         id: `vault_yearly_${yKey}`,
         type: 'yearly' as const,
         dateOrPeriod: `${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate})`,
-        title: yData.saved?.headline?.trim()
-          ? `${yData.info.label} — ${yData.saved.headline.trim()}`
-          : yData.saved?.title || `${yData.info.label} — Yearly Executive Review`,
+        title: yData.saved?.title || `${yData.info.label} — Yearly Macro Review`,
         scoreBadge:
           yData.saved?.score && yData.saved.score > 0
             ? `Year ${yData.saved.score}/10`
@@ -1371,213 +1362,6 @@ export const ReviewHub: React.FC = () => {
     setModalGwsHeldBack('');
     setModalProblemTags([]);
     setReviewSubTab('vault');
-  };
-
-  const formatRoadmapsForReviewText = (periodStartDate: string, periodEndDate: string): string => {
-    if (strategyPlans.length === 0) return '';
-    return strategyPlans
-      .map(plan => {
-        const totalStages = plan.stages.length;
-        const passedStages = plan.stages.filter(s => s.gatePassed);
-        const passedInPeriod = passedStages.filter(
-          s => s.gatePassedAt && s.gatePassedAt >= periodStartDate && s.gatePassedAt <= periodEndDate
-        );
-        const activeStage = plan.stages.find(s => !s.gatePassed);
-        const periodTag = passedInPeriod.length > 0 ? ` · ${passedInPeriod.length} passed this period` : '';
-        if (activeStage) {
-          const gateTxt = activeStage.gateCriterion.trim()
-            ? ` | Gate: ${activeStage.gateCriterion.trim()}`
-            : '';
-          return `• ${plan.title} (${passedStages.length}/${totalStages} gates${periodTag}) — Active: ${activeStage.title}${gateTxt}`;
-        }
-        return `• ${plan.title} (${passedStages.length}/${totalStages} gates${periodTag}) — All stages completed`;
-      })
-      .join('\n');
-  };
-
-  const renderRoadmapGatesCard = (
-    periodStartDate: string,
-    periodEndDate: string,
-    periodLabel: 'quarter' | 'year'
-  ) => {
-    const totalStagesAll = strategyPlans.reduce((sum, p) => sum + p.stages.length, 0);
-    const totalPassedAll = strategyPlans.reduce(
-      (sum, p) => sum + p.stages.filter(s => s.gatePassed).length,
-      0
-    );
-    const passedInPeriodAll = strategyPlans.reduce(
-      (sum, p) =>
-        sum +
-        p.stages.filter(
-          s =>
-            s.gatePassed &&
-            s.gatePassedAt &&
-            s.gatePassedAt >= periodStartDate &&
-            s.gatePassedAt <= periodEndDate
-        ).length,
-      0
-    );
-
-    return (
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3.5">
-          <div>
-            <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-400 flex items-center space-x-1.5">
-              <Compass className="w-3.5 h-3.5" />
-              <span>Written Strategy · Roadmap Gates</span>
-            </span>
-            <div className="flex items-center flex-wrap gap-2 mt-1">
-              <h3 className="text-base font-extrabold text-slate-100">
-                Stage-Gate Progress
-              </h3>
-              {strategyPlans.length > 0 && (
-                <span className="px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[11px] font-bold">
-                  {totalPassedAll}/{totalStagesAll} gates
-                </span>
-              )}
-              {passedInPeriodAll > 0 && (
-                <span className="px-2 py-0.5 rounded-lg bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono text-[10px] font-bold">
-                  +{passedInPeriodAll} this {periodLabel}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('planning');
-              setPlanningSubTab('roadmaps');
-            }}
-            className="shrink-0 inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
-          >
-            <span>Open Roadmaps</span>
-            <ExternalLink className="w-3 h-3" />
-          </button>
-        </div>
-
-        {strategyPlans.length === 0 ? (
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-400 space-y-2">
-            <p>No Written Roadmaps created yet. Stage-Gate plans from Planning Hub appear here during macro reviews.</p>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('planning');
-                setPlanningSubTab('roadmaps');
-              }}
-              className="text-emerald-400 hover:text-emerald-300 font-bold"
-            >
-              Create a Roadmap in Planning Hub →
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {strategyPlans.map(plan => {
-              const totalStages = plan.stages.length;
-              const passedStages = plan.stages.filter(s => s.gatePassed);
-              const activeStageIdx = plan.stages.findIndex(s => !s.gatePassed);
-              const activeStage = activeStageIdx >= 0 ? plan.stages[activeStageIdx] : null;
-              const lockedAheadCount =
-                activeStageIdx >= 0 ? Math.max(0, totalStages - activeStageIdx - 1) : 0;
-              const pct = totalStages > 0 ? Math.round((passedStages.length / totalStages) * 100) : 0;
-
-              const activeGoalsTotal = activeStage?.proximalGoals.length || 0;
-              const activeGoalsDone =
-                activeStage?.proximalGoals.filter(g => g.completed).length || 0;
-
-              return (
-                <div
-                  key={plan.id}
-                  className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-extrabold text-slate-100 truncate">{plan.title}</div>
-                    <span className="shrink-0 px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[11px] font-bold text-amber-300">
-                      {passedStages.length}/{totalStages} gates
-                    </span>
-                  </div>
-
-                  <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-all"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-
-                  {passedStages.length > 0 && (
-                    <div className="space-y-1">
-                      {passedStages.map(stage => {
-                        const passedThisPeriod =
-                          !!stage.gatePassedAt &&
-                          stage.gatePassedAt >= periodStartDate &&
-                          stage.gatePassedAt <= periodEndDate;
-                        return (
-                          <div
-                            key={stage.id}
-                            className="flex items-center justify-between gap-2 text-[11px] text-emerald-300/90"
-                          >
-                            <div className="flex items-center space-x-1.5 min-w-0">
-                              <Unlock className="w-3 h-3 text-emerald-400 shrink-0" />
-                              <span className="truncate">{stage.title}</span>
-                            </div>
-                            {passedThisPeriod ? (
-                              <span className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 font-mono text-[10px] font-bold text-emerald-300">
-                                Passed this {periodLabel} ({stage.gatePassedAt})
-                              </span>
-                            ) : (
-                              <span className="shrink-0 font-mono text-[10px] text-emerald-500/80">
-                                {stage.gatePassedAt ? `Passed ${stage.gatePassedAt}` : 'Passed'}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {activeStage ? (
-                    <div className="p-2.5 rounded-xl bg-amber-500/5 border border-amber-500/30 space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-                          Current Gate
-                        </span>
-                        {activeGoalsTotal > 0 && (
-                          <span className="font-mono text-[10px] font-bold text-slate-300">
-                            {activeGoalsDone}/{activeGoalsTotal} goals
-                          </span>
-                        )}
-                      </div>
-                      <div className="font-bold text-slate-100 text-xs">{activeStage.title}</div>
-                      <div className="text-[11px] text-slate-300 leading-relaxed">
-                        {activeStage.gateCriterion.trim() ? (
-                          activeStage.gateCriterion.trim()
-                        ) : (
-                          <span className="text-slate-500 italic">No gate criterion defined yet.</span>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center space-x-1.5 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-bold text-emerald-300">
-                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      <span>All stages unlocked &amp; passed</span>
-                    </div>
-                  )}
-
-                  {lockedAheadCount > 0 && (
-                    <div className="flex items-center space-x-1.5 text-[11px] text-slate-500 pt-0.5">
-                      <Lock className="w-3 h-3 shrink-0" />
-                      <span>
-                        +{lockedAheadCount} locked {lockedAheadCount === 1 ? 'stage' : 'stages'} ahead
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
   };
 
   return (
@@ -3632,55 +3416,36 @@ export const ReviewHub: React.FC = () => {
       })()}
 
       {/* ========================================================================= */}
-      {/* SUB-TAB 5: QUARTERLY REVIEW (SYNTHESIS-FIRST, 1-LEVEL-DOWN + ROADMAPS)    */}
+      {/* SUB-TAB 5: QUARTERLY REVIEW (CONTAINS MONTHLY, WEEKLY, DAILY & GWS DATA)  */}
       {/* ========================================================================= */}
       {reviewSubTab === 'quarterly' && (() => {
         const qData = compileQuarterData(selectedQuarter);
         const quarterScore = qData.saved?.score || 0;
         const quarterWins = qData.saved?.wins || '';
         const quarterProblems = qData.saved?.blockers || '';
-        const quarterStopDoing = qData.saved?.stopDoing || '';
-        const quarterDoubleDown = qData.saved?.doubleDown || '';
         const quarterCorrections = qData.saved?.courseCorrections || '';
-        const reviewedMonthsCount = qData.monthsData.filter(
-          m =>
-            !!m.saved?.wins?.trim() ||
-            !!m.saved?.courseCorrections?.trim() ||
-            (m.saved?.score ?? 0) > 0
-        ).length;
 
         const handleCopyQuarterlyPlain = () => {
-          let text = `${qData.info.label} — Quarterly Strategic Review\n\n`;
+          let text = `${qData.info.label} — Quarterly Review\n\n`;
           text += `Quarterly Score: ${quarterScore > 0 ? `${quarterScore}/10` : 'Unscored'}\n`;
-          text += `Months Reviewed: ${reviewedMonthsCount}/3 (${qData.info.months.join(', ')})\n`;
-          text += `Weekly Execution: Avg ${qData.avgWeeklyScore}/10 (${qData.weeklyPointsAchieved}/${qData.weeklyPointsPossible} pts · ${qData.weeks.length} weeks)\n`;
-          text += `Daily Discipline: Avg ${qData.avgDailyScore}/10 (${qData.days.length}d · Habits ${qData.habitRatePct}%)\n`;
-          text += `GWS Deep Work: ${qData.gwsHours}h (${qData.gws.length} sprints · Avg ${qData.avgGwsTotal}/15)\n`;
-
-          const roadmapsSummary = formatRoadmapsForReviewText(qData.info.startDate, qData.info.endDate);
-          if (roadmapsSummary) {
-            text += `\nRoadmap Gates Progress:\n${roadmapsSummary}\n`;
-          }
+          text += `Months Covered: ${qData.info.months.join(', ')}\n`;
+          text += `Weekly Points: ${qData.weeklyPointsAchieved}/${qData.weeklyPointsPossible} pts across ${qData.weeks.length} weeks (Avg ${qData.avgWeeklyScore}/10)\n`;
+          text += `Daily Execution: ${qData.days.length} days logged • Avg Discipline ${qData.avgDailyScore}/10 • Tasks ${qData.dailyTasksDone}/${qData.dailyTasksTotal} • Habits ${qData.habitRatePct}%\n`;
+          text += `GWS Deep Work: ${qData.gwsHours}h across ${qData.gws.length} sprints (Avg ${qData.avgGwsTotal}/15)\n`;
 
           if (quarterWins.trim()) {
-            text += `\n1. Biggest Wins & Breakthroughs:\n${quarterWins.trim()}\n`;
+            text += `\n1. Quarterly Wins & Major Deliverables:\n${quarterWins.trim()}\n`;
           }
           const quarterStructuredProblems = formatProblemsForReviewText(
             problems.filter(p => problemOccurredInRange(p, qData.info.startDate, qData.info.endDate))
           );
           if (quarterStructuredProblems) {
-            text += `\n2. Top Constraints & Recurring Bottlenecks:\n${quarterStructuredProblems}\n`;
+            text += `\n2. Structural Problems & Bottlenecks:\n${quarterStructuredProblems}\n`;
           } else if (quarterProblems.trim()) {
-            text += `\n2. Top Constraints & Recurring Bottlenecks:\n${quarterProblems.trim()}\n`;
-          }
-          if (quarterStopDoing.trim()) {
-            text += `\n3. Stop Doing / Cut:\n${quarterStopDoing.trim()}\n`;
-          }
-          if (quarterDoubleDown.trim()) {
-            text += `\n4. Double Down On:\n${quarterDoubleDown.trim()}\n`;
+            text += `\n2. Structural Problems & Bottlenecks:\n${quarterProblems.trim()}\n`;
           }
           if (quarterCorrections.trim()) {
-            text += `\n5. Next Quarter Thesis & Primary Focus:\n${quarterCorrections.trim()}\n`;
+            text += `\n3. Next Quarter Strategic Thesis & Course Corrections:\n${quarterCorrections.trim()}\n`;
           }
 
           navigator.clipboard.writeText(text.trim());
@@ -3692,7 +3457,7 @@ export const ReviewHub: React.FC = () => {
         const prevQuarterCorrection = getSavedQuarterlyReview(prevQuarterKey)?.courseCorrections?.trim();
 
         return (
-          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-6">
+          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Quarter Navigation & Quick Switcher Bar */}
             <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
               <div className="flex items-center space-x-3">
@@ -3706,7 +3471,7 @@ export const ReviewHub: React.FC = () => {
                 </button>
                 <div>
                   <span className="text-[10px] font-extrabold uppercase tracking-widest text-cyan-400 block">
-                    Quarterly Strategic Review ({qData.info.startDate} → {qData.info.endDate})
+                    Quarterly Multi-Scale Review ({qData.info.startDate} → {qData.info.endDate})
                   </span>
                   <div className="text-xl font-extrabold text-slate-100">{qData.info.label}</div>
                 </div>
@@ -3752,208 +3517,136 @@ export const ReviewHub: React.FC = () => {
                 <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-extrabold uppercase tracking-wider text-[10px] text-cyan-400 mr-2">
-                    Target Thesis from Last Quarter ({prevQuarterKey}):
+                    Target Focus from Last Quarter ({prevQuarterKey} Course Correction):
                   </span>
                   <span className="text-slate-200">"{prevQuarterCorrection}"</span>
                 </div>
               </div>
             )}
 
-            {/* Compact 1-Line Quarter Telemetry Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-400">Months Reviewed</span>
-                <span className="font-mono font-bold text-slate-100">{reviewedMonthsCount}/3</span>
+            {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Quarter Weekly Points ({qData.weeks.length} wks)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.weeklyPointsAchieved} <span className="text-xs text-slate-500">/ {qData.weeklyPointsPossible} pts</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg {qData.avgWeeklyScore}/10 • {qData.weeklyTasksDone}/{qData.weeklyTasksTotal} weekly goals done
+                </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">Weekly Avg</span>
-                <span className="font-mono font-bold text-slate-100">
-                  {qData.avgWeeklyScore}/10
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
+                  Quarter Daily Discipline ({qData.days.length}d)
                 </span>
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({qData.weeklyPointsAchieved}/{qData.weeklyPointsPossible} pts · {qData.weeks.length}w)
-                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.avgDailyScore} <span className="text-xs text-slate-500">/ 10 avg score</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Tasks: {qData.dailyTasksDone}/{qData.dailyTasksTotal} • Habits: {qData.habitRatePct}% locked
+                </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-400">Daily Discipline</span>
-                <span className="font-mono font-bold text-slate-100">{qData.avgDailyScore}/10</span>
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({qData.days.length}d · {qData.habitRatePct}% habits)
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  Quarter GWS Deep Work ({qData.gws.length})
                 </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {qData.gwsHours} <span className="text-xs text-slate-500">hours deep work</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg Sprint Score: {qData.avgGwsTotal} / 15
+                </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">Deep Work</span>
-                <span className="font-mono font-bold text-slate-100">{qData.gwsHours}h</span>
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({qData.gws.length} sprints · {qData.avgGwsTotal}/15)
-                </span>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-cyan-400">
+                    Quarterly Score (1–10)
+                  </span>
+                  <span className="text-xs font-mono font-bold text-cyan-300">
+                    {quarterScore > 0 ? `${quarterScore}/10` : 'Unscored'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-10 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => upsertQuarterlyReview(selectedQuarter, { score: sc })}
+                      className={`py-1.5 rounded-lg text-[11px] font-bold font-mono transition-all ${
+                        quarterScore === sc
+                          ? 'bg-cyan-500 text-slate-950 font-extrabold shadow'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Synthesis-First 2-Column Strategic Workspace */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* LEFT (7 cols): Quarterly Strategic Synthesis FIRST */}
-              <div className="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-                  <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                      Quarterly Strategic Synthesis
-                    </span>
-                    <h2 className="text-xl font-extrabold text-slate-100 mt-2">
-                      Synthesize {qData.info.label}
-                    </h2>
-                  </div>
-
-                  {/* Integrated Quarter Score (1-10) */}
-                  <div className="space-y-1.5 shrink-0">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400">
-                        Quarter Score
-                      </span>
-                      <span className="text-xs font-mono font-bold text-cyan-300">
-                        {quarterScore > 0 ? `${quarterScore}/10` : 'Unscored'}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-10 gap-1">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
-                        <button
-                          key={sc}
-                          type="button"
-                          onClick={() => upsertQuarterlyReview(selectedQuarter, { score: sc })}
-                          className={`w-7 py-1 rounded-lg text-[11px] font-bold font-mono transition-all ${
-                            quarterScore === sc
-                              ? 'bg-cyan-500 text-slate-950 font-extrabold shadow'
-                              : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
-                          }`}
-                        >
-                          {sc}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            {/* Smaller Time-Scale Reviews Container (Monthly + Weekly + Daily + GWS) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-cyan-400">
+                    All Contained Smaller-Scale Reviews ({qData.info.label})
+                  </span>
+                  <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                    Monthly Reviews, Weekly Retrospectives, Daily Reviews & GWS Sprints
+                  </h2>
                 </div>
 
-                <div className="space-y-5">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400 block">
-                      1. Biggest Wins &amp; Breakthroughs
-                    </label>
-                    <textarea
-                      value={quarterWins}
-                      onChange={e => upsertQuarterlyReview(selectedQuarter, { wins: e.target.value })}
-                      rows={4}
-                      placeholder="What major deliverables, systems, or capability leaps actually moved the needle this quarter?"
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                    />
-                  </div>
-
-                  <ProblemLoggerPanel
-                    mode="review"
-                    title="2. Top Constraints & Recurring Bottlenecks"
-                    subtitle={`Core problems & bottlenecks surfaced during ${qData.info.label} (${qData.info.startDate} → ${qData.info.endDate}).`}
-                    sourceType="quarterly"
-                    date={qData.info.endDate}
-                    sourceRef={selectedQuarter}
-                    dateRange={{ startDate: qData.info.startDate, endDate: qData.info.endDate }}
-                    targetWeekId={selectedWeekId}
-                  />
-
-                  <div className="space-y-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300 block">
-                      3. Strategic Cuts vs. Bets
-                    </span>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-extrabold uppercase tracking-wider text-orange-400 block">
-                          Stop Doing / Cut
-                        </label>
-                        <textarea
-                          value={quarterStopDoing}
-                          onChange={e => upsertQuarterlyReview(selectedQuarter, { stopDoing: e.target.value })}
-                          rows={3}
-                          placeholder="Low-ROI commitments, bad habits, or distractions to stop next quarter..."
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-2xl p-3.5 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400 block">
-                          Double Down On
-                        </label>
-                        <textarea
-                          value={quarterDoubleDown}
-                          onChange={e => upsertQuarterlyReview(selectedQuarter, { doubleDown: e.target.value })}
-                          rows={3}
-                          placeholder="High-leverage habits, strategies, or systems that worked and deserve more energy..."
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-3.5 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400 block">
-                      4. Next Quarter Thesis &amp; Primary Focus
-                    </label>
-                    <textarea
-                      value={quarterCorrections}
-                      onChange={e => upsertQuarterlyReview(selectedQuarter, { courseCorrections: e.target.value })}
-                      rows={4}
-                      placeholder="What is your single core thesis and top 1–2 Roadmap Gate targets for next quarter?"
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
-                    <span>Autosaved to Review Vault &amp; Cloud Sync</span>
+                <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
+                  {(
+                    [
+                      { id: 'all', label: 'All Scales' },
+                      { id: 'monthly', label: 'Monthly (3)' },
+                      { id: 'weekly', label: `Weekly (${qData.weeks.length})` },
+                      { id: 'daily', label: `Daily (${qData.days.length})` },
+                      { id: 'gws', label: `GWS (${qData.gws.length})` }
+                    ] as const
+                  ).map(tab => (
                     <button
+                      key={tab.id}
                       type="button"
-                      onClick={() => setReviewSubTab('vault')}
-                      className="text-amber-400 hover:text-amber-300 font-bold"
+                      onClick={() => setQuarterlyScaleFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                        quarterlyScaleFilter === tab.id
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
                     >
-                      Open Review Vault →
+                      {tab.label}
                     </button>
-                  </div>
+                  ))}
                 </div>
               </div>
 
-              {/* RIGHT (5 cols): 1 Level Down Only — Roadmap Gates + 3 Months */}
-              <div className="lg:col-span-5 space-y-6">
-                {renderRoadmapGatesCard(qData.info.startDate, qData.info.endDate, 'quarter')}
+              {/* 1. Monthly Reviews inside this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'monthly') && (
+                <div className="space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center space-x-1.5">
+                    <Layers className="w-4 h-4" />
+                    <span>1. Monthly Reviews in {qData.info.label} (3 Months)</span>
+                  </span>
 
-                <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3.5">
-                    <div>
-                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-400 flex items-center space-x-1.5">
-                        <Layers className="w-3.5 h-3.5" />
-                        <span>1 Level Down · 3 Months</span>
-                      </span>
-                      <h3 className="text-base font-extrabold text-slate-100 mt-1">
-                        Monthly Reviews in {qData.info.quarterKey}
-                      </h3>
-                    </div>
-                    <span className="font-mono text-[11px] text-slate-400 font-bold">
-                      {reviewedMonthsCount}/3 written
-                    </span>
-                  </div>
-
-                  <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {qData.monthsData.map(m => (
-                      <div
-                        key={m.info.monthKey}
-                        className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <span className="font-mono text-[10px] text-purple-400 font-bold">
-                              {m.info.monthKey}
-                            </span>
-                            <div className="font-extrabold text-slate-100 text-sm truncate">
-                              {m.info.label}
-                            </div>
+                      <div key={m.info.monthKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-mono text-[11px] text-purple-400 font-bold">{m.info.monthKey}</span>
+                            <div className="font-extrabold text-slate-100 text-sm">{m.info.label}</div>
                           </div>
-                          <div className="flex items-center space-x-2 shrink-0">
+                          <div className="flex items-center space-x-1.5">
                             <span className="px-2 py-0.5 rounded-lg bg-purple-500/15 text-purple-300 border border-purple-500/30 font-mono font-bold text-[11px]">
-                              {m.saved?.score ? `${m.saved.score}/10` : `${m.weeklyPointsAchieved}/${m.weeklyPointsPossible} pts`}
+                              {m.saved?.score ? `${m.saved.score}/10` : `${m.weeklyPointsAchieved}/${m.weeklyPointsPossible}pts`}
                             </span>
                             <button
                               type="button"
@@ -3961,41 +3654,289 @@ export const ReviewHub: React.FC = () => {
                                 setSelectedMonth(m.info.monthKey);
                                 setReviewSubTab('monthly');
                               }}
-                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-[11px] font-bold"
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
                               title="Open Monthly Review"
                             >
-                              <span>Open</span>
-                              <ExternalLink className="w-3 h-3" />
+                              <ExternalLink className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
 
-                        <div className="font-mono text-[11px] text-slate-400">
-                          {m.weeks.length}w · {m.days.length}d · {m.gwsHours}h GWS · {m.completedMonthGoals}/{m.totalMonthGoals} goals
+                        <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 font-mono text-[11px] text-slate-400 space-y-0.5">
+                          <div>Weeks: {m.weeks.length} ({m.weeklyPointsAchieved}/{m.weeklyPointsPossible} pts)</div>
+                          <div>Days: {m.days.length} (Avg {m.avgDailyScore}/10 • Habits {m.habitRatePct}%)</div>
+                          <div>GWS: {m.gws.length} sprints ({m.gwsHours}h • Avg {m.avgGwsTotal}/15)</div>
                         </div>
 
-                        {m.saved?.wins?.trim() || m.saved?.courseCorrections?.trim() ? (
-                          <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
-                            {m.saved?.wins?.trim() && (
-                              <p className="text-[11px] text-slate-300 line-clamp-3 leading-relaxed">
-                                <strong className="text-emerald-400">Wins:</strong> {m.saved.wins.trim()}
-                              </p>
-                            )}
-                            {m.saved?.courseCorrections?.trim() && (
-                              <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
-                                <strong className="text-amber-400">Correction:</strong>{' '}
-                                {m.saved.courseCorrections.trim()}
-                              </p>
-                            )}
+                        {m.saved?.wins?.trim() ? (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-emerald-400">Monthly Wins:</strong> {m.saved.wins.trim()}
                           </div>
                         ) : (
-                          <div className="text-[11px] text-slate-500 italic pt-1 border-t border-slate-800/80">
-                            Monthly review not written yet — click Open to synthesize.
+                          <div className="text-[11px] text-slate-500 italic">No monthly wins summary written yet.</div>
+                        )}
+                        {m.saved?.blockers?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-orange-400">Monthly Problems:</strong> {m.saved.blockers.trim()}
+                          </div>
+                        )}
+                        {m.saved?.courseCorrections?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-amber-400">Monthly Correction:</strong> {m.saved.courseCorrections.trim()}
                           </div>
                         )}
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* 2. Weekly Reviews in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'weekly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                    <Target className="w-4 h-4" />
+                    <span>2. Weekly Plans & Retrospectives in {qData.info.label} ({qData.weeks.length})</span>
+                  </span>
+
+                  {qData.weeks.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No weekly plans or retrospectives recorded during {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto pr-1">
+                      {qData.weeks.map(w => (
+                        <div key={w.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-mono font-bold text-amber-400">
+                                Week {w.weekNumber} ({w.startDate} → {w.endDate})
+                              </span>
+                              <div className="font-bold text-slate-100">{w.focusTheme || 'No theme set'}</div>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono font-bold">
+                                {w.achievedScore}/{w.totalPossibleScore} pts
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectWeekGlobal(w.id);
+                                  setReviewSubTab('weekly');
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          {w.winsNotes?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Wins:</strong> {w.winsNotes.trim()}
+                            </div>
+                          )}
+                          {w.problemsEncountered?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {w.problemsEncountered.trim()}
+                            </div>
+                          )}
+                          {(w.courseCorrectionNotes || w.reviewNotes)?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-amber-400">Correction:</strong>{' '}
+                              {(w.courseCorrectionNotes || w.reviewNotes)!.trim()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. Daily Reviews in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'daily') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 flex items-center space-x-1.5">
+                    <CalendarIcon className="w-4 h-4" />
+                    <span>3. Daily Reviews in {qData.info.label} ({qData.days.length})</span>
+                  </span>
+
+                  {qData.days.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily reviews logged in {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
+                      {qData.days.map(d => (
+                        <div key={d.date} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-400">{d.date}</span>
+                            <span className="font-mono text-[11px] text-amber-400">
+                              Tasks {d.mainTasksCompleted}/{d.mainTasksTotal} • Score {d.executionScore}/10
+                            </span>
+                          </div>
+                          {d.problemsEncountered?.trim() && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {d.problemsEncountered.trim()}
+                            </p>
+                          )}
+                          {d.reviewNotes?.trim() && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Reflexion:</strong> {d.reviewNotes.trim()}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. GWS Sprints in this Quarter */}
+              {(quarterlyScaleFilter === 'all' || quarterlyScaleFilter === 'gws') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                    <Timer className="w-4 h-4" />
+                    <span>4. GWS Deep Work Sprints in {qData.info.label} ({qData.gws.length})</span>
+                  </span>
+
+                  {qData.gws.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS sprints logged in {qData.info.label}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {qData.gws.map(s => (
+                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                            <span className="font-mono text-[11px] text-amber-400 shrink-0">
+                              {s.date} • {s.actualMinutes}m • {s.ratings.total}/15
+                            </span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Done:</strong> {s.reflexions.accomplished}
+                            </p>
+                          )}
+                          {s.reflexions.heldBack && (
+                            <p className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Held Back:</strong> {s.reflexions.heldBack}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Quarterly Retrospective & Strategic Realignment Editor */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    Quarterly Strategic Review & Realignment
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Synthesize {qData.info.label}
+                  </h2>
+                </div>
+
+                {(qData.rolledUpWins.length > 0 || qData.rolledUpCorrections.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      upsertQuarterlyReview(selectedQuarter, {
+                        wins: mergeUniqueLines(quarterWins, qData.rolledUpWins),
+                        courseCorrections: mergeUniqueLines(quarterCorrections, qData.rolledUpCorrections)
+                      });
+                    }}
+                    className="px-4 py-2 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition-all"
+                  >
+                    + Pull Monthly Wins & Corrections
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      1. Quarterly Wins, Major Deliverables & ROI
+                    </label>
+                    {qData.rolledUpWins.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertQuarterlyReview(selectedQuarter, {
+                            wins: mergeUniqueLines(quarterWins, qData.rolledUpWins)
+                          })
+                        }
+                        className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
+                      >
+                        + Pull Monthly, Weekly & GWS Wins ({qData.rolledUpWins.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={quarterWins}
+                    onChange={e => upsertQuarterlyReview(selectedQuarter, { wins: e.target.value })}
+                    rows={4}
+                    placeholder="What major strategic milestones, systems, and capabilities did you ship this quarter?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <ProblemLoggerPanel
+                  mode="review"
+                  title="2. Structural Problems & Recurring Bottlenecks"
+                  subtitle={`All problems logged across GWS, Daily, Weekly, Monthly, and Quarterly reviews during ${qData.info.label} (${qData.info.startDate} → ${qData.info.endDate}).`}
+                  sourceType="quarterly"
+                  date={qData.info.endDate}
+                  sourceRef={selectedQuarter}
+                  dateRange={{ startDate: qData.info.startDate, endDate: qData.info.endDate }}
+                  targetWeekId={selectedWeekId}
+                />
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      3. Next Quarter Strategic Thesis & Course Corrections
+                    </label>
+                    {qData.rolledUpCorrections.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertQuarterlyReview(selectedQuarter, {
+                            courseCorrections: mergeUniqueLines(quarterCorrections, qData.rolledUpCorrections)
+                          })
+                        }
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
+                      >
+                        + Pull Monthly, Weekly & Daily Corrections ({qData.rolledUpCorrections.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={quarterCorrections}
+                    onChange={e => upsertQuarterlyReview(selectedQuarter, { courseCorrections: e.target.value })}
+                    rows={4}
+                    placeholder="What is your core thesis, system upgrade, and strategic direction for next quarter?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
+                  <span>Autosaved to Review Vault & Cloud Sync</span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('vault')}
+                    className="text-amber-400 hover:text-amber-300 font-bold"
+                  >
+                    Open Review Vault →
+                  </button>
                 </div>
               </div>
             </div>
@@ -4004,23 +3945,14 @@ export const ReviewHub: React.FC = () => {
       })()}
 
       {/* ========================================================================= */}
-      {/* SUB-TAB 6: YEARLY REVIEW (SYNTHESIS-FIRST, 1-LEVEL-DOWN + ROADMAPS)       */}
+      {/* SUB-TAB 6: YEARLY REVIEW WITH 3-YEAR PLAN FRAMEWORK                       */}
       {/* ========================================================================= */}
       {reviewSubTab === 'yearly' && (() => {
         const yData = compileYearData(selectedYear);
         const yearScore = yData.saved?.score || 0;
-        const yearHeadline = yData.saved?.headline || '';
         const yearWins = yData.saved?.wins || '';
         const yearProblems = yData.saved?.blockers || '';
         const yearCorrections = yData.saved?.courseCorrections || '';
-        const reviewedQuartersCount = yData.quartersData.filter(
-          q =>
-            !!q.saved?.wins?.trim() ||
-            !!q.saved?.courseCorrections?.trim() ||
-            !!q.saved?.stopDoing?.trim() ||
-            !!q.saved?.doubleDown?.trim() ||
-            (q.saved?.score ?? 0) > 0
-        ).length;
 
         const handleToggleYearlyGoalInReview = (goalId: string) => {
           const updatedTasks = yData.yearGoals.map(g =>
@@ -4030,36 +3962,27 @@ export const ReviewHub: React.FC = () => {
         };
 
         const handleCopyYearlyPlain = () => {
-          let text = `${yData.info.label} — Yearly Executive Review\n\n`;
-          if (yearHeadline.trim()) {
-            text += `Year Chapter / Headline: "${yearHeadline.trim()}"\n`;
-          }
+          let text = `${yData.info.label} — Yearly Strategic Review\n\n`;
           text += `Yearly Focus (${yData.info.yearKey}): ${yData.yearPlan.focusTheme || 'Not set'}\n`;
           text += `Yearly Score: ${yearScore > 0 ? `${yearScore}/10` : 'Unscored'}\n`;
           text += `Yearly Plan Goals: ${yData.completedYearGoals}/${yData.totalYearGoals} completed\n`;
-          text += `Quarters Reviewed: ${reviewedQuartersCount}/4\n`;
-          text += `Weekly Execution: Avg ${yData.avgWeeklyScore}/10 (${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts · ${yData.weeks.length} weeks)\n`;
-          text += `Daily Discipline: Avg ${yData.avgDailyScore}/10 (${yData.days.length}d · Habits ${yData.habitRatePct}%)\n`;
-          text += `GWS Deep Work: ${yData.gwsHours}h (${yData.gws.length} sprints · Avg ${yData.avgGwsTotal}/15)\n`;
-
-          const roadmapsSummary = formatRoadmapsForReviewText(yData.info.startDate, yData.info.endDate);
-          if (roadmapsSummary) {
-            text += `\nRoadmap Gates Progress:\n${roadmapsSummary}\n`;
-          }
+          text += `Weekly Points: ${yData.weeklyPointsAchieved}/${yData.weeklyPointsPossible} pts across ${yData.weeks.length} weeks (Avg ${yData.avgWeeklyScore}/10)\n`;
+          text += `Daily Discipline: ${yData.days.length} days logged • Avg ${yData.avgDailyScore}/10 • Habits ${yData.habitRatePct}%\n`;
+          text += `GWS Deep Work: ${yData.gwsHours}h across ${yData.gws.length} sprints (Avg ${yData.avgGwsTotal}/15)\n`;
 
           if (yearWins.trim()) {
-            text += `\n1. Biggest Wins, Shipped Systems & Capacity Shift:\n${yearWins.trim()}\n`;
+            text += `\n1. Yearly Wins & Shipped Goals:\n${yearWins.trim()}\n`;
           }
           const yearStructuredProblems = formatProblemsForReviewText(
             problems.filter(p => problemOccurredInRange(p, yData.info.startDate, yData.info.endDate))
           );
           if (yearStructuredProblems) {
-            text += `\n2. Core Patterns & Annual Bottlenecks:\n${yearStructuredProblems}\n`;
+            text += `\n2. Major Problems & Systemic Bottlenecks:\n${yearStructuredProblems}\n`;
           } else if (yearProblems.trim()) {
-            text += `\n2. Core Patterns & Annual Bottlenecks:\n${yearProblems.trim()}\n`;
+            text += `\n2. Major Problems & Systemic Bottlenecks:\n${yearProblems.trim()}\n`;
           }
           if (yearCorrections.trim()) {
-            text += `\n3. Next Year Singular Focus & Operating Rules:\n${yearCorrections.trim()}\n`;
+            text += `\n3. Next Year Thesis & Course Corrections:\n${yearCorrections.trim()}\n`;
           }
 
           navigator.clipboard.writeText(text.trim());
@@ -4071,7 +3994,7 @@ export const ReviewHub: React.FC = () => {
         const prevYearCorrection = getSavedYearlyReview(prevYearKey)?.courseCorrections?.trim();
 
         return (
-          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-6">
+          <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2 space-y-8">
             {/* Year Navigation & Switcher Bar */}
             <div className="flex flex-col lg:flex-row items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
               <div className="flex items-center space-x-3">
@@ -4085,12 +4008,10 @@ export const ReviewHub: React.FC = () => {
                 </button>
                 <div>
                   <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 block">
-                    Yearly Executive Review ({yData.info.startDate} → {yData.info.endDate})
+                    Yearly Macro Review ({yData.info.startDate} → {yData.info.endDate})
                   </span>
                   <div className="text-xl font-extrabold text-slate-100">
-                    {yearHeadline.trim()
-                      ? `${yData.info.label} — ${yearHeadline.trim()}`
-                      : `${yData.info.label} — Full-Year Executive Review`}
+                    {yData.info.label} — Full-Year Executive Review
                   </div>
                 </div>
                 <button
@@ -4138,316 +4059,527 @@ export const ReviewHub: React.FC = () => {
                 <Sparkles className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-extrabold uppercase tracking-wider text-[10px] text-rose-400 mr-2">
-                    Target Thesis from Last Year ({prevYearKey}):
+                    Target Thesis from Last Year ({prevYearKey} Course Correction):
                   </span>
                   <span className="text-slate-200">"{prevYearCorrection}"</span>
                 </div>
               </div>
             )}
 
-            {/* Compact 1-Line Year Telemetry Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">Yearly Goals</span>
-                <span className="font-mono font-bold text-slate-100">
-                  {yData.completedYearGoals}/{yData.totalYearGoals}
+            {/* Top 5 Macro Rollup KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400">
+                  Yearly Plan Goals ({yData.info.yearKey})
                 </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.completedYearGoals} <span className="text-xs text-slate-500">/ {yData.totalYearGoals} done</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  {yData.totalYearGoals > 0
+                    ? `${Math.round((yData.completedYearGoals / yData.totalYearGoals) * 100)}% completed`
+                    : 'Set goals in Planning → Yearly'}
+                </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400">Quarters Reviewed</span>
-                <span className="font-mono font-bold text-slate-100">{reviewedQuartersCount}/4</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">Weekly Avg</span>
-                <span className="font-mono font-bold text-slate-100">{yData.avgWeeklyScore}/10</span>
-                <span className="font-mono text-[11px] text-slate-400">({yData.weeks.length}w)</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-400">Daily Discipline</span>
-                <span className="font-mono font-bold text-slate-100">{yData.avgDailyScore}/10</span>
-                <span className="font-mono text-[11px] text-slate-400">
-                  ({yData.days.length}d · {yData.habitRatePct}% habits)
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Year Weekly Points ({yData.weeks.length} wks)
                 </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.weeklyPointsAchieved} <span className="text-xs text-slate-500">/ {yData.weeklyPointsPossible} pts</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg {yData.avgWeeklyScore}/10 • {yData.weeklyTasksDone}/{yData.weeklyTasksTotal} goals
+                </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">Deep Work</span>
-                <span className="font-mono font-bold text-slate-100">{yData.gwsHours}h</span>
-                <span className="font-mono text-[11px] text-slate-400">({yData.gws.length} sprints)</span>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
+                  Year Daily Execution ({yData.days.length}d)
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.avgDailyScore} <span className="text-xs text-slate-500">/ 10 avg</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Habits: {yData.habitRatePct}% locked • Tasks: {yData.dailyTasksDone}/{yData.dailyTasksTotal}
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  Year GWS Deep Work ({yData.gws.length})
+                </span>
+                <div className="text-2xl font-extrabold font-mono text-slate-100">
+                  {yData.gwsHours} <span className="text-xs text-slate-500">hours</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Avg Sprint Score: {yData.avgGwsTotal} / 15
+                </p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400">
+                    Yearly Score (1–10)
+                  </span>
+                  <span className="text-xs font-mono font-bold text-rose-300">
+                    {yearScore > 0 ? `${yearScore}/10` : 'Unscored'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => upsertYearlyReview(selectedYear, { score: sc })}
+                      className={`py-1 rounded-lg text-[11px] font-bold font-mono transition-all ${
+                        yearScore === sc
+                          ? 'bg-rose-500 text-slate-950 font-extrabold shadow'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      {sc}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Synthesis-First 2-Column Executive Workspace */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* LEFT (7 cols): Annual Executive Synthesis FIRST */}
-              <div className="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-                  <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                      Yearly Executive Synthesis
-                    </span>
-                    <h2 className="text-xl font-extrabold text-slate-100 mt-2">
-                      Synthesize {yData.info.label}
-                    </h2>
-                  </div>
+            {/* Yearly Plan Focus, Strategy & Interactive Goals Checklist */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    Yearly Plan Alignment ({yData.info.yearKey})
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Yearly Focus, Strategy Notes & Goals Audit
+                  </h2>
+                </div>
+                <span className="text-xs font-mono text-rose-400 font-bold">
+                  {yData.completedYearGoals} / {yData.totalYearGoals} goals done
+                </span>
+              </div>
 
-                  {/* Integrated Year Score (1-10) */}
-                  <div className="space-y-1.5 shrink-0">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
-                        Year Score
-                      </span>
-                      <span className="text-xs font-mono font-bold text-rose-300">
-                        {yearScore > 0 ? `${yearScore}/10` : 'Unscored'}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-10 gap-1">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(sc => (
-                        <button
-                          key={sc}
-                          type="button"
-                          onClick={() => upsertYearlyReview(selectedYear, { score: sc })}
-                          className={`w-7 py-1 rounded-lg text-[11px] font-bold font-mono transition-all ${
-                            yearScore === sc
-                              ? 'bg-rose-500 text-slate-950 font-extrabold shadow'
-                              : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800'
-                          }`}
-                        >
-                          {sc}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block">
+                    Yearly Focus & Thesis
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {yData.yearPlan.focusTheme || 'Define your Yearly Focus in Planning Hub → Yearly Plan.'}
+                  </p>
                 </div>
 
-                <div className="space-y-5">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-rose-400 block">
-                      Year-in-Review Headline / Chapter Title
-                    </label>
-                    <input
-                      type="text"
-                      value={yearHeadline}
-                      onChange={e => upsertYearlyReview(selectedYear, { headline: e.target.value })}
-                      placeholder="Give this year a chapter title (e.g. 'Year of Building Systems & Trading Discipline')..."
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500/50 rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-slate-100 placeholder-slate-600 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400 block">
-                      1. Biggest Wins, Shipped Systems &amp; Capacity Shift
-                    </label>
-                    <textarea
-                      value={yearWins}
-                      onChange={e => upsertYearlyReview(selectedYear, { wins: e.target.value })}
-                      rows={5}
-                      placeholder="What is true today that wasn't true a year ago? Major shipped systems, milestones, and capability shifts..."
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                    />
-                  </div>
-
-                  <ProblemLoggerPanel
-                    mode="review"
-                    title="2. Core Patterns & Annual Bottlenecks"
-                    subtitle={`Full-year problem patterns for ${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate}) — see what persisted across quarters.`}
-                    sourceType="yearly"
-                    date={yData.info.endDate}
-                    sourceRef={selectedYear}
-                    dateRange={{ startDate: yData.info.startDate, endDate: yData.info.endDate }}
-                    targetWeekId={selectedWeekId}
-                  />
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400 block">
-                      3. Next Year Singular Focus &amp; Operating Rules
-                    </label>
-                    <textarea
-                      value={yearCorrections}
-                      onChange={e => upsertYearlyReview(selectedYear, { courseCorrections: e.target.value })}
-                      rows={5}
-                      placeholder="What is next year's singular focus, top Roadmap Gate target, and non-negotiable operating rules?"
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
-                    <span>Autosaved to Review Vault &amp; Cloud Sync</span>
-                    <button
-                      type="button"
-                      onClick={() => setReviewSubTab('vault')}
-                      className="text-amber-400 hover:text-amber-300 font-bold"
-                    >
-                      Open Review Vault →
-                    </button>
-                  </div>
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
+                    Yearly Strategy & Operating Rules
+                  </span>
+                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                    {yData.yearPlan.notes || 'Define your Yearly Strategy in Planning Hub → Yearly Plan.'}
+                  </p>
                 </div>
               </div>
 
-              {/* RIGHT (5 cols): 1 Level Down Only — Yearly Plan + 4 Quarters + Roadmap Gates */}
-              <div className="lg:col-span-5 space-y-6">
-                {/* Card A: Yearly Plan Alignment */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-                  <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3.5">
-                    <div>
-                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 block">
-                        Yearly Plan ({yData.info.yearKey})
-                      </span>
-                      <div className="flex items-center space-x-2 mt-1">
-                        <h3 className="text-base font-extrabold text-slate-100">
-                          Annual Focus &amp; Goals
-                        </h3>
-                        <span className="px-2 py-0.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30 font-mono text-[11px] font-bold">
-                          {yData.completedYearGoals}/{yData.totalYearGoals} done
-                        </span>
-                      </div>
-                    </div>
-
+              {yData.yearGoals.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                  No Yearly goals logged for {yData.info.yearKey} yet. Add them in Planning Hub → Yearly Plan.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {yData.yearGoals.map(goal => (
                     <button
+                      key={goal.id}
                       type="button"
-                      onClick={() => {
-                        setActiveTab('planning');
-                        setPlanningSubTab('yearly');
-                      }}
-                      className="shrink-0 inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
+                      onClick={() => handleToggleYearlyGoalInReview(goal.id)}
+                      className={`w-full flex items-start space-x-2.5 p-3 rounded-2xl border text-left text-xs transition-colors ${
+                        goal.completed
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                          : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-rose-500/40'
+                      }`}
                     >
-                      <span>Edit Plan</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
-                    <div>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 block mb-0.5">
-                        Focus Theme
+                      {goal.completed ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      )}
+                      <span className={goal.completed ? 'line-through text-slate-400' : ''}>
+                        {goal.text}
                       </span>
-                      <p className="text-slate-200 leading-relaxed whitespace-pre-wrap">
-                        {yData.yearPlan.focusTheme || 'Define your Yearly Focus in Planning Hub → Yearly Plan.'}
-                      </p>
-                    </div>
-                    {yData.yearPlan.notes?.trim() && (
-                      <div className="pt-2 border-t border-slate-800/80">
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block mb-0.5">
-                          Operating Rules / Strategy
-                        </span>
-                        <p className="text-[11px] text-slate-300 leading-relaxed line-clamp-3 whitespace-pre-wrap">
-                          {yData.yearPlan.notes.trim()}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-                  {yData.yearGoals.length === 0 ? (
-                    <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
-                      No Yearly goals logged for {yData.info.yearKey} yet.
+            {/* Smaller Time-Scale Reviews Container (Quarterly + Monthly + Weekly + Daily + GWS) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400">
+                    All Contained Smaller-Scale Reviews ({yData.info.label})
+                  </span>
+                  <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                    Quarterly, Monthly, Weekly, Daily Reviews & GWS Sprints in {yData.info.yearKey}
+                  </h2>
+                </div>
+
+                <div className="flex items-center space-x-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 overflow-x-auto">
+                  {(
+                    [
+                      { id: 'all', label: 'All Scales' },
+                      { id: 'quarterly', label: 'Quarterly (4)' },
+                      { id: 'monthly', label: `Monthly (${yData.monthsData.length})` },
+                      { id: 'weekly', label: `Weekly (${yData.weeks.length})` },
+                      { id: 'daily', label: `Daily (${yData.days.length})` },
+                      { id: 'gws', label: `GWS (${yData.gws.length})` }
+                    ] as const
+                  ).map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setYearlyScaleFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                        yearlyScaleFilter === tab.id
+                          ? 'bg-rose-500 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 1. Quarterly Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'quarterly') && (
+                <div className="space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400 flex items-center space-x-1.5">
+                    <Award className="w-4 h-4" />
+                    <span>1. Quarterly Reviews in {yData.info.yearKey} (Q1 – Q4)</span>
+                  </span>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {yData.quartersData.map(q => (
+                      <div key={q.info.quarterKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-mono font-bold text-cyan-400">{q.info.quarterKey}</span>
+                            <div className="font-bold text-slate-100 text-[11px]">{q.info.label}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedQuarter(q.info.quarterKey);
+                              setReviewSubTab('quarterly');
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                            title="Inspect Quarter Review"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80 font-mono text-[11px] text-slate-400 space-y-0.5">
+                          <div>Score: {q.saved?.score ? `${q.saved.score}/10` : 'Unscored'}</div>
+                          <div>Weeks: {q.weeks.length} ({q.weeklyPointsAchieved}/{q.weeklyPointsPossible} pts)</div>
+                          <div>Days: {q.days.length} • GWS: {q.gwsHours}h</div>
+                        </div>
+
+                        {q.saved?.wins?.trim() ? (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-emerald-400">Wins:</strong> {q.saved.wins.trim()}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-600 italic">Quarterly wins pending.</div>
+                        )}
+                        {q.saved?.blockers?.trim() && (
+                          <div className="text-[11px] text-slate-300">
+                            <strong className="text-orange-400">Problems:</strong> {q.saved.blockers.trim()}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Monthly Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'monthly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center space-x-1.5">
+                    <Layers className="w-4 h-4" />
+                    <span>2. Active Monthly Reviews in {yData.info.yearKey} ({yData.monthsData.length})</span>
+                  </span>
+
+                  {yData.monthsData.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No active monthly reviews in {yData.info.yearKey} yet.
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {yData.yearGoals.map(goal => (
-                        <button
-                          key={goal.id}
-                          type="button"
-                          onClick={() => handleToggleYearlyGoalInReview(goal.id)}
-                          className={`w-full flex items-start space-x-2.5 p-2.5 rounded-xl border text-left text-xs transition-colors ${
-                            goal.completed
-                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
-                              : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-rose-500/40'
-                          }`}
-                        >
-                          {goal.completed ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                          ) : (
-                            <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-h-80 overflow-y-auto pr-1">
+                      {yData.monthsData.map(m => (
+                        <div key={m.info.monthKey} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-mono text-[11px] font-bold text-purple-400">{m.info.monthKey}</span>
+                              <div className="font-bold text-slate-100">{m.info.label}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedMonth(m.info.monthKey);
+                                setReviewSubTab('monthly');
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-400">
+                            Weeks: {m.weeks.length} ({m.weeklyPointsAchieved}/{m.weeklyPointsPossible}pts) • Days: {m.days.length} • GWS: {m.gwsHours}h
+                          </div>
+                          {m.saved?.wins?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-emerald-400">Wins:</strong> {m.saved.wins.trim()}
+                            </div>
                           )}
-                          <span className={goal.completed ? 'line-through text-slate-400' : ''}>
-                            {goal.text}
-                          </span>
-                        </button>
+                          {m.saved?.blockers?.trim() && (
+                            <div className="text-[11px] text-slate-300">
+                              <strong className="text-orange-400">Problems:</strong> {m.saved.blockers.trim()}
+                            </div>
+                          )}
+                        </div>
                       ))}
                     </div>
                   )}
                 </div>
+              )}
 
-                {/* Card B: 1 Level Down · 4 Quarters (Q1-Q4) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3.5">
-                    <div>
-                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-cyan-400 flex items-center space-x-1.5">
-                        <Award className="w-3.5 h-3.5" />
-                        <span>1 Level Down · 4 Quarters</span>
-                      </span>
-                      <h3 className="text-base font-extrabold text-slate-100 mt-1">
-                        Quarterly Reviews in {yData.info.yearKey}
-                      </h3>
+              {/* 3. Weekly Retrospectives in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'weekly') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                    <Target className="w-4 h-4" />
+                    <span>3. Weekly Plans & Retrospectives in {yData.info.yearKey} ({yData.weeks.length})</span>
+                  </span>
+
+                  {yData.weeks.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No weekly plans or retrospectives logged in {yData.info.yearKey}.
                     </div>
-                    <span className="font-mono text-[11px] text-slate-400 font-bold">
-                      {reviewedQuartersCount}/4 written
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {yData.quartersData.map(q => {
-                      const hasWins = !!q.saved?.wins?.trim();
-                      const hasThesis = !!q.saved?.courseCorrections?.trim();
-                      return (
-                        <div
-                          key={q.info.quarterKey}
-                          className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs flex flex-col justify-between"
-                        >
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <div>
-                                <span className="font-mono font-bold text-cyan-400">
-                                  Q{q.info.qNum}
-                                </span>
-                                <span className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 font-mono text-[10px] font-bold text-slate-200">
-                                  {q.saved?.score ? `${q.saved.score}/10` : 'Unscored'}
-                                </span>
-                              </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {yData.weeks.map(w => (
+                        <div key={w.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-amber-400">
+                              Week {w.weekNumber} ({w.startDate} → {w.endDate})
+                            </span>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono text-slate-300 font-bold">
+                                {w.achievedScore}/{w.totalPossibleScore} pts
+                              </span>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setSelectedQuarter(q.info.quarterKey);
-                                  setReviewSubTab('quarterly');
+                                  selectWeekGlobal(w.id);
+                                  setReviewSubTab('weekly');
                                 }}
-                                className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-                                title="Open Quarterly Review"
+                                className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400"
                               >
-                                <span>Open</span>
                                 <ExternalLink className="w-3 h-3" />
                               </button>
                             </div>
-
-                            <div className="font-mono text-[10px] text-slate-400">
-                              {q.weeks.length}w · {q.days.length}d · {q.gwsHours}h GWS
-                            </div>
-
-                            {hasWins || hasThesis ? (
-                              <div className="space-y-1 pt-1 border-t border-slate-800/80">
-                                {hasWins && (
-                                  <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
-                                    <strong className="text-emerald-400">Wins:</strong> {q.saved!.wins.trim()}
-                                  </p>
-                                )}
-                                {hasThesis && (
-                                  <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
-                                    <strong className="text-amber-400">Thesis:</strong> {q.saved!.courseCorrections.trim()}
-                                  </p>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="text-[11px] text-slate-500 italic pt-1 border-t border-slate-800/80">
-                                Quarter review pending.
-                              </div>
-                            )}
                           </div>
+                          {w.focusTheme && <div className="font-semibold text-slate-200">{w.focusTheme}</div>}
+                          {w.winsNotes?.trim() && (
+                            <p className="text-[11px] text-slate-400">
+                              <strong className="text-emerald-400">Wins:</strong> {w.winsNotes.trim()}
+                            </p>
+                          )}
                         </div>
-                      );
-                    })}
-                  </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. Daily Reviews in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'daily') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 flex items-center space-x-1.5">
+                    <CalendarIcon className="w-4 h-4" />
+                    <span>4. Daily Reviews in {yData.info.yearKey} ({yData.days.length})</span>
+                  </span>
+
+                  {yData.days.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No daily reviews logged in {yData.info.yearKey}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
+                      {yData.days.map(d => (
+                        <div key={d.date} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-blue-400">{d.date}</span>
+                            <span className="font-mono text-[11px] text-amber-400">
+                              Tasks {d.mainTasksCompleted}/{d.mainTasksTotal} • Score {d.executionScore}/10
+                            </span>
+                          </div>
+                          {d.problemsEncountered?.trim() && (
+                            <p className="text-[11px] text-slate-400 truncate">Problems: {d.problemsEncountered.trim()}</p>
+                          )}
+                          {d.reviewNotes?.trim() && (
+                            <p className="text-[11px] text-slate-300 truncate">Reflexion: {d.reviewNotes.trim()}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 5. GWS Sprints in this Year */}
+              {(yearlyScaleFilter === 'all' || yearlyScaleFilter === 'gws') && (
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                    <Timer className="w-4 h-4" />
+                    <span>5. GWS Deep Work Sprints in {yData.info.yearKey} ({yData.gws.length})</span>
+                  </span>
+
+                  {yData.gws.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
+                      No GWS sprints logged in {yData.info.yearKey}.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
+                      {yData.gws.map(s => (
+                        <div key={s.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-100 truncate">{s.taskName}</span>
+                            <span className="font-mono text-[11px] text-amber-400 shrink-0">
+                              {s.date} • {s.actualMinutes}m • {s.ratings.total}/15
+                            </span>
+                          </div>
+                          {s.reflexions.accomplished && (
+                            <p className="text-[11px] text-slate-300 truncate">Done: {s.reflexions.accomplished}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Yearly Retrospective & Course Correction Editor */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    Yearly Retrospective & Next-Year Thesis
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-100 mt-2">
+                    Synthesize {yData.info.label}
+                  </h2>
                 </div>
 
-                {/* Card C: Roadmap Gates Progress */}
-                {renderRoadmapGatesCard(yData.info.startDate, yData.info.endDate, 'year')}
+                {(yData.rolledUpWins.length > 0 || yData.rolledUpCorrections.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      upsertYearlyReview(selectedYear, {
+                        wins: mergeUniqueLines(yearWins, yData.rolledUpWins),
+                        courseCorrections: mergeUniqueLines(yearCorrections, yData.rolledUpCorrections)
+                      });
+                    }}
+                    className="px-4 py-2 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-bold transition-all"
+                  >
+                    + Pull Quarterly Wins & Corrections
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                      1. Yearly Wins, Completed Goals & Major Breakthroughs
+                    </label>
+                    {yData.rolledUpWins.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertYearlyReview(selectedYear, {
+                            wins: mergeUniqueLines(yearWins, yData.rolledUpWins)
+                          })
+                        }
+                        className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300"
+                      >
+                        + Pull Yearly, Quarterly & Monthly Wins ({yData.rolledUpWins.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={yearWins}
+                    onChange={e => upsertYearlyReview(selectedYear, { wins: e.target.value })}
+                    rows={4}
+                    placeholder="What major annual goals, capabilities, and systems did you accomplish this year?"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <ProblemLoggerPanel
+                  mode="review"
+                  title="2. Major Problems, Systemic Bottlenecks & Execution Gaps"
+                  subtitle={`Full-year problem ledger for ${yData.info.label} (${yData.info.startDate} → ${yData.info.endDate}) — see what persisted across quarters and what fixes stuck.`}
+                  sourceType="yearly"
+                  date={yData.info.endDate}
+                  sourceRef={selectedYear}
+                  dateRange={{ startDate: yData.info.startDate, endDate: yData.info.endDate }}
+                  targetWeekId={selectedWeekId}
+                />
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      3. Next Year Strategic Thesis & Course Corrections
+                    </label>
+                    {yData.rolledUpCorrections.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          upsertYearlyReview(selectedYear, {
+                            courseCorrections: mergeUniqueLines(yearCorrections, yData.rolledUpCorrections)
+                          })
+                        }
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
+                      >
+                        + Pull Quarterly, Monthly & Weekly Corrections ({yData.rolledUpCorrections.length})
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={yearCorrections}
+                    onChange={e => upsertYearlyReview(selectedYear, { courseCorrections: e.target.value })}
+                    rows={4}
+                    placeholder="How does the Yearly Plan evolve for next year? Define your core thesis, operating rules, and major shifts."
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
+                  <span>Autosaved to Review Vault & Cloud Sync</span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('vault')}
+                    className="text-amber-400 hover:text-amber-300 font-bold"
+                  >
+                    Open Review Vault →
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -4566,7 +4698,7 @@ export const ReviewHub: React.FC = () => {
                   </select>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Opens the Yearly Executive Review featuring Yearly Plan alignment, Q1–Q4 Quarterly summaries, and Roadmap Gates progress for {getYearInfo(selectedYear).label}.
+                  Opens the Yearly Review containing your Yearly Plan goals plus all Quarterly, Monthly, Weekly, Daily, and GWS data for {getYearInfo(selectedYear).label}.
                 </p>
                 <button
                   type="button"
@@ -4576,7 +4708,7 @@ export const ReviewHub: React.FC = () => {
                   }}
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-rose-500/20"
                 >
-                  Open {getYearInfo(selectedYear).label} Yearly Review →
+                  Open {getYearInfo(selectedYear).label} Yearly Review & Rollup →
                 </button>
               </div>
             )}
@@ -4599,7 +4731,7 @@ export const ReviewHub: React.FC = () => {
                   </select>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Opens the Quarterly Strategic Review with its 3 Monthly summaries, Roadmap Gates audit, and Stop / Double Down synthesis for {getQuarterInfo(selectedQuarter).label}.
+                  Opens the full Quarterly Multi-Scale Review containing all Monthly, Weekly, Daily, and GWS data for {getQuarterInfo(selectedQuarter).label}.
                 </p>
                 <button
                   type="button"
@@ -4609,7 +4741,7 @@ export const ReviewHub: React.FC = () => {
                   }}
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/20"
                 >
-                  Open {getQuarterInfo(selectedQuarter).label} Quarterly Review →
+                  Open {getQuarterInfo(selectedQuarter).label} Review & Rollup →
                 </button>
               </div>
             )}

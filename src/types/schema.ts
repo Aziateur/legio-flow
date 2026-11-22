@@ -176,9 +176,6 @@ export interface ReviewEntry {
   wins: string;
   blockers: string;
   courseCorrections: string;
-  headline?: string; // Yearly review chapter/headline title
-  stopDoing?: string; // Quarterly review strategic cuts
-  doubleDown?: string; // Quarterly review double-down bets
   ratings: {
     clarity: number;
     consistency: number;
@@ -226,7 +223,6 @@ export interface StrategyStage {
   dayInALife: string;        // Vivid story of how a typical day looks and feels
   gateCriterion: string;     // Exact gate proof required to unlock the next stage
   gatePassed: boolean;
-  gatePassedAt?: string;     // YYYY-MM-DD when the gate was marked passed
 }
 
 export interface StrategyPlan {
