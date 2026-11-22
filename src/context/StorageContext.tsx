@@ -7,7 +7,12 @@ import {
   ActiveGWSTimer,
   WeeklyPlan,
   MonthlyPlan,
+  QuarterlyPlan,
   YearlyPlan,
+  ScoreboardMetric,
+  LifePillar,
+  CustomReviewPrompt,
+  MacroReviewSettings,
   TaskItem,
   ReviewEntry,
   SystemLevel,
@@ -35,7 +40,10 @@ import {
   INITIAL_GWS_SESSIONS,
   INITIAL_WEEKLY_PLANS,
   INITIAL_MONTHLY_PLANS,
+  INITIAL_QUARTERLY_PLANS,
   INITIAL_YEARLY_PLANS,
+  INITIAL_LIFE_PILLARS,
+  INITIAL_CUSTOM_REVIEW_PROMPTS,
   INITIAL_CHECKLIST_CATEGORIES,
   INITIAL_CHECKLIST_ITEMS,
   INITIAL_STRATEGY_PLANS
@@ -51,7 +59,7 @@ import {
 } from '../lib/supabase';
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
-export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'roadmaps' | 'matrix';
+export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'roadmaps' | 'matrix';
 export type ReviewSubTab = 'vault' | 'problems' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export const getTodayDateString = (): string => {
@@ -475,7 +483,11 @@ interface StorageContextType {
   gwsSessions: GWSSession[];
   weeklyPlans: Record<string, WeeklyPlan>;
   monthlyPlans: Record<string, MonthlyPlan>;
+  quarterlyPlans: Record<string, QuarterlyPlan>;
   yearlyPlans: Record<string, YearlyPlan>;
+  lifePillars: LifePillar[];
+  customReviewPrompts: CustomReviewPrompt[];
+  macroReviewSettings: MacroReviewSettings;
   strategyPlans: StrategyPlan[];
   problems: ProblemEntry[];
   reviews: ReviewEntry[];
@@ -560,9 +572,18 @@ interface StorageContextType {
   getMonthlyPlan: (monthKey: string) => MonthlyPlan;
   saveMonthlyPlan: (plan: MonthlyPlan) => void;
 
+  // Quarterly operations
+  getQuarterlyPlan: (quarterKey: string) => QuarterlyPlan;
+  saveQuarterlyPlan: (plan: QuarterlyPlan) => void;
+
   // Yearly operations
   getYearlyPlan: (yearKey: string) => YearlyPlan;
   saveYearlyPlan: (plan: YearlyPlan) => void;
+
+  // Custom Life Pillars & Macro Review Customization
+  saveLifePillars: (pillars: LifePillar[]) => void;
+  saveCustomReviewPrompts: (prompts: CustomReviewPrompt[]) => void;
+  saveMacroReviewSettings: (settings: MacroReviewSettings) => void;
 
   // Written Strategy Roadmap Plans
   saveStrategyPlan: (plan: StrategyPlan) => void;
@@ -625,7 +646,11 @@ const STORAGE_KEYS = {
   GWS: 'legio_gws_v1',
   WEEKLY: 'legio_weekly_v1',
   MONTHLY: 'legio_monthly_plans_v1',
+  QUARTERLY: 'legio_quarterly_plans_v1',
   YEARLY: 'legio_yearly_plans_v1',
+  LIFE_PILLARS: 'legio_life_pillars_v1',
+  CUSTOM_PROMPTS: 'legio_custom_review_prompts_v1',
+  MACRO_SETTINGS: 'legio_macro_review_settings_v1',
   STRATEGY_PLANS: 'legio_strategy_plans_v1',
   PROBLEMS: 'legio_problems_v1',
   REVIEWS: 'legio_reviews_v1',
@@ -717,6 +742,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return cleaned;
   });
 
+  const [quarterlyPlans, setQuarterlyPlans] = useState<Record<string, QuarterlyPlan>>(() => {
+    const raw = readStorageSafe<Record<string, QuarterlyPlan>>(STORAGE_KEYS.QUARTERLY, INITIAL_QUARTERLY_PLANS);
+    const cleaned: Record<string, QuarterlyPlan> = {};
+    Object.entries(raw || {}).forEach(([k, p]) => {
+      cleaned[k] = {
+        id: p?.id || k,
+        quarterKey: p?.quarterKey || k,
+        focusTheme: p?.focusTheme || '',
+        notes: p?.notes || '',
+        tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+        targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
+        scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
+        updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+      };
+    });
+    return cleaned;
+  });
+
   const [yearlyPlans, setYearlyPlans] = useState<Record<string, YearlyPlan>>(() => {
     const raw = readStorageSafe<Record<string, YearlyPlan>>(STORAGE_KEYS.YEARLY, INITIAL_YEARLY_PLANS);
     const cleaned: Record<string, YearlyPlan> = {};
@@ -727,10 +770,38 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         focusTheme: p?.focusTheme || '',
         notes: p?.notes || '',
         tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+        targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
+        scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
         updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
       };
     });
     return cleaned;
+  });
+
+  const [lifePillars, setLifePillars] = useState<LifePillar[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LIFE_PILLARS);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return INITIAL_LIFE_PILLARS;
+  });
+
+  const [customReviewPrompts, setCustomReviewPrompts] = useState<CustomReviewPrompt[]>(() => {
+    const raw = readStorageSafe<CustomReviewPrompt[]>(
+      STORAGE_KEYS.CUSTOM_PROMPTS,
+      INITIAL_CUSTOM_REVIEW_PROMPTS
+    );
+    return Array.isArray(raw) ? raw : INITIAL_CUSTOM_REVIEW_PROMPTS;
+  });
+
+  const [macroReviewSettings, setMacroReviewSettings] = useState<MacroReviewSettings>(() => {
+    const raw = readStorageSafe<MacroReviewSettings>(STORAGE_KEYS.MACRO_SETTINGS, {});
+    return raw && typeof raw === 'object' ? raw : {};
   });
 
   const [strategyPlans, setStrategyPlans] = useState<StrategyPlan[]>(() => {
@@ -883,7 +954,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const gwsSessionsRef = useRef(gwsSessions);
   const weeklyPlansRef = useRef(weeklyPlans);
   const monthlyPlansRef = useRef(monthlyPlans);
+  const quarterlyPlansRef = useRef(quarterlyPlans);
   const yearlyPlansRef = useRef(yearlyPlans);
+  const lifePillarsRef = useRef(lifePillars);
+  const customReviewPromptsRef = useRef(customReviewPrompts);
+  const macroReviewSettingsRef = useRef(macroReviewSettings);
   const strategyPlansRef = useRef(strategyPlans);
   const problemsRef = useRef(problems);
   const reviewsRef = useRef(reviews);
@@ -1031,10 +1106,34 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setMonthlyPlans(next);
   };
 
+  const commitQuarterlyPlans = (next: Record<string, QuarterlyPlan>) => {
+    quarterlyPlansRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.QUARTERLY, next);
+    setQuarterlyPlans(next);
+  };
+
   const commitYearlyPlans = (next: Record<string, YearlyPlan>) => {
     yearlyPlansRef.current = next;
     writeStorageSafe(STORAGE_KEYS.YEARLY, next);
     setYearlyPlans(next);
+  };
+
+  const commitLifePillars = (next: LifePillar[]) => {
+    lifePillarsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.LIFE_PILLARS, next);
+    setLifePillars(next);
+  };
+
+  const commitCustomReviewPrompts = (next: CustomReviewPrompt[]) => {
+    customReviewPromptsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.CUSTOM_PROMPTS, next);
+    setCustomReviewPrompts(next);
+  };
+
+  const commitMacroReviewSettings = (next: MacroReviewSettings) => {
+    macroReviewSettingsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.MACRO_SETTINGS, next);
+    setMacroReviewSettings(next);
   };
 
   const commitStrategyPlans = (next: StrategyPlan[]) => {
@@ -1096,7 +1195,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       gwsSessions: gwsSessionsRef.current,
       weeklyPlans: weeklyPlansRef.current,
       monthlyPlans: monthlyPlansRef.current,
+      quarterlyPlans: quarterlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
+      lifePillars: lifePillarsRef.current,
+      customReviewPrompts: customReviewPromptsRef.current,
+      macroReviewSettings: macroReviewSettingsRef.current,
       strategyPlans: strategyPlansRef.current,
       problems: problemsRef.current,
       reviews: reviewsRef.current,
@@ -1467,11 +1570,35 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             monthlyPlansRef.current = parsed;
             setMonthlyPlans(parsed);
           }
+        } else if (e.key === STORAGE_KEYS.QUARTERLY) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            quarterlyPlansRef.current = parsed;
+            setQuarterlyPlans(parsed);
+          }
         } else if (e.key === STORAGE_KEYS.YEARLY) {
           const parsed = JSON.parse(e.newValue);
           if (parsed && typeof parsed === 'object') {
             yearlyPlansRef.current = parsed;
             setYearlyPlans(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.LIFE_PILLARS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            lifePillarsRef.current = parsed;
+            setLifePillars(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.CUSTOM_PROMPTS) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            customReviewPromptsRef.current = parsed;
+            setCustomReviewPrompts(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.MACRO_SETTINGS) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            macroReviewSettingsRef.current = parsed;
+            setMacroReviewSettings(parsed);
           }
         } else if (e.key === STORAGE_KEYS.STRATEGY_PLANS) {
           const parsed = JSON.parse(e.newValue);
@@ -1859,11 +1986,48 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const syncLinkedQuarterlyTasks = (toggled: Array<{ quarterlyTaskId: string; completed: boolean }>) => {
+    if (toggled.length === 0) return;
+    const curQuarters = quarterlyPlansRef.current;
+    let changed = false;
+    const nextQuarters: Record<string, QuarterlyPlan> = { ...curQuarters };
+    const cascadedYearly: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    Object.entries(curQuarters).forEach(([qKey, qPlan]) => {
+      let qChanged = false;
+      const nextTasks = (qPlan.tasks || []).map(qt => {
+        const hit = toggled.find(t => t.quarterlyTaskId === qt.id);
+        if (hit && qt.completed !== hit.completed) {
+          qChanged = true;
+          changed = true;
+          if (qt.yearlyTaskId) {
+            cascadedYearly.push({ yearlyTaskId: qt.yearlyTaskId, completed: hit.completed });
+          }
+          return { ...qt, completed: hit.completed };
+        }
+        return qt;
+      });
+      if (qChanged) {
+        nextQuarters[qKey] = {
+          ...qPlan,
+          tasks: nextTasks,
+          updatedAt: new Date().toISOString()
+        };
+      }
+    });
+    if (changed) {
+      commitQuarterlyPlans(nextQuarters);
+    }
+    if (cascadedYearly.length > 0) {
+      syncLinkedYearlyTasks(cascadedYearly);
+    }
+  };
+
   const propagateWeeklyTaskCompletionUpward = (prevPlan: WeeklyPlan | undefined, savedPlan: WeeklyPlan) => {
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
 
     const monthlyToggles: Array<{ monthlyTaskId: string; completed: boolean }> = [];
+    const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
     const strategyGoalToggles: Array<{
       strategyPlanId: string;
@@ -1878,6 +2042,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!changed) return;
       if (t.monthlyTaskId) {
         monthlyToggles.push({ monthlyTaskId: t.monthlyTaskId, completed: t.completed });
+      }
+      if (t.quarterlyTaskId) {
+        quarterlyToggles.push({ quarterlyTaskId: t.quarterlyTaskId, completed: t.completed });
       }
       if (t.yearlyTaskId) {
         yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
@@ -1903,6 +2070,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (hit && mt.completed !== hit.completed) {
             mChanged = true;
             mAnyChanged = true;
+            if (mt.quarterlyTaskId) {
+              quarterlyToggles.push({ quarterlyTaskId: mt.quarterlyTaskId, completed: hit.completed });
+            }
             if (mt.yearlyTaskId) {
               yearlyToggles.push({ yearlyTaskId: mt.yearlyTaskId, completed: hit.completed });
             }
@@ -1921,6 +2091,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (mAnyChanged) {
         commitMonthlyPlans(nextMonths);
       }
+    }
+
+    if (quarterlyToggles.length > 0) {
+      syncLinkedQuarterlyTasks(quarterlyToggles);
     }
 
     if (yearlyToggles.length > 0) {
@@ -2277,12 +2451,25 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
   });
 
+  const normalizeQuarterlyPlanEntry = (quarterKey: string, p?: Partial<QuarterlyPlan>): QuarterlyPlan => ({
+    id: p?.id || quarterKey,
+    quarterKey: p?.quarterKey || quarterKey,
+    focusTheme: p?.focusTheme || '',
+    notes: p?.notes || '',
+    tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+    targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
+    scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
+    updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
+  });
+
   const normalizeYearlyPlanEntry = (yearKey: string, p?: Partial<YearlyPlan>): YearlyPlan => ({
     id: p?.id || yearKey,
     yearKey: p?.yearKey || yearKey,
     focusTheme: p?.focusTheme || '',
     notes: p?.notes || '',
     tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+    targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
+    scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
     updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
   });
 
@@ -2310,7 +2497,60 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync: propagate completed monthly goal to linked yearly goal
+    // Upward ID-linked sync: propagate completed monthly goal to linked quarterly & yearly goals
+    const prevMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+    const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
+    const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    saved.tasks.forEach(t => {
+      const wasDone = prevMap.get(t.id);
+      const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
+      if (changed && t.quarterlyTaskId) {
+        quarterlyToggles.push({ quarterlyTaskId: t.quarterlyTaskId, completed: t.completed });
+      }
+      if (changed && t.yearlyTaskId) {
+        yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
+      }
+    });
+    if (quarterlyToggles.length > 0) {
+      syncLinkedQuarterlyTasks(quarterlyToggles);
+    }
+    if (yearlyToggles.length > 0) {
+      syncLinkedYearlyTasks(yearlyToggles);
+    }
+
+    markLocalMutation();
+  };
+
+  const getQuarterlyPlan = (quarterKey: string): QuarterlyPlan => {
+    if (quarterlyPlans[quarterKey]) {
+      return normalizeQuarterlyPlanEntry(quarterKey, quarterlyPlans[quarterKey]);
+    }
+    return normalizeQuarterlyPlanEntry(quarterKey);
+  };
+
+  const saveQuarterlyPlan = (plan: QuarterlyPlan) => {
+    const key = plan.quarterKey || plan.id;
+    const prevPlan = quarterlyPlansRef.current[key];
+    if (prevPlan) {
+      const nextTaskIds = new Set((plan.tasks || []).map(t => t.id));
+      const nextScoreIds = new Set((plan.scoreboard || []).map(s => s.id));
+      const removed = [
+        ...(prevPlan.tasks || []).filter(t => t.id && !nextTaskIds.has(t.id)).map(t => t.id),
+        ...(prevPlan.scoreboard || []).filter(s => s.id && !nextScoreIds.has(s.id)).map(s => s.id)
+      ];
+      if (removed.length > 0) recordDeletedIds(removed);
+    }
+    const saved = {
+      ...normalizeQuarterlyPlanEntry(key, plan),
+      updatedAt: new Date().toISOString()
+    };
+    commitQuarterlyPlans({
+      ...quarterlyPlansRef.current,
+      [key]: saved
+    });
+
+    // Upward ID-linked sync: propagate completed quarterly outcome to linked yearly goal
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
@@ -2340,7 +2580,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const prevPlan = yearlyPlansRef.current[key];
     if (prevPlan) {
       const nextIds = new Set((plan.tasks || []).map(t => t.id));
-      const removed = (prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id);
+      const nextScoreIds = new Set((plan.scoreboard || []).map(s => s.id));
+      const removed = [
+        ...(prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id),
+        ...(prevPlan.scoreboard || []).filter(s => s.id && !nextScoreIds.has(s.id)).map(s => s.id)
+      ];
       if (removed.length > 0) recordDeletedIds(removed);
     }
     const saved = {
@@ -2351,6 +2595,35 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ...yearlyPlansRef.current,
       [key]: saved
     });
+    markLocalMutation();
+  };
+
+  const saveLifePillars = (pillars: LifePillar[]) => {
+    const prev = lifePillarsRef.current;
+    const nextIds = new Set(pillars.map(p => p.id));
+    const removed = prev.filter(p => p.id && !nextIds.has(p.id)).map(p => p.id);
+    if (removed.length > 0) recordDeletedIds(removed);
+    pillars.forEach(p => {
+      if (p.id) clearDeletedId(p.id);
+    });
+    commitLifePillars(pillars);
+    markLocalMutation();
+  };
+
+  const saveCustomReviewPrompts = (prompts: CustomReviewPrompt[]) => {
+    const prev = customReviewPromptsRef.current;
+    const nextIds = new Set(prompts.map(p => p.id));
+    const removed = prev.filter(p => p.id && !nextIds.has(p.id)).map(p => p.id);
+    if (removed.length > 0) recordDeletedIds(removed);
+    prompts.forEach(p => {
+      if (p.id) clearDeletedId(p.id);
+    });
+    commitCustomReviewPrompts(prompts);
+    markLocalMutation();
+  };
+
+  const saveMacroReviewSettings = (settings: MacroReviewSettings) => {
+    commitMacroReviewSettings(settings);
     markLocalMutation();
   };
 
@@ -2783,7 +3056,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       gwsSessions: gwsSessionsRef.current,
       weeklyPlans: weeklyPlansRef.current,
       monthlyPlans: monthlyPlansRef.current,
+      quarterlyPlans: quarterlyPlansRef.current,
       yearlyPlans: yearlyPlansRef.current,
+      lifePillars: lifePillarsRef.current,
+      customReviewPrompts: customReviewPromptsRef.current,
+      macroReviewSettings: macroReviewSettingsRef.current,
       strategyPlans: strategyPlansRef.current,
       problems: problemsRef.current,
       reviews: reviewsRef.current,
@@ -2813,7 +3090,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         Array.isArray(src.gwsSessions) ||
         (src.weeklyPlans && typeof src.weeklyPlans === 'object') ||
         (src.monthlyPlans && typeof src.monthlyPlans === 'object') ||
+        (src.quarterlyPlans && typeof src.quarterlyPlans === 'object') ||
         (src.yearlyPlans && typeof src.yearlyPlans === 'object') ||
+        Array.isArray(src.lifePillars) ||
+        Array.isArray(src.customReviewPrompts) ||
         Array.isArray(src.strategyPlans) ||
         Array.isArray(src.problems) ||
         Array.isArray(src.reviews) ||
@@ -2850,12 +3130,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         });
         commitMonthlyPlans(cleanedM);
       }
+      if (src.quarterlyPlans && typeof src.quarterlyPlans === 'object') {
+        const cleanedQ: Record<string, QuarterlyPlan> = {};
+        Object.entries(src.quarterlyPlans).forEach(([k, p]) => {
+          cleanedQ[k] = normalizeQuarterlyPlanEntry(k, p as QuarterlyPlan);
+        });
+        commitQuarterlyPlans(cleanedQ);
+      }
       if (src.yearlyPlans && typeof src.yearlyPlans === 'object') {
         const cleanedY: Record<string, YearlyPlan> = {};
         Object.entries(src.yearlyPlans).forEach(([k, p]) => {
           cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
         });
         commitYearlyPlans(cleanedY);
+      }
+      if (Array.isArray(src.lifePillars)) commitLifePillars(src.lifePillars);
+      if (Array.isArray(src.customReviewPrompts)) commitCustomReviewPrompts(src.customReviewPrompts);
+      if (src.macroReviewSettings && typeof src.macroReviewSettings === 'object') {
+        commitMacroReviewSettings(src.macroReviewSettings);
       }
       if (Array.isArray(src.strategyPlans)) commitStrategyPlans(src.strategyPlans);
       if (Array.isArray(src.problems)) commitProblems(src.problems);
@@ -2890,7 +3182,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitGwsSessions(INITIAL_GWS_SESSIONS);
     commitWeeklyPlans(ensureContinuousWeeks(INITIAL_WEEKLY_PLANS, nowStr, '2026-10-12'));
     commitMonthlyPlans(INITIAL_MONTHLY_PLANS);
+    commitQuarterlyPlans(INITIAL_QUARTERLY_PLANS);
     commitYearlyPlans(INITIAL_YEARLY_PLANS);
+    commitLifePillars(INITIAL_LIFE_PILLARS);
+    commitCustomReviewPrompts(INITIAL_CUSTOM_REVIEW_PROMPTS);
+    commitMacroReviewSettings({});
     commitStrategyPlans(INITIAL_STRATEGY_PLANS);
     commitProblems([]);
     commitReviews([]);
@@ -2931,7 +3227,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       } as Record<string, WeeklyPlan>,
       monthlyPlans: {} as Record<string, MonthlyPlan>,
+      quarterlyPlans: {} as Record<string, QuarterlyPlan>,
       yearlyPlans: {} as Record<string, YearlyPlan>,
+      lifePillars: INITIAL_LIFE_PILLARS,
+      customReviewPrompts: [] as CustomReviewPrompt[],
+      macroReviewSettings: {} as MacroReviewSettings,
       strategyPlans: [] as StrategyPlan[],
       problems: [] as ProblemEntry[],
       reviews: [] as ReviewEntry[],
@@ -2950,7 +3250,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitGwsSessions(fresh.gwsSessions);
     commitWeeklyPlans(fresh.weeklyPlans);
     commitMonthlyPlans(fresh.monthlyPlans);
+    commitQuarterlyPlans(fresh.quarterlyPlans);
     commitYearlyPlans(fresh.yearlyPlans);
+    commitLifePillars(fresh.lifePillars);
+    commitCustomReviewPrompts(fresh.customReviewPrompts);
+    commitMacroReviewSettings(fresh.macroReviewSettings);
     commitStrategyPlans(fresh.strategyPlans);
     commitProblems(fresh.problems);
     commitReviews(fresh.reviews);
@@ -3089,12 +3393,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
       commitMonthlyPlans(cleanedM);
     }
+    if (state.quarterlyPlans && typeof state.quarterlyPlans === 'object') {
+      const cleanedQ: Record<string, QuarterlyPlan> = {};
+      Object.entries(state.quarterlyPlans).forEach(([k, p]) => {
+        cleanedQ[k] = normalizeQuarterlyPlanEntry(k, p as QuarterlyPlan);
+      });
+      commitQuarterlyPlans(cleanedQ);
+    }
     if (state.yearlyPlans && typeof state.yearlyPlans === 'object') {
       const cleanedY: Record<string, YearlyPlan> = {};
       Object.entries(state.yearlyPlans).forEach(([k, p]) => {
         cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
       });
       commitYearlyPlans(cleanedY);
+    }
+    if (Array.isArray(state.lifePillars)) commitLifePillars(state.lifePillars);
+    if (Array.isArray(state.customReviewPrompts)) commitCustomReviewPrompts(state.customReviewPrompts);
+    if (state.macroReviewSettings && typeof state.macroReviewSettings === 'object') {
+      commitMacroReviewSettings(state.macroReviewSettings);
     }
     if (Array.isArray(state.strategyPlans)) commitStrategyPlans(state.strategyPlans);
     if (Array.isArray(state.problems)) commitProblems(state.problems);
@@ -3450,8 +3766,43 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     });
 
-    // 3. Merge monthlyPlans & yearlyPlans per periodKey (deep-merging tasks + notes)
-    const mergePeriodPlanMap = <T extends MonthlyPlan | YearlyPlan>(
+    // 3. Merge monthlyPlans, quarterlyPlans & yearlyPlans per periodKey (deep-merging tasks + scoreboard + notes)
+    const mergeScoreboardLists = (
+      primaryList: ScoreboardMetric[] | undefined,
+      secondaryList: ScoreboardMetric[] | undefined,
+      secondaryTime: number
+    ): ScoreboardMetric[] => {
+      const pList = Array.isArray(primaryList) ? primaryList : [];
+      const sList = Array.isArray(secondaryList) ? secondaryList : [];
+      const out = pList.map(item => ({ ...item }));
+      const byId = new Map<string, number>();
+      out.forEach((item, idx) => byId.set(item.id, idx));
+      sList.forEach(sItem => {
+        if (!sItem?.id) return;
+        const idx = byId.get(sItem.id);
+        if (idx !== undefined) {
+          const cur = out[idx];
+          out[idx] = {
+            ...cur,
+            name: cur.name?.trim() ? cur.name : sItem.name,
+            domain: cur.domain?.trim() ? cur.domain : sItem.domain,
+            startValue: cur.startValue?.trim() ? cur.startValue : sItem.startValue,
+            targetValue: cur.targetValue?.trim() ? cur.targetValue : sItem.targetValue,
+            actualValue: cur.actualValue?.trim() ? cur.actualValue : sItem.actualValue
+          };
+        } else {
+          const delMs = Date.parse(mergedDeletedIds[sItem.id] || '') || 0;
+          if (!(delMs > 0 && delMs >= secondaryTime)) {
+            byId.set(sItem.id, out.length);
+            out.push({ ...sItem });
+            needsCloudPush = true;
+          }
+        }
+      });
+      return out;
+    };
+
+    const mergePeriodPlanMap = <T extends MonthlyPlan | QuarterlyPlan | YearlyPlan>(
       localMap: Record<string, T>,
       cloudMapRaw: any,
       normalizeFn: (k: string, p?: Partial<T>) => T
@@ -3459,8 +3810,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const merged: Record<string, T> = {};
       const cloudMap = (cloudMapRaw && typeof cloudMapRaw === 'object' ? cloudMapRaw : {}) as Record<string, T>;
       const allKeys = new Set([...Object.keys(localMap), ...Object.keys(cloudMap)]);
-      const hasContent = (p?: T) =>
-        !!(p && (p.tasks.length > 0 || p.focusTheme.trim().length > 0 || p.notes.trim().length > 0));
+      const hasContent = (p?: T) => {
+        if (!p) return false;
+        const extraScore = 'scoreboard' in p && Array.isArray(p.scoreboard) && p.scoreboard.length > 0;
+        const extraGates = 'targetGateRefs' in p && Array.isArray(p.targetGateRefs) && p.targetGateRefs.length > 0;
+        return !!(p.tasks.length > 0 || p.focusTheme.trim().length > 0 || p.notes.trim().length > 0 || extraScore || extraGates);
+      };
 
       allKeys.forEach(k => {
         const lRaw = localMap[k];
@@ -3519,12 +3874,25 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             secondaryTime = hasPendingPush ? cTime : lTime;
           }
 
-          merged[k] = {
+          const mergedBase: any = {
             ...primary,
             focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
             notes: primary.notes?.trim() ? primary.notes : secondary.notes || '',
             tasks: mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime)
           };
+          if ('scoreboard' in primary || 'scoreboard' in secondary) {
+            mergedBase.scoreboard = mergeScoreboardLists(
+              (primary as QuarterlyPlan).scoreboard,
+              (secondary as QuarterlyPlan).scoreboard,
+              secondaryTime
+            );
+          }
+          if ('targetGateRefs' in primary || 'targetGateRefs' in secondary) {
+            const pGates = (primary as QuarterlyPlan).targetGateRefs || [];
+            const sGates = (secondary as QuarterlyPlan).targetGateRefs || [];
+            mergedBase.targetGateRefs = pGates.length > 0 ? pGates : sGates;
+          }
+          merged[k] = mergedBase as T;
         }
       });
 
@@ -3535,6 +3903,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       local.monthlyPlans,
       cloudState?.monthlyPlans,
       normalizeMonthlyPlanEntry
+    );
+    const mergedQuarterlyPlans = mergePeriodPlanMap(
+      local.quarterlyPlans,
+      cloudState?.quarterlyPlans,
+      normalizeQuarterlyPlanEntry
     );
     const mergedYearlyPlans = mergePeriodPlanMap(
       local.yearlyPlans,
@@ -3672,6 +4045,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     );
 
+    const mergedLifePillars = mergeCollectionById<LifePillar>(
+      local.lifePillars,
+      cloudState?.lifePillars,
+      () => (localIsNewer ? localMs : cloudMs)
+    );
+
+    const mergedCustomReviewPrompts = mergeCollectionById<CustomReviewPrompt>(
+      local.customReviewPrompts,
+      cloudState?.customReviewPrompts,
+      () => (localIsNewer ? localMs : cloudMs)
+    );
+
+    const mergedMacroReviewSettings: MacroReviewSettings =
+      localIsNewer || !cloudState?.macroReviewSettings
+        ? local.macroReviewSettings
+        : cloudState.macroReviewSettings;
+
     const onboardingStartDate =
       mergedWeeklyPlans['week_1']?.startDate ||
       cloudState?.onboardingStartDate ||
@@ -3684,7 +4074,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       gwsSessions: mergedGwsSessions,
       weeklyPlans: mergedWeeklyPlans,
       monthlyPlans: mergedMonthlyPlans,
+      quarterlyPlans: mergedQuarterlyPlans,
       yearlyPlans: mergedYearlyPlans,
+      lifePillars: mergedLifePillars,
+      customReviewPrompts: mergedCustomReviewPrompts,
+      macroReviewSettings: mergedMacroReviewSettings,
       strategyPlans: mergedStrategyPlans,
       problems: mergedProblems,
       reviews: mergedReviews,
@@ -4045,7 +4439,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             gwsSessions: raw.gwsSessions,
             weeklyPlans: raw.weeklyPlans,
             monthlyPlans: raw.monthlyPlans,
+            quarterlyPlans: raw.quarterlyPlans,
             yearlyPlans: raw.yearlyPlans,
+            lifePillars: raw.lifePillars,
+            customReviewPrompts: raw.customReviewPrompts,
+            macroReviewSettings: raw.macroReviewSettings,
             strategyPlans: raw.strategyPlans,
             problems: raw.problems,
             reviews: raw.reviews,
@@ -4105,7 +4503,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         gwsSessions,
         weeklyPlans,
         monthlyPlans,
+        quarterlyPlans,
         yearlyPlans,
+        lifePillars,
+        customReviewPrompts,
+        macroReviewSettings,
         strategyPlans,
         problems,
         reviews,
@@ -4155,8 +4557,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saveWeeklyPlan,
         getMonthlyPlan,
         saveMonthlyPlan,
+        getQuarterlyPlan,
+        saveQuarterlyPlan,
         getYearlyPlan,
         saveYearlyPlan,
+        saveLifePillars,
+        saveCustomReviewPrompts,
+        saveMacroReviewSettings,
         saveStrategyPlan,
         deleteStrategyPlan,
         addProblem,

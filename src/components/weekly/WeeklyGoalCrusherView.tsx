@@ -45,6 +45,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     setPlanningSubTab,
     strategyPlans,
     monthlyPlans,
+    quarterlyPlans,
     yearlyPlans
   } = useStorage();
 
@@ -55,23 +56,29 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const [newSubGoalInputs, setNewSubGoalInputs] = useState<Record<string, string>>({});
   const [showRewardLadder, setShowRewardLadder] = useState(false);
   const [showPlanPuller, setShowPlanPuller] = useState(false);
-  const [pullSourceTab, setPullSourceTab] = useState<'roadmaps' | 'monthly' | 'yearly'>('roadmaps');
+  const [pullSourceTab, setPullSourceTab] = useState<'roadmaps' | 'monthly' | 'quarterly' | 'yearly'>('roadmaps');
   const [pulledNotice, setPulledNotice] = useState<string | null>(null);
 
-  // Pull-from-Plans helpers (Roadmaps active unlocked stage only + Monthly + Yearly)
+  // Pull-from-Plans helpers (Roadmaps active unlocked stage only + Monthly + Quarterly + Yearly)
   const planMonthKey = (plan.startDate || selectedDate).slice(0, 7);
   const planYearKey = (plan.startDate || selectedDate).slice(0, 4);
+  const planQuarterNum = Math.ceil((parseInt(planMonthKey.slice(5, 7), 10) || 1) / 3);
+  const planQuarterKey = `${planYearKey}-Q${planQuarterNum}`;
   const linkedMonthlyPlan = monthlyPlans[planMonthKey];
+  const linkedQuarterlyPlan = quarterlyPlans[planQuarterKey];
   const linkedYearlyPlan = yearlyPlans[planYearKey];
 
   const isInThisWeek = (
     text: string,
-    links?: { strategyGoalId?: string; monthlyTaskId?: string; yearlyTaskId?: string }
+    links?: { strategyGoalId?: string; monthlyTaskId?: string; quarterlyTaskId?: string; yearlyTaskId?: string }
   ): boolean => {
     if (links?.strategyGoalId && plan.tasks.some(t => t.strategyGoalId === links.strategyGoalId)) {
       return true;
     }
     if (links?.monthlyTaskId && plan.tasks.some(t => t.monthlyTaskId === links.monthlyTaskId)) {
+      return true;
+    }
+    if (links?.quarterlyTaskId && plan.tasks.some(t => t.quarterlyTaskId === links.quarterlyTaskId)) {
       return true;
     }
     if (links?.yearlyTaskId && plan.tasks.some(t => t.yearlyTaskId === links.yearlyTaskId)) {
@@ -89,6 +96,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     strategyStageId?: string;
     strategyGoalId?: string;
     monthlyTaskId?: string;
+    quarterlyTaskId?: string;
     yearlyTaskId?: string;
   }) => {
     const trimmed = params.text.trim();
@@ -97,6 +105,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       isInThisWeek(trimmed, {
         strategyGoalId: params.strategyGoalId,
         monthlyTaskId: params.monthlyTaskId,
+        quarterlyTaskId: params.quarterlyTaskId,
         yearlyTaskId: params.yearlyTaskId
       })
     ) {
@@ -115,6 +124,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       ...(params.strategyStageId ? { strategyStageId: params.strategyStageId } : {}),
       ...(params.strategyGoalId ? { strategyGoalId: params.strategyGoalId } : {}),
       ...(params.monthlyTaskId ? { monthlyTaskId: params.monthlyTaskId } : {}),
+      ...(params.quarterlyTaskId ? { quarterlyTaskId: params.quarterlyTaskId } : {}),
       ...(params.yearlyTaskId ? { yearlyTaskId: params.yearlyTaskId } : {})
     };
     const nextTasks = [...plan.tasks, newTask];
@@ -818,10 +828,22 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setPullSourceTab('quarterly')}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      pullSourceTab === 'quarterly'
+                        ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Quarterly ({linkedQuarterlyPlan?.tasks.length || 0})</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setPullSourceTab('yearly')}
                     className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                       pullSourceTab === 'yearly'
-                        ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                        ? 'bg-rose-500 text-slate-950 border-rose-400'
                         : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
                     }`}
                   >
@@ -1061,6 +1083,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                                 completed: mt.completed,
                                 sourceLabel: `Monthly ${planMonthKey}`,
                                 monthlyTaskId: mt.id,
+                                ...(mt.quarterlyTaskId ? { quarterlyTaskId: mt.quarterlyTaskId } : {}),
                                 ...(mt.yearlyTaskId ? { yearlyTaskId: mt.yearlyTaskId } : {})
                               })
                             }
@@ -1068,6 +1091,56 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                               already
                                 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
                                 : 'bg-slate-950 hover:bg-purple-500/20 text-purple-300 border-purple-500/30 active:scale-95'
+                            }`}
+                          >
+                            {!already && <ArrowDownToLine className="w-3 h-3" />}
+                            <span>{already ? `✓ In W${plan.weekNumber}` : `+ Pull`}</span>
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2B: QUARTERLY PLAN */}
+              {pullSourceTab === 'quarterly' && (
+                <div className="space-y-2">
+                  {!linkedQuarterlyPlan || linkedQuarterlyPlan.tasks.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+                      No Quarterly outcomes found for {planQuarterKey}. Add them in Planning Hub → Quarterly Plan.
+                    </div>
+                  ) : (
+                    linkedQuarterlyPlan.tasks.map(qt => {
+                      const already = isInThisWeek(qt.text, { quarterlyTaskId: qt.id });
+                      return (
+                        <div
+                          key={qt.id}
+                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-800"
+                        >
+                          <span
+                            className={`text-xs min-w-0 break-words ${
+                              qt.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                            }`}
+                          >
+                            {qt.text}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={already}
+                            onClick={() =>
+                              handlePullItemIntoWeek({
+                                text: qt.text,
+                                completed: qt.completed,
+                                sourceLabel: `Quarterly ${planQuarterKey}`,
+                                quarterlyTaskId: qt.id,
+                                ...(qt.yearlyTaskId ? { yearlyTaskId: qt.yearlyTaskId } : {})
+                              })
+                            }
+                            className={`shrink-0 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                              already
+                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 cursor-default'
+                                : 'bg-slate-950 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/30 active:scale-95'
                             }`}
                           >
                             {!already && <ArrowDownToLine className="w-3 h-3" />}

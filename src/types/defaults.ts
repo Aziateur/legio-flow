@@ -5,7 +5,10 @@ import {
   WeeklyPlan,
   ReviewEntry,
   MonthlyPlan,
+  QuarterlyPlan,
   YearlyPlan,
+  LifePillar,
+  CustomReviewPrompt,
   ChecklistCategory,
   ChecklistItem,
   StrategyPlan
@@ -404,7 +407,19 @@ export const INITIAL_WEEKLY_PLANS: Record<string, WeeklyPlan> = {
 
 export const INITIAL_MONTHLY_PLANS: Record<string, MonthlyPlan> = {};
 
+export const INITIAL_QUARTERLY_PLANS: Record<string, QuarterlyPlan> = {};
+
 export const INITIAL_YEARLY_PLANS: Record<string, YearlyPlan> = {};
+
+export const INITIAL_LIFE_PILLARS: LifePillar[] = [
+  { id: 'pillar_work', name: 'Work & Wealth', description: 'Business, career, trading & financial leverage' },
+  { id: 'pillar_health', name: 'Health & Energy', description: 'Sleep, training, nutrition & daily physical drive' },
+  { id: 'pillar_skills', name: 'Skills & Craft', description: 'Deep capability building & reps compounded' },
+  { id: 'pillar_mind', name: 'Mind & Discipline', description: 'Emotional control, clarity & focus under pressure' },
+  { id: 'pillar_life', name: 'Relationships & Life', description: 'Family, inner circle, peace & alignment' }
+];
+
+export const INITIAL_CUSTOM_REVIEW_PROMPTS: CustomReviewPrompt[] = [];
 
 export const INITIAL_CHECKLIST_CATEGORIES: ChecklistCategory[] = [
   { id: 'cat_routine', name: 'Daily Routine & Habits' },

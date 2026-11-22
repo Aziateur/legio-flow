@@ -9,11 +9,15 @@ import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
 import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
 import { StrategyRoadmapsView } from './StrategyRoadmapsView';
+import { QuarterlyPlanSection } from './QuarterlyPlanSection';
+import { ScoreboardEditor } from '../common/ScoreboardEditor';
+import { getQuarterKeyForDate, getQuarterInfo } from '../../lib/macroAnalytics';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
   Calendar,
   Target,
   Compass,
+  Award,
   CheckCircle2,
   Circle,
   Plus,
@@ -66,6 +70,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     monthlyPlans,
     getMonthlyPlan,
     saveMonthlyPlan,
+    quarterlyPlans,
+    getQuarterlyPlan,
+    saveQuarterlyPlan,
     yearlyPlans,
     getYearlyPlan,
     saveYearlyPlan,
@@ -83,7 +90,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
   // Create Plan Modal state
   const [showCreatePlanModal, setShowCreatePlanModal] = useState(false);
-  const [createPlanType, setCreatePlanType] = useState<'weekly' | 'daily' | 'monthly' | 'yearly'>('weekly');
+  const [createPlanType, setCreatePlanType] = useState<'weekly' | 'daily' | 'monthly' | 'quarterly' | 'yearly'>('weekly');
 
   const existingWeekNums = Object.values(weeklyPlans).map(p => p.weekNumber);
   const maxWeekNum = existingWeekNums.length > 0 ? Math.max(...existingWeekNums) : 1;
@@ -100,11 +107,14 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
   const [modalMonthKey, setModalMonthKey] = useState<string>(selectedDate.slice(0, 7));
   const [modalMonthFocus, setModalMonthFocus] = useState<string>('');
+  const [modalQuarterKey, setModalQuarterKey] = useState<string>(() => getQuarterKeyForDate(selectedDate));
+  const [modalQuarterFocus, setModalQuarterFocus] = useState<string>('');
   const [modalYearKey, setModalYearKey] = useState<string>(selectedDate.slice(0, 4));
   const [modalYearFocus, setModalYearFocus] = useState<string>('');
 
-  // Active Monthly & Yearly selection + quick-add inputs
+  // Active Monthly, Quarterly & Yearly selection + quick-add inputs
   const [selectedMonthKey, setSelectedMonthKey] = useState<string>(() => selectedDate.slice(0, 7));
+  const [selectedQuarterKey, setSelectedQuarterKey] = useState<string>(() => getQuarterKeyForDate(selectedDate));
   const [selectedYearKey, setSelectedYearKey] = useState<string>(() => selectedDate.slice(0, 4));
   const [newMonthlyGoalInput, setNewMonthlyGoalInput] = useState('');
   const [newYearlyGoalInput, setNewYearlyGoalInput] = useState('');
@@ -115,15 +125,19 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     Object.values(weeklyPlans)[0];
 
   const activeMonthPlan = getMonthlyPlan(selectedMonthKey);
+  const activeQuarterPlan = getQuarterlyPlan(selectedQuarterKey);
   const activeYearPlan = getYearlyPlan(selectedYearKey);
 
-  // Pull helpers (ID-linked first so completion cascades upward across Daily -> Weekly -> Monthly -> Yearly)
+  // Pull helpers (ID-linked first so completion cascades upward across Daily -> Weekly -> Monthly -> Quarterly -> Yearly)
   const isGoalInWeeklyPlan = (
     text: string,
-    links?: { monthlyTaskId?: string; yearlyTaskId?: string }
+    links?: { monthlyTaskId?: string; quarterlyTaskId?: string; yearlyTaskId?: string }
   ): boolean => {
     if (!activeWeeklyPlan) return false;
     if (links?.monthlyTaskId && activeWeeklyPlan.tasks.some(t => t.monthlyTaskId === links.monthlyTaskId)) {
+      return true;
+    }
+    if (links?.quarterlyTaskId && activeWeeklyPlan.tasks.some(t => t.quarterlyTaskId === links.quarterlyTaskId)) {
       return true;
     }
     if (links?.yearlyTaskId && activeWeeklyPlan.tasks.some(t => t.yearlyTaskId === links.yearlyTaskId)) {
@@ -133,38 +147,58 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     return !!norm && activeWeeklyPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
   };
 
-  const isGoalInMonthlyPlan = (text: string, yearlyTaskId?: string): boolean => {
-    if (yearlyTaskId && activeMonthPlan.tasks.some(t => t.yearlyTaskId === yearlyTaskId)) {
+  const isGoalInMonthlyPlan = (
+    text: string,
+    links?: { quarterlyTaskId?: string; yearlyTaskId?: string }
+  ): boolean => {
+    if (links?.quarterlyTaskId && activeMonthPlan.tasks.some(t => t.quarterlyTaskId === links.quarterlyTaskId)) {
+      return true;
+    }
+    if (links?.yearlyTaskId && activeMonthPlan.tasks.some(t => t.yearlyTaskId === links.yearlyTaskId)) {
       return true;
     }
     const norm = text.toLowerCase().trim();
     return !!norm && activeMonthPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
   };
 
+  const isGoalInQuarterlyPlan = (text: string, yearlyTaskId?: string): boolean => {
+    if (yearlyTaskId && activeQuarterPlan.tasks.some(t => t.yearlyTaskId === yearlyTaskId)) {
+      return true;
+    }
+    const norm = text.toLowerCase().trim();
+    return !!norm && activeQuarterPlan.tasks.some(t => t.text.toLowerCase().trim() === norm);
+  };
+
   const handlePullGoalToActiveWeek = (
     text: string,
-    links?: { monthlyTaskId?: string; yearlyTaskId?: string }
+    links?: { monthlyTaskId?: string; quarterlyTaskId?: string; yearlyTaskId?: string }
   ) => {
     if (!activeWeeklyPlan) return;
     const trimmed = text.trim();
     if (!trimmed) return;
     if (isGoalInWeeklyPlan(trimmed, links)) {
-      // Backfill ID linkage if matched by text only
       const norm = trimmed.toLowerCase();
       let backfilled = false;
       const upgradedTasks = activeWeeklyPlan.tasks.map(t => {
         const matches =
           (links?.monthlyTaskId && t.monthlyTaskId === links.monthlyTaskId) ||
+          (links?.quarterlyTaskId && t.quarterlyTaskId === links.quarterlyTaskId) ||
           (links?.yearlyTaskId && t.yearlyTaskId === links.yearlyTaskId) ||
           t.text.toLowerCase().trim() === norm;
         if (!matches) return t;
         const nextMonthlyId = t.monthlyTaskId || links?.monthlyTaskId;
+        const nextQuarterlyId = t.quarterlyTaskId || links?.quarterlyTaskId;
         const nextYearlyId = t.yearlyTaskId || links?.yearlyTaskId;
-        if (nextMonthlyId !== t.monthlyTaskId || nextYearlyId !== t.yearlyTaskId) {
+        if (
+          nextMonthlyId !== t.monthlyTaskId ||
+          nextQuarterlyId !== t.quarterlyTaskId ||
+          nextYearlyId !== t.yearlyTaskId
+        ) {
           backfilled = true;
           return {
             ...t,
             ...(nextMonthlyId ? { monthlyTaskId: nextMonthlyId } : {}),
+            ...(nextQuarterlyId ? { quarterlyTaskId: nextQuarterlyId } : {}),
             ...(nextYearlyId ? { yearlyTaskId: nextYearlyId } : {})
           };
         }
@@ -189,6 +223,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         score: 2,
         completed: false,
         ...(links?.monthlyTaskId ? { monthlyTaskId: links.monthlyTaskId } : {}),
+        ...(links?.quarterlyTaskId ? { quarterlyTaskId: links.quarterlyTaskId } : {}),
         ...(links?.yearlyTaskId ? { yearlyTaskId: links.yearlyTaskId } : {})
       }
     ];
@@ -199,29 +234,38 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     });
   };
 
-  const handlePullGoalToActiveMonth = (text: string, yearlyTaskId?: string) => {
+  const handlePullGoalToActiveMonth = (
+    text: string,
+    links?: { quarterlyTaskId?: string; yearlyTaskId?: string }
+  ) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (isGoalInMonthlyPlan(trimmed, yearlyTaskId)) {
-      if (yearlyTaskId) {
-        const norm = trimmed.toLowerCase();
-        let backfilled = false;
-        const upgradedTasks = activeMonthPlan.tasks.map(t => {
-          if (
-            !t.yearlyTaskId &&
-            t.text.toLowerCase().trim() === norm
-          ) {
-            backfilled = true;
-            return { ...t, yearlyTaskId };
-          }
-          return t;
-        });
-        if (backfilled) {
-          saveMonthlyPlan({
-            ...activeMonthPlan,
-            tasks: upgradedTasks
-          });
+    if (isGoalInMonthlyPlan(trimmed, links)) {
+      const norm = trimmed.toLowerCase();
+      let backfilled = false;
+      const upgradedTasks = activeMonthPlan.tasks.map(t => {
+        const matches =
+          (links?.quarterlyTaskId && t.quarterlyTaskId === links.quarterlyTaskId) ||
+          (links?.yearlyTaskId && t.yearlyTaskId === links.yearlyTaskId) ||
+          t.text.toLowerCase().trim() === norm;
+        if (!matches) return t;
+        const nextQuarterlyId = t.quarterlyTaskId || links?.quarterlyTaskId;
+        const nextYearlyId = t.yearlyTaskId || links?.yearlyTaskId;
+        if (nextQuarterlyId !== t.quarterlyTaskId || nextYearlyId !== t.yearlyTaskId) {
+          backfilled = true;
+          return {
+            ...t,
+            ...(nextQuarterlyId ? { quarterlyTaskId: nextQuarterlyId } : {}),
+            ...(nextYearlyId ? { yearlyTaskId: nextYearlyId } : {})
+          };
         }
+        return t;
+      });
+      if (backfilled) {
+        saveMonthlyPlan({
+          ...activeMonthPlan,
+          tasks: upgradedTasks
+        });
       }
       setPlanningSubTab('monthly');
       return;
@@ -232,11 +276,34 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: trimmed,
         completed: false,
-        ...(yearlyTaskId ? { yearlyTaskId } : {})
+        ...(links?.quarterlyTaskId ? { quarterlyTaskId: links.quarterlyTaskId } : {}),
+        ...(links?.yearlyTaskId ? { yearlyTaskId: links.yearlyTaskId } : {})
       }
     ];
     saveMonthlyPlan({
       ...activeMonthPlan,
+      tasks: nextTasks
+    });
+  };
+
+  const handlePullGoalToActiveQuarter = (text: string, yearlyTaskId?: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (isGoalInQuarterlyPlan(trimmed, yearlyTaskId)) {
+      setPlanningSubTab('quarterly');
+      return;
+    }
+    const nextTasks: TaskItem[] = [
+      ...activeQuarterPlan.tasks,
+      {
+        id: `qgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: trimmed,
+        completed: false,
+        ...(yearlyTaskId ? { yearlyTaskId } : {})
+      }
+    ];
+    saveQuarterlyPlan({
+      ...activeQuarterPlan,
       tasks: nextTasks
     });
   };
@@ -349,12 +416,15 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     setNewWeekEnd(nextRange.endDate);
     setNewPlanDate(selectedDate);
     setModalMonthKey(selectedMonthKey);
+    setModalQuarterKey(selectedQuarterKey);
     setModalYearKey(selectedYearKey);
     setCreatePlanType(
       planningSubTab === 'weekly'
         ? 'weekly'
         : planningSubTab === 'monthly'
         ? 'monthly'
+        : planningSubTab === 'quarterly'
+        ? 'quarterly'
         : planningSubTab === 'yearly'
         ? 'yearly'
         : 'daily'
@@ -414,6 +484,20 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     setModalMonthFocus('');
   };
 
+  const handleCreateQuarterlyPlanSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = getQuarterInfo(modalQuarterKey || getQuarterKeyForDate(todayDate)).quarterKey;
+    const existing = getQuarterlyPlan(key);
+    saveQuarterlyPlan({
+      ...existing,
+      ...(modalQuarterFocus.trim() ? { focusTheme: modalQuarterFocus.trim() } : {})
+    });
+    setSelectedQuarterKey(key);
+    setPlanningSubTab('quarterly');
+    setShowCreatePlanModal(false);
+    setModalQuarterFocus('');
+  };
+
   const handleCreateYearlyPlanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const key = String(parseInt(modalYearKey, 10) || parseInt(todayDate.slice(0, 4), 10) || 2026);
@@ -450,6 +534,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 {planningSubTab === 'daily' && 'Daily Plan'}
                 {planningSubTab === 'weekly' && 'Weekly Goal Crusher'}
                 {planningSubTab === 'monthly' && `Monthly Plan (${formatMonthLabel(selectedMonthKey)})`}
+                {planningSubTab === 'quarterly' && `Quarterly Plan (${selectedQuarterKey})`}
                 {planningSubTab === 'yearly' && `Yearly Plan (${selectedYearKey})`}
                 {planningSubTab === 'roadmaps' && 'Written Roadmaps'}
                 {planningSubTab === 'matrix' && 'Weeks Matrix'}
@@ -502,6 +587,21 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 >
                   <Layers className="w-3.5 h-3.5" />
                   <span>Monthly</span>
+                </button>
+              )}
+
+              {systemLevel >= 4 && (
+                <button
+                  type="button"
+                  onClick={() => setPlanningSubTab('quarterly')}
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                    planningSubTab === 'quarterly'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  <span>Quarterly</span>
                 </button>
               )}
 
@@ -724,6 +824,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   {activeMonthPlan.tasks.map((task) => {
                     const inWeek = isGoalInWeeklyPlan(task.text, {
                       monthlyTaskId: task.id,
+                      quarterlyTaskId: task.quarterlyTaskId,
                       yearlyTaskId: task.yearlyTaskId
                     });
                     return (
@@ -765,6 +866,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                               onClick={() =>
                                 handlePullGoalToActiveWeek(task.text, {
                                   monthlyTaskId: task.id,
+                                  quarterlyTaskId: task.quarterlyTaskId,
                                   yearlyTaskId: task.yearlyTaskId
                                 })
                               }
@@ -843,6 +945,21 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
           </div>
 
         </div>
+      )}
+
+      {/* VIEW 3B: QUARTERLY PLANNING (90-DAY STRATEGIC CONTRACT) */}
+      {planningSubTab === 'quarterly' && (
+        <QuarterlyPlanSection
+          selectedQuarterKey={selectedQuarterKey}
+          setSelectedQuarterKey={setSelectedQuarterKey}
+          selectedMonthKey={selectedMonthKey}
+          activeWeeklyPlanId={activeWeeklyPlan?.id}
+          activeWeeklyPlanNumber={activeWeeklyPlan?.weekNumber}
+          isGoalInMonthlyPlan={isGoalInMonthlyPlan}
+          isGoalInWeeklyPlan={isGoalInWeeklyPlan}
+          onPullToMonth={handlePullGoalToActiveMonth}
+          onPullToWeek={handlePullGoalToActiveWeek}
+        />
       )}
 
       {/* VIEW 4: YEARLY PLANNING */}
@@ -940,7 +1057,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               ) : (
                 <div className="space-y-2">
                   {activeYearPlan.tasks.map((task) => {
-                    const inMonth = isGoalInMonthlyPlan(task.text, task.id);
+                    const inQuarter = isGoalInQuarterlyPlan(task.text, task.id);
+                    const inMonth = isGoalInMonthlyPlan(task.text, { yearlyTaskId: task.id });
                     const inWeek = isGoalInWeeklyPlan(task.text, { yearlyTaskId: task.id });
                     return (
                       <div
@@ -977,7 +1095,25 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
                           <button
                             type="button"
-                            onClick={() => handlePullGoalToActiveMonth(task.text, task.id)}
+                            onClick={() => handlePullGoalToActiveQuarter(task.text, task.id)}
+                            className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                              inQuarter
+                                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/35 hover:bg-cyan-500/30'
+                                : 'bg-slate-900 hover:bg-slate-800 text-cyan-300 border-slate-800'
+                            }`}
+                            title={
+                              inQuarter
+                                ? `Already in ${selectedQuarterKey} — click to open Quarterly Plan`
+                                : `Pull into ${selectedQuarterKey} Quarterly Plan`
+                            }
+                          >
+                            {!inQuarter && <ArrowDownToLine className="w-3 h-3" />}
+                            <span>{inQuarter ? `✓ In ${selectedQuarterKey}` : `+ ${selectedQuarterKey}`}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handlePullGoalToActiveMonth(task.text, { yearlyTaskId: task.id })}
                             className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
                               inMonth
                                 ? 'bg-purple-500/20 text-purple-300 border-purple-500/35 hover:bg-purple-500/30'
@@ -1054,6 +1190,18 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               </form>
             </div>
 
+            {/* Yearly Real-World Scoreboard */}
+            <div className="pt-4 border-t border-slate-800/80">
+              <ScoreboardEditor
+                metrics={activeYearPlan.scoreboard || []}
+                onChange={next => saveYearlyPlan({ ...activeYearPlan, scoreboard: next })}
+                showActual={false}
+                accent="rose"
+                title={`Annual Real-World Scoreboard (${selectedYearKey} Baseline → Target)`}
+                subtitle="Define your starting numbers on Jan 1 and your 12-month real-world targets so your Yearly Review audits real outcomes."
+              />
+            </div>
+
             {/* Yearly Strategy & Rules */}
             <div className="space-y-1.5 pt-3 border-t border-slate-800/80">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
@@ -1106,7 +1254,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
             </div>
 
             {/* Type selector */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
               <button
                 type="button"
                 onClick={() => setCreatePlanType('daily')}
@@ -1139,6 +1287,17 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 }`}
               >
                 Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatePlanType('quarterly')}
+                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  createPlanType === 'quarterly'
+                    ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Quarterly
               </button>
               <button
                 type="button"
@@ -1284,6 +1443,64 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-purple-500/20"
                 >
                   Open {formatMonthLabel(modalMonthKey)} Monthly Plan
+                </button>
+              </form>
+            )}
+
+            {/* Quarterly Plan Creation Form */}
+            {createPlanType === 'quarterly' && (
+              <form onSubmit={handleCreateQuarterlyPlanSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Year</label>
+                    <input
+                      type="number"
+                      min={2020}
+                      max={2100}
+                      value={modalQuarterKey.split('-Q')[0] || '2026'}
+                      onChange={(e) => {
+                        const y = e.target.value || '2026';
+                        const q = modalQuarterKey.split('-Q')[1] || '1';
+                        setModalQuarterKey(`${y}-Q${q}`);
+                      }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm font-mono text-slate-100 focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Quarter</label>
+                    <select
+                      value={modalQuarterKey.split('-Q')[1] || '1'}
+                      onChange={(e) => {
+                        const y = modalQuarterKey.split('-Q')[0] || '2026';
+                        setModalQuarterKey(`${y}-Q${e.target.value}`);
+                      }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm font-mono text-cyan-400 font-bold focus:outline-none"
+                    >
+                      <option value="1">Q1 (Jan – Mar)</option>
+                      <option value="2">Q2 (Apr – Jun)</option>
+                      <option value="3">Q3 (Jul – Sep)</option>
+                      <option value="4">Q4 (Oct – Dec)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Quarterly Focus &amp; Core Thesis (Optional)</label>
+                  <input
+                    type="text"
+                    value={modalQuarterFocus}
+                    onChange={(e) => setModalQuarterFocus(e.target.value)}
+                    placeholder="e.g. Pass Stage 1 Trading Gate & close first 5 Rewire clients"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/50 rounded-xl p-3 text-sm text-slate-100 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 font-bold text-sm tracking-wide shadow-lg shadow-cyan-500/20"
+                >
+                  Open {getQuarterInfo(modalQuarterKey).label} Plan
                 </button>
               </form>
             )}

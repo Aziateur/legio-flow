@@ -61,6 +61,7 @@ export interface TaskItem {
   notes?: string;
   subTasks?: SubTaskItem[];
   monthlyTaskId?: string;
+  quarterlyTaskId?: string;
   yearlyTaskId?: string;
   strategyPlanId?: string;
   strategyStageId?: string;
@@ -147,6 +148,62 @@ export interface WeeklyPlan {
   updatedAt: string;
 }
 
+export interface ScoreboardMetric {
+  id: string;
+  name: string;        // e.g. "Monthly Revenue", "Trading Rule Adherence"
+  domain?: string;     // Optional domain/roadmap label e.g. "Trading", "Business", "Health"
+  startValue: string;  // Day-1 baseline e.g. "$0", "65%"
+  targetValue: string; // Target e.g. "$3,000", "95%"
+  actualValue: string; // Actual end-of-period result
+}
+
+export interface TargetGateRef {
+  planId: string;
+  stageId: string;
+}
+
+export interface LifePillar {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface CustomReviewPrompt {
+  id: string;
+  scope: 'quarterly' | 'yearly';
+  title: string;
+  placeholder?: string;
+}
+
+export interface MacroReviewSettings {
+  hiddenStages?: {
+    quarterly?: number[];
+    yearly?: number[];
+  };
+  customPromptLabels?: Record<string, string>; // key e.g. "quarterly:effortVsOutcome" -> custom label
+}
+
+export type OutcomeVerdict = 'hit' | 'partial' | 'missed' | 'dropped';
+export type OutcomeRootCause = 'execution' | 'strategy' | 'scope' | 'shifted';
+export type RoadmapVerdict = 'push_gate' | 'redesign' | 'maintain' | 'pause';
+export type PromiseVerdict = 'executed' | 'partial' | 'repeated';
+
+export interface OutcomeAuditEntry {
+  verdict?: OutcomeVerdict;
+  rootCause?: OutcomeRootCause;
+  note?: string;
+}
+
+export interface RoadmapAuditEntry {
+  verdict?: RoadmapVerdict;
+  constraintNote?: string;
+}
+
+export interface PillarAuditEntry {
+  score?: number; // 1-10
+  note?: string;
+}
+
 export interface MonthlyPlan {
   id: string;        // e.g. '2026-11'
   monthKey: string;  // 'YYYY-MM'
@@ -156,12 +213,25 @@ export interface MonthlyPlan {
   updatedAt: string;
 }
 
+export interface QuarterlyPlan {
+  id: string;        // e.g. '2026-Q4'
+  quarterKey: string; // 'YYYY-Q#'
+  focusTheme: string;
+  notes: string;
+  tasks: TaskItem[];
+  targetGateRefs?: TargetGateRef[];
+  scoreboard?: ScoreboardMetric[];
+  updatedAt: string;
+}
+
 export interface YearlyPlan {
   id: string;       // e.g. '2026'
   yearKey: string;  // 'YYYY'
   focusTheme: string;
   notes: string;
   tasks: TaskItem[];
+  targetGateRefs?: TargetGateRef[];
+  scoreboard?: ScoreboardMetric[];
   updatedAt: string;
 }
 
@@ -176,6 +246,16 @@ export interface ReviewEntry {
   wins: string;
   blockers: string;
   courseCorrections: string;
+  headline?: string; // Quarter verdict headline or Yearly chapter title
+  prevPromiseVerdict?: PromiseVerdict;
+  prevPromiseNote?: string;
+  outcomeAudits?: Record<string, OutcomeAuditEntry>;
+  effortVsOutcomeNote?: string;
+  roadmapAudits?: Record<string, RoadmapAuditEntry>;
+  pillarAudits?: Record<string, PillarAuditEntry>;
+  assumptionsDisproved?: string;
+  energyAndMountainNote?: string;
+  customAnswers?: Record<string, string>;
   ratings: {
     clarity: number;
     consistency: number;
@@ -223,6 +303,7 @@ export interface StrategyStage {
   dayInALife: string;        // Vivid story of how a typical day looks and feels
   gateCriterion: string;     // Exact gate proof required to unlock the next stage
   gatePassed: boolean;
+  gatePassedAt?: string;     // YYYY-MM-DD when gate was marked passed
 }
 
 export interface StrategyPlan {
