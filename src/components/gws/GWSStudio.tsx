@@ -9,6 +9,7 @@ import {
 import { GWSSession } from '../../types/schema';
 import { ProblemCategory } from '../../types/schema';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
+import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 import { 
   Play, 
   Pause, 
@@ -356,6 +357,13 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
           </div>
         </div>
       )}
+
+      {/* Pre-Flight Guardrails & Top Constraints (prevention before starting a deep sprint) */}
+      <PreFlightGuardrailsStrip
+        context="gws"
+        date={selectedDate}
+        sourceRef={taskName.trim() || 'GWS Sprint'}
+      />
 
       {/* Main Grid: Live Session Form (Left) + Recent Log/Stats (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

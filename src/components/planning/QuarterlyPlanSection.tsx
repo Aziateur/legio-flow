@@ -3,6 +3,7 @@ import { useStorage } from '../../context/StorageContext';
 import { TaskItem, TargetGateRef } from '../../types/schema';
 import { getQuarterInfo, shiftQuarterKey } from '../../lib/macroAnalytics';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
+import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import {
   ChevronLeft,
   ChevronRight,
@@ -186,6 +187,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
               qp &&
               (qp.tasks.length > 0 ||
                 qp.focusTheme.trim() ||
+                (qp.topFocuses || []).some(f => f.trim()) ||
                 (qp.scoreboard && qp.scoreboard.length > 0))
             );
             return (
@@ -240,6 +242,16 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
           <span className="self-start sm:self-center px-3 py-1 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-xs font-mono font-bold shrink-0">
             {doneCount} / {activeQuarterPlan.tasks.length} outcomes
           </span>
+        </div>
+
+        {/* Quarterly Top 3 Focuses */}
+        <div className="pt-4 border-t border-slate-800/80">
+          <TopFocusesEditor
+            focuses={activeQuarterPlan.topFocuses}
+            onChange={next => saveQuarterlyPlan({ ...activeQuarterPlan, topFocuses: next })}
+            accent="cyan"
+            title={`Top 3 Focuses • ${qInfo.quarterKey}`}
+          />
         </div>
 
         {/* Quarterly Outcomes Checklist */}

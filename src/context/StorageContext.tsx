@@ -21,14 +21,19 @@ import {
   StrategyPlan,
   ProblemEntry,
   ProblemCategory,
+  CustomProblemCategory,
+  ProblemSettings,
   ProblemScale,
+  ProblemImpact,
   ProblemStatus,
   ProblemFixType,
+  ProblemFixAttempt,
   ProblemSourceType,
   ProblemOccurrence,
   ProblemDispatchTarget
 } from '../types/schema';
 import {
+  daysBetweenDates,
   defaultScaleForSource,
   getDescendantProblems,
   guessProblemCategory,
@@ -44,6 +49,8 @@ import {
   INITIAL_YEARLY_PLANS,
   INITIAL_LIFE_PILLARS,
   INITIAL_CUSTOM_REVIEW_PROMPTS,
+  INITIAL_PROBLEM_CATEGORIES,
+  DEFAULT_PROBLEM_SETTINGS,
   INITIAL_CHECKLIST_CATEGORIES,
   INITIAL_CHECKLIST_ITEMS,
   INITIAL_STRATEGY_PLANS
@@ -488,6 +495,8 @@ interface StorageContextType {
   lifePillars: LifePillar[];
   customReviewPrompts: CustomReviewPrompt[];
   macroReviewSettings: MacroReviewSettings;
+  problemCategories: CustomProblemCategory[];
+  problemSettings: ProblemSettings;
   strategyPlans: StrategyPlan[];
   problems: ProblemEntry[];
   reviews: ReviewEntry[];
@@ -580,10 +589,12 @@ interface StorageContextType {
   getYearlyPlan: (yearKey: string) => YearlyPlan;
   saveYearlyPlan: (plan: YearlyPlan) => void;
 
-  // Custom Life Pillars & Macro Review Customization
+  // Custom Life Pillars, Macro Review & Problem Customization
   saveLifePillars: (pillars: LifePillar[]) => void;
   saveCustomReviewPrompts: (prompts: CustomReviewPrompt[]) => void;
   saveMacroReviewSettings: (settings: MacroReviewSettings) => void;
+  saveProblemCategories: (categories: CustomProblemCategory[]) => void;
+  saveProblemSettings: (settings: ProblemSettings) => void;
 
   // Written Strategy Roadmap Plans
   saveStrategyPlan: (plan: StrategyPlan) => void;
@@ -594,6 +605,12 @@ interface StorageContextType {
     title: string;
     category: ProblemCategory;
     scale?: ProblemScale;
+    impact?: ProblemImpact;
+    isTopConstraint?: boolean;
+    trigger?: string;
+    rootCause?: string;
+    isGuardrail?: boolean;
+    verifyDays?: number;
     parentProblemId?: string;
     tags?: string[];
     sourceType: ProblemSourceType;
@@ -651,6 +668,8 @@ const STORAGE_KEYS = {
   LIFE_PILLARS: 'legio_life_pillars_v1',
   CUSTOM_PROMPTS: 'legio_custom_review_prompts_v1',
   MACRO_SETTINGS: 'legio_macro_review_settings_v1',
+  PROBLEM_CATEGORIES: 'legio_problem_categories_v1',
+  PROBLEM_SETTINGS: 'legio_problem_settings_v1',
   STRATEGY_PLANS: 'legio_strategy_plans_v1',
   PROBLEMS: 'legio_problems_v1',
   REVIEWS: 'legio_reviews_v1',
@@ -734,6 +753,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         id: p?.id || k,
         monthKey: p?.monthKey || k,
         focusTheme: p?.focusTheme || '',
+        topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
         notes: p?.notes || '',
         tasks: Array.isArray(p?.tasks) ? p.tasks : [],
         updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
@@ -750,6 +770,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         id: p?.id || k,
         quarterKey: p?.quarterKey || k,
         focusTheme: p?.focusTheme || '',
+        topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
         notes: p?.notes || '',
         tasks: Array.isArray(p?.tasks) ? p.tasks : [],
         targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
@@ -768,6 +789,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         id: p?.id || k,
         yearKey: p?.yearKey || k,
         focusTheme: p?.focusTheme || '',
+        topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
         notes: p?.notes || '',
         tasks: Array.isArray(p?.tasks) ? p.tasks : [],
         targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
@@ -802,6 +824,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [macroReviewSettings, setMacroReviewSettings] = useState<MacroReviewSettings>(() => {
     const raw = readStorageSafe<MacroReviewSettings>(STORAGE_KEYS.MACRO_SETTINGS, {});
     return raw && typeof raw === 'object' ? raw : {};
+  });
+
+  const [problemCategories, setProblemCategories] = useState<CustomProblemCategory[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.PROBLEM_CATEGORIES);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return INITIAL_PROBLEM_CATEGORIES;
+  });
+
+  const [problemSettings, setProblemSettings] = useState<ProblemSettings>(() => {
+    const raw = readStorageSafe<ProblemSettings>(
+      STORAGE_KEYS.PROBLEM_SETTINGS,
+      DEFAULT_PROBLEM_SETTINGS
+    );
+    return {
+      ...DEFAULT_PROBLEM_SETTINGS,
+      ...(raw && typeof raw === 'object' ? raw : {})
+    };
   });
 
   const [strategyPlans, setStrategyPlans] = useState<StrategyPlan[]>(() => {
@@ -959,6 +1005,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const lifePillarsRef = useRef(lifePillars);
   const customReviewPromptsRef = useRef(customReviewPrompts);
   const macroReviewSettingsRef = useRef(macroReviewSettings);
+  const problemCategoriesRef = useRef(problemCategories);
+  const problemSettingsRef = useRef(problemSettings);
   const strategyPlansRef = useRef(strategyPlans);
   const problemsRef = useRef(problems);
   const reviewsRef = useRef(reviews);
@@ -1136,6 +1184,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setMacroReviewSettings(next);
   };
 
+  const commitProblemCategories = (next: CustomProblemCategory[]) => {
+    problemCategoriesRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.PROBLEM_CATEGORIES, next);
+    setProblemCategories(next);
+  };
+
+  const commitProblemSettings = (next: ProblemSettings) => {
+    const merged = { ...DEFAULT_PROBLEM_SETTINGS, ...next };
+    problemSettingsRef.current = merged;
+    writeStorageSafe(STORAGE_KEYS.PROBLEM_SETTINGS, merged);
+    setProblemSettings(merged);
+  };
+
   const commitStrategyPlans = (next: StrategyPlan[]) => {
     strategyPlansRef.current = next;
     writeStorageSafe(STORAGE_KEYS.STRATEGY_PLANS, next);
@@ -1200,6 +1261,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       lifePillars: lifePillarsRef.current,
       customReviewPrompts: customReviewPromptsRef.current,
       macroReviewSettings: macroReviewSettingsRef.current,
+      problemCategories: problemCategoriesRef.current,
+      problemSettings: problemSettingsRef.current,
       strategyPlans: strategyPlansRef.current,
       problems: problemsRef.current,
       reviews: reviewsRef.current,
@@ -1599,6 +1662,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (parsed && typeof parsed === 'object') {
             macroReviewSettingsRef.current = parsed;
             setMacroReviewSettings(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.PROBLEM_CATEGORIES) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            problemCategoriesRef.current = parsed;
+            setProblemCategories(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.PROBLEM_SETTINGS) {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === 'object') {
+            const merged = { ...DEFAULT_PROBLEM_SETTINGS, ...parsed };
+            problemSettingsRef.current = merged;
+            setProblemSettings(merged);
           }
         } else if (e.key === STORAGE_KEYS.STRATEGY_PLANS) {
           const parsed = JSON.parse(e.newValue);
@@ -2446,6 +2522,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     id: p?.id || monthKey,
     monthKey: p?.monthKey || monthKey,
     focusTheme: p?.focusTheme || '',
+    topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
     notes: p?.notes || '',
     tasks: Array.isArray(p?.tasks) ? p.tasks : [],
     updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
@@ -2455,6 +2532,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     id: p?.id || quarterKey,
     quarterKey: p?.quarterKey || quarterKey,
     focusTheme: p?.focusTheme || '',
+    topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
     notes: p?.notes || '',
     tasks: Array.isArray(p?.tasks) ? p.tasks : [],
     targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
@@ -2466,6 +2544,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     id: p?.id || yearKey,
     yearKey: p?.yearKey || yearKey,
     focusTheme: p?.focusTheme || '',
+    topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
     notes: p?.notes || '',
     tasks: Array.isArray(p?.tasks) ? p.tasks : [],
     targetGateRefs: Array.isArray(p?.targetGateRefs) ? p.targetGateRefs : [],
@@ -2627,6 +2706,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
+  const saveProblemCategories = (categories: CustomProblemCategory[]) => {
+    const prev = problemCategoriesRef.current;
+    const nextIds = new Set(categories.map(c => c.id));
+    const removed = prev.filter(c => c.id && !nextIds.has(c.id)).map(c => c.id);
+    if (removed.length > 0) recordDeletedIds(removed);
+    categories.forEach(c => {
+      if (c.id) clearDeletedId(c.id);
+    });
+    commitProblemCategories(categories);
+    markLocalMutation();
+  };
+
+  const saveProblemSettings = (settings: ProblemSettings) => {
+    commitProblemSettings(settings);
+    markLocalMutation();
+  };
+
   const saveStrategyPlan = (plan: StrategyPlan) => {
     const prev = strategyPlansRef.current;
     const prevPlan = prev.find(p => p.id === plan.id);
@@ -2670,14 +2766,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       new Set((input.tags || []).map(normalizeTag).filter(Boolean))
     );
     const resolvedScale: ProblemScale = input.scale || defaultScaleForSource(input.sourceType);
+    const resolvedImpact: ProblemImpact =
+      input.impact ||
+      (resolvedScale === 'blocker' ? 'critical' : resolvedScale === 'bottleneck' ? 'high' : 'low');
+    const resolvedStatus: ProblemStatus = input.status || 'open';
     const entry: ProblemEntry = {
       id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       title: input.title.trim(),
       category: input.category,
       scale: resolvedScale,
+      impact: resolvedImpact,
+      ...(input.isTopConstraint ? { isTopConstraint: true } : {}),
+      ...(input.trigger?.trim() ? { trigger: input.trigger.trim() } : {}),
+      ...(input.rootCause?.trim() ? { rootCause: input.rootCause.trim() } : {}),
+      ...(input.isGuardrail ? { isGuardrail: true } : {}),
+      ...(input.verifyDays ? { verifyDays: input.verifyDays } : {}),
       ...(input.parentProblemId ? { parentProblemId: input.parentProblemId } : {}),
       tags: cleanedTags,
-      status: input.status || 'open',
+      status: resolvedStatus,
       occurrences: [
         {
           date: input.date || getTodayDateString(),
@@ -2688,16 +2794,40 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ],
       ...(input.fixType ? { fixType: input.fixType } : {}),
       ...(input.fixNote?.trim() ? { fixNote: input.fixNote.trim() } : {}),
+      ...(resolvedStatus === 'testing' ? { fixStartedAt: input.date || getTodayDateString() } : {}),
       createdAt: nowIso,
       updatedAt: nowIso
     };
-    // If attached under a parent that was marked solved, gently re-open the parent so the loop stays honest
+    // If attached under a parent that was marked solved or testing, re-open honestly and log failed fix if testing!
+    const occDate = input.date || getTodayDateString();
     const updatedPrev = input.parentProblemId
       ? problemsRef.current.map(p => {
-          if (p.id === input.parentProblemId && p.status === 'solved') {
+          if (p.id !== input.parentProblemId) return p;
+          if (p.status === 'solved') {
             const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
             delete reopened.solvedAt;
             return reopened;
+          }
+          if (p.status === 'testing') {
+            const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || occDate).slice(0, 10);
+            const failedAttempt: ProblemFixAttempt = {
+              id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+              fixText: p.fixNote?.trim() || 'Previous fix',
+              startedAt,
+              endedAt: occDate,
+              outcome: 'failed',
+              daysHeld: daysBetweenDates(startedAt, occDate),
+              note: `Slip recurred: ${entry.title}`
+            };
+            const updatedParent: ProblemEntry = {
+              ...p,
+              status: 'open',
+              lastFixFailedAt: occDate,
+              fixAttempts: [...(p.fixAttempts || []), failedAttempt],
+              updatedAt: nowIso
+            };
+            delete updatedParent.fixStartedAt;
+            return updatedParent;
           }
           return p;
         })
@@ -2710,6 +2840,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const updateProblem: StorageContextType['updateProblem'] = (id, patch) => {
     const nowIso = new Date().toISOString();
+    const todayStr = getTodayDateString();
     const cur = problemsRef.current;
     // If a parent cluster is verified solved, also close its open/testing children cleanly
     const childIdsToClose =
@@ -2730,9 +2861,29 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (patch.parentProblemId === undefined && 'parentProblemId' in patch) {
           delete merged.parentProblemId;
         }
-        if (patch.status === 'solved' && !merged.solvedAt) {
-          merged.solvedAt = nowIso;
-        } else if (patch.status && patch.status !== 'solved') {
+        // Entering Testing Fix: start verification clock & clear prior failure flag
+        if (patch.status === 'testing' && p.status !== 'testing') {
+          merged.fixStartedAt = patch.fixStartedAt || todayStr;
+          delete merged.lastFixFailedAt;
+        }
+        // Verifying Solved: stamp solvedAt, release Top Constraint slot, log verified attempt if fixNote exists
+        if (patch.status === 'solved') {
+          if (!merged.solvedAt) merged.solvedAt = nowIso;
+          merged.isTopConstraint = false;
+          delete merged.lastFixFailedAt;
+          if (merged.fixNote?.trim() && p.status !== 'solved') {
+            const startedAt = (merged.fixStartedAt || p.updatedAt || p.createdAt || todayStr).slice(0, 10);
+            const verifiedAttempt: ProblemFixAttempt = {
+              id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+              fixText: merged.fixNote.trim(),
+              startedAt,
+              endedAt: todayStr,
+              outcome: 'verified',
+              daysHeld: daysBetweenDates(startedAt, todayStr)
+            };
+            merged.fixAttempts = [...(merged.fixAttempts || []), verifiedAttempt];
+          }
+        } else if (patch.status) {
           delete merged.solvedAt;
         }
         return merged;
@@ -2741,6 +2892,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return {
           ...p,
           status: 'solved' as ProblemStatus,
+          isTopConstraint: false,
           solvedAt: nowIso,
           updatedAt: nowIso
         };
@@ -2753,19 +2905,43 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const recordProblemRecurrence: StorageContextType['recordProblemRecurrence'] = (id, occurrence) => {
     const nowIso = new Date().toISOString();
+    const occDate = occurrence.date || getTodayDateString();
     const cur = problemsRef.current;
     const target = cur.find(p => p.id === id);
-    const parentIdToReopen = target?.parentProblemId;
+    const parentIdToCheck = target?.parentProblemId;
+
+    const handleFailureIfTesting = (p: ProblemEntry, note?: string): ProblemEntry => {
+      if (p.status !== 'testing') return p;
+      const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || occDate).slice(0, 10);
+      const failedAttempt: ProblemFixAttempt = {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        fixText: p.fixNote?.trim() || 'Previous fix',
+        startedAt,
+        endedAt: occDate,
+        outcome: 'failed',
+        daysHeld: daysBetweenDates(startedAt, occDate),
+        ...(note ? { note } : {})
+      };
+      const nextP: ProblemEntry = {
+        ...p,
+        status: 'open',
+        lastFixFailedAt: occDate,
+        fixAttempts: [...(p.fixAttempts || []), failedAttempt],
+        updatedAt: nowIso
+      };
+      delete nextP.fixStartedAt;
+      return nextP;
+    };
+
     const next = cur.map(p => {
       if (p.id === id) {
-        const nextStatus: ProblemStatus = p.status === 'solved' ? 'open' : p.status;
-        const updated: ProblemEntry = {
+        const base: ProblemEntry = {
           ...p,
-          status: nextStatus,
+          status: p.status === 'solved' ? 'open' : p.status,
           occurrences: [
             ...(p.occurrences || []),
             {
-              date: occurrence.date || getTodayDateString(),
+              date: occDate,
               sourceType: occurrence.sourceType,
               ...(occurrence.sourceRef ? { sourceRef: occurrence.sourceRef } : {}),
               ...(occurrence.note ? { note: occurrence.note } : {})
@@ -2773,13 +2949,18 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ],
           updatedAt: nowIso
         };
-        delete updated.solvedAt;
-        return updated;
+        delete base.solvedAt;
+        return handleFailureIfTesting(base, occurrence.note);
       }
-      if (parentIdToReopen && p.id === parentIdToReopen && p.status === 'solved') {
-        const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
-        delete reopened.solvedAt;
-        return reopened;
+      if (parentIdToCheck && p.id === parentIdToCheck) {
+        if (p.status === 'solved') {
+          const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
+          delete reopened.solvedAt;
+          return reopened;
+        }
+        if (p.status === 'testing') {
+          return handleFailureIfTesting(p, target ? `Linked slip recurred: ${target.title}` : undefined);
+        }
       }
       return p;
     });
@@ -2925,7 +3106,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       : [...prevTargets, destination];
     updateProblem(problemId, {
       dispatchedTo: nextTargets,
-      ...(problem.status === 'open' ? { status: 'testing' } : {}),
+      ...(problem.status === 'open' ? { status: 'testing', fixStartedAt: getTodayDateString() } : {}),
       ...(customText?.trim() && !problem.fixNote?.trim() ? { fixNote: customText.trim() } : {})
     });
     return true;
@@ -3061,6 +3242,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       lifePillars: lifePillarsRef.current,
       customReviewPrompts: customReviewPromptsRef.current,
       macroReviewSettings: macroReviewSettingsRef.current,
+      problemCategories: problemCategoriesRef.current,
+      problemSettings: problemSettingsRef.current,
       strategyPlans: strategyPlansRef.current,
       problems: problemsRef.current,
       reviews: reviewsRef.current,
@@ -3149,6 +3332,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (src.macroReviewSettings && typeof src.macroReviewSettings === 'object') {
         commitMacroReviewSettings(src.macroReviewSettings);
       }
+      if (Array.isArray(src.problemCategories) && src.problemCategories.length > 0) {
+        commitProblemCategories(src.problemCategories);
+      }
+      if (src.problemSettings && typeof src.problemSettings === 'object') {
+        commitProblemSettings(src.problemSettings);
+      }
       if (Array.isArray(src.strategyPlans)) commitStrategyPlans(src.strategyPlans);
       if (Array.isArray(src.problems)) commitProblems(src.problems);
       if (Array.isArray(src.reviews)) commitReviews(src.reviews);
@@ -3187,6 +3376,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitLifePillars(INITIAL_LIFE_PILLARS);
     commitCustomReviewPrompts(INITIAL_CUSTOM_REVIEW_PROMPTS);
     commitMacroReviewSettings({});
+    commitProblemCategories(INITIAL_PROBLEM_CATEGORIES);
+    commitProblemSettings(DEFAULT_PROBLEM_SETTINGS);
     commitStrategyPlans(INITIAL_STRATEGY_PLANS);
     commitProblems([]);
     commitReviews([]);
@@ -3232,6 +3423,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       lifePillars: INITIAL_LIFE_PILLARS,
       customReviewPrompts: [] as CustomReviewPrompt[],
       macroReviewSettings: {} as MacroReviewSettings,
+      problemCategories: INITIAL_PROBLEM_CATEGORIES,
+      problemSettings: DEFAULT_PROBLEM_SETTINGS,
       strategyPlans: [] as StrategyPlan[],
       problems: [] as ProblemEntry[],
       reviews: [] as ReviewEntry[],
@@ -3255,6 +3448,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitLifePillars(fresh.lifePillars);
     commitCustomReviewPrompts(fresh.customReviewPrompts);
     commitMacroReviewSettings(fresh.macroReviewSettings);
+    commitProblemCategories(fresh.problemCategories);
+    commitProblemSettings(fresh.problemSettings);
     commitStrategyPlans(fresh.strategyPlans);
     commitProblems(fresh.problems);
     commitReviews(fresh.reviews);
@@ -3411,6 +3606,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (Array.isArray(state.customReviewPrompts)) commitCustomReviewPrompts(state.customReviewPrompts);
     if (state.macroReviewSettings && typeof state.macroReviewSettings === 'object') {
       commitMacroReviewSettings(state.macroReviewSettings);
+    }
+    if (Array.isArray(state.problemCategories) && state.problemCategories.length > 0) {
+      commitProblemCategories(state.problemCategories);
+    }
+    if (state.problemSettings && typeof state.problemSettings === 'object') {
+      commitProblemSettings(state.problemSettings);
     }
     if (Array.isArray(state.strategyPlans)) commitStrategyPlans(state.strategyPlans);
     if (Array.isArray(state.problems)) commitProblems(state.problems);
@@ -3814,7 +4015,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (!p) return false;
         const extraScore = 'scoreboard' in p && Array.isArray(p.scoreboard) && p.scoreboard.length > 0;
         const extraGates = 'targetGateRefs' in p && Array.isArray(p.targetGateRefs) && p.targetGateRefs.length > 0;
-        return !!(p.tasks.length > 0 || p.focusTheme.trim().length > 0 || p.notes.trim().length > 0 || extraScore || extraGates);
+        const extraFocuses = Array.isArray(p.topFocuses) && p.topFocuses.some(f => f.trim().length > 0);
+        return !!(p.tasks.length > 0 || p.focusTheme.trim().length > 0 || p.notes.trim().length > 0 || extraScore || extraGates || extraFocuses);
       };
 
       allKeys.forEach(k => {
@@ -3874,9 +4076,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             secondaryTime = hasPendingPush ? cTime : lTime;
           }
 
+          const primaryFocuses = Array.isArray(primary.topFocuses) && primary.topFocuses.some(f => f.trim().length > 0)
+            ? primary.topFocuses
+            : secondary.topFocuses;
           const mergedBase: any = {
             ...primary,
             focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
+            ...(primaryFocuses ? { topFocuses: primaryFocuses } : {}),
             notes: primary.notes?.trim() ? primary.notes : secondary.notes || '',
             tasks: mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime)
           };
@@ -4062,6 +4268,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ? local.macroReviewSettings
         : cloudState.macroReviewSettings;
 
+    const mergedProblemCategories = mergeCollectionById<CustomProblemCategory>(
+      local.problemCategories,
+      cloudState?.problemCategories,
+      () => (localIsNewer ? localMs : cloudMs)
+    );
+
+    const mergedProblemSettings: ProblemSettings = {
+      ...DEFAULT_PROBLEM_SETTINGS,
+      ...(localIsNewer || !cloudState?.problemSettings
+        ? local.problemSettings
+        : cloudState.problemSettings)
+    };
+
     const onboardingStartDate =
       mergedWeeklyPlans['week_1']?.startDate ||
       cloudState?.onboardingStartDate ||
@@ -4079,6 +4298,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       lifePillars: mergedLifePillars,
       customReviewPrompts: mergedCustomReviewPrompts,
       macroReviewSettings: mergedMacroReviewSettings,
+      problemCategories: mergedProblemCategories.length > 0 ? mergedProblemCategories : INITIAL_PROBLEM_CATEGORIES,
+      problemSettings: mergedProblemSettings,
       strategyPlans: mergedStrategyPlans,
       problems: mergedProblems,
       reviews: mergedReviews,
@@ -4444,6 +4665,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             lifePillars: raw.lifePillars,
             customReviewPrompts: raw.customReviewPrompts,
             macroReviewSettings: raw.macroReviewSettings,
+            problemCategories: raw.problemCategories,
+            problemSettings: raw.problemSettings,
             strategyPlans: raw.strategyPlans,
             problems: raw.problems,
             reviews: raw.reviews,
@@ -4508,6 +4731,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         lifePillars,
         customReviewPrompts,
         macroReviewSettings,
+        problemCategories,
+        problemSettings,
         strategyPlans,
         problems,
         reviews,
@@ -4564,6 +4789,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saveLifePillars,
         saveCustomReviewPrompts,
         saveMacroReviewSettings,
+        saveProblemCategories,
+        saveProblemSettings,
         saveStrategyPlan,
         deleteStrategyPlan,
         addProblem,

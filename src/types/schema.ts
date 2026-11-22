@@ -208,6 +208,7 @@ export interface MonthlyPlan {
   id: string;        // e.g. '2026-11'
   monthKey: string;  // 'YYYY-MM'
   focusTheme: string;
+  topFocuses?: string[]; // Mirrored Top 3 Focuses (customizable slot count)
   notes: string;
   tasks: TaskItem[];
   updatedAt: string;
@@ -217,6 +218,7 @@ export interface QuarterlyPlan {
   id: string;        // e.g. '2026-Q4'
   quarterKey: string; // 'YYYY-Q#'
   focusTheme: string;
+  topFocuses?: string[]; // Mirrored Top 3 Focuses (customizable slot count)
   notes: string;
   tasks: TaskItem[];
   targetGateRefs?: TargetGateRef[];
@@ -228,6 +230,7 @@ export interface YearlyPlan {
   id: string;       // e.g. '2026'
   yearKey: string;  // 'YYYY'
   focusTheme: string;
+  topFocuses?: string[]; // Mirrored Top 3 Focuses (customizable slot count)
   notes: string;
   tasks: TaskItem[];
   targetGateRefs?: TargetGateRef[];
@@ -315,16 +318,30 @@ export interface StrategyPlan {
   updatedAt: string;
 }
 
-export type ProblemCategory =
-  | 'mindset'
-  | 'skill'
-  | 'logistics'
-  | 'energy'
-  | 'strategy';
+export type ProblemCategory = string;
+
+export type ProblemColorKey =
+  | 'rose'
+  | 'sky'
+  | 'amber'
+  | 'emerald'
+  | 'violet'
+  | 'cyan'
+  | 'orange'
+  | 'slate';
+
+export interface CustomProblemCategory {
+  id: string;
+  label: string;
+  hint?: string;
+  color: ProblemColorKey;
+}
 
 export type ProblemStatus = 'open' | 'testing' | 'solved';
 
 export type ProblemScale = 'friction' | 'bottleneck' | 'blocker';
+
+export type ProblemImpact = 'low' | 'high' | 'critical';
 
 export type ProblemFixType =
   | 'task'
@@ -357,17 +374,45 @@ export interface ProblemOccurrence {
   note?: string;
 }
 
+export interface ProblemFixAttempt {
+  id: string;
+  fixText: string;
+  startedAt: string; // YYYY-MM-DD
+  endedAt: string;   // YYYY-MM-DD
+  outcome: 'failed' | 'replaced' | 'verified';
+  daysHeld: number;
+  note?: string;
+}
+
+export interface ProblemSettings {
+  maxTopConstraints?: number;      // Default 3 (1-5)
+  defaultVerifyDays?: number;      // Default 14 (7 / 14 / 30)
+  showBreakdownBar?: boolean;      // Default true
+  showPreFlightInDaily?: boolean;  // Default true
+  showPreFlightInGws?: boolean;    // Default true
+  separateInboxTab?: boolean;      // Default true
+}
+
 export interface ProblemEntry {
   id: string;
   title: string;
   category: ProblemCategory;
-  scale?: ProblemScale; // 'friction' (Small/Daily) | 'bottleneck' (Medium/Weekly) | 'blocker' (Big/Macro/Roadmap)
-  parentProblemId?: string; // Clusters this item under a larger Bottleneck or Blocker
-  tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags (e.g. "sleep", "bootcamp")
+  scale?: ProblemScale; // 'friction' (Slip) | 'bottleneck' (Root Problem) | 'blocker' (Macro / Roadmap Blocker)
+  impact?: ProblemImpact; // 'low' | 'high' | 'critical'
+  isTopConstraint?: boolean; // Pinned in the Top 3 Constraints focus spotlight
+  trigger?: string; // When / in what context does this fire?
+  rootCause?: string; // Why is this actually happening below the surface symptom?
+  isGuardrail?: boolean; // Pinned as an active If-Then guardrail surfaced pre-flight
+  parentProblemId?: string; // Clusters this slip under a Root Problem
+  tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];
   fixType?: ProblemFixType;
   fixNote?: string;
+  fixStartedAt?: string; // YYYY-MM-DD when the active fix experiment started
+  verifyDays?: number; // Clean days required before prompting Verified Solved (default 14)
+  fixAttempts?: ProblemFixAttempt[]; // Experiment history of failed/replaced/verified fixes
+  lastFixFailedAt?: string; // Set automatically when +1 recurs while Testing Fix
   dispatchedTo?: ProblemDispatchTarget[];
   createdAt: string;
   updatedAt: string;

@@ -33,6 +33,7 @@ import {
 } from '../../lib/checklistSchedule';
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
+import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 
 export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
   onOpenGWS,
@@ -559,6 +560,9 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
           ))}
         </div>
       </div>
+
+      {/* Pre-Flight Guardrails & Top Constraints (prevention before execution) */}
+      <PreFlightGuardrailsStrip context="daily" date={selectedDate} sourceRef={selectedDate} />
 
       {/* Course Correction Feedback Loop (Surfaces Yesterday's Review & Next-Sprint Commitment) */}
       {(latestPreviousReview || latestGwsCommitment) && (

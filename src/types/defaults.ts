@@ -9,6 +9,8 @@ import {
   YearlyPlan,
   LifePillar,
   CustomReviewPrompt,
+  CustomProblemCategory,
+  ProblemSettings,
   ChecklistCategory,
   ChecklistItem,
   StrategyPlan
@@ -420,6 +422,23 @@ export const INITIAL_LIFE_PILLARS: LifePillar[] = [
 ];
 
 export const INITIAL_CUSTOM_REVIEW_PROMPTS: CustomReviewPrompt[] = [];
+
+export const INITIAL_PROBLEM_CATEGORIES: CustomProblemCategory[] = [
+  { id: 'mindset', label: 'Mindset', hint: 'Hesitation, distraction, ego, emotional tilt, avoidance', color: 'rose' },
+  { id: 'skill', label: 'Skill', hint: 'Knowledge gap, technical weakness, needs reps or study', color: 'sky' },
+  { id: 'logistics', label: 'Logistics', hint: 'Workflow friction, missing tool/setup, environment', color: 'amber' },
+  { id: 'energy', label: 'Energy', hint: 'Sleep, fatigue, recovery, nutrition, brain fog', color: 'emerald' },
+  { id: 'strategy', label: 'Strategy', hint: 'Unclear priority, wrong target, over-scoped plan', color: 'violet' }
+];
+
+export const DEFAULT_PROBLEM_SETTINGS: ProblemSettings = {
+  maxTopConstraints: 3,
+  defaultVerifyDays: 14,
+  showBreakdownBar: true,
+  showPreFlightInDaily: true,
+  showPreFlightInGws: true,
+  separateInboxTab: true
+};
 
 export const INITIAL_CHECKLIST_CATEGORIES: ChecklistCategory[] = [
   { id: 'cat_routine', name: 'Daily Routine & Habits' },

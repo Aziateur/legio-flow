@@ -1,8 +1,11 @@
 import {
+  CustomProblemCategory,
   ProblemCategory,
+  ProblemColorKey,
   ProblemDispatchTarget,
   ProblemEntry,
   ProblemFixType,
+  ProblemImpact,
   ProblemScale,
   ProblemSourceType,
   ProblemStatus
@@ -418,29 +421,272 @@ export const guessProblemCategory = (text: string): ProblemCategory => {
 
 export const formatProblemsForReviewText = (
   list: ProblemEntry[],
-  allProblems?: ProblemEntry[]
+  allProblems?: ProblemEntry[],
+  customCategories?: CustomProblemCategory[]
 ): string => {
   if (list.length === 0) return '';
   const sourcePool = allProblems || list;
-  // Format top-level items (folding clustered children under their parent if parent is in list)
   const listIds = new Set(list.map(p => p.id));
   const topLevel = list.filter(p => !p.parentProblemId || !listIds.has(p.parentProblemId));
 
   return topLevel
     .map(p => {
-      const cat = CATEGORY_MAP[p.category]?.shortLabel || p.category;
-      const scale = SCALE_MAP[getProblemScale(p)]?.shortLabel || 'Friction';
+      const cat = resolveCategoryMeta(p.category, customCategories).shortLabel;
+      const impact = IMPACT_META[getProblemImpact(p)].shortLabel;
       const children = getDescendantProblems(sourcePool, p.id);
       const hits = getClusterTotalHits(sourcePool, p);
       const count = hits > 1 ? ` (×${hits})` : '';
-      const childSummary =
-        children.length > 0 ? ` [${children.length} linked]` : '';
+      const childSummary = children.length > 0 ? ` [${children.length} slips]` : '';
       const tagStr = p.tags.length > 0 ? ` [${p.tags.map(t => `#${t}`).join(' ')}]` : '';
-      const fixStr = p.fixNote?.trim()
-        ? ` → ${p.fixType ? `${FIX_TYPE_MAP[p.fixType].shortLabel}: ` : ''}${p.fixNote.trim()}`
-        : '';
+      const triggerStr = p.trigger?.trim() ? ` | When: ${p.trigger.trim()}` : '';
+      const fixStr = p.fixNote?.trim() ? ` → Fix: ${p.fixNote.trim()}` : '';
       const statusStr = p.status === 'solved' ? ' ✓Solved' : p.status === 'testing' ? ' ⟳Testing' : '';
-      return `• [${scale} · ${cat}]${statusStr} ${p.title}${count}${childSummary}${tagStr}${fixStr}`;
+      const pinStr = p.isTopConstraint ? ' ★TOP ' : ' ';
+      return `•${pinStr}[${impact} · ${cat}]${statusStr} ${p.title}${count}${childSummary}${tagStr}${triggerStr}${fixStr}`;
     })
     .join('\n');
+};
+
+// --- CUSTOM CATEGORIES, IMPACT, EXPERIMENT VERIFICATION & ROOT-PROBLEM ENGINE ---
+
+export const PROBLEM_COLOR_STYLES: Record<
+  ProblemColorKey,
+  { badgeClass: string; activeChipClass: string; barClass: string; dotClass: string; label: string }
+> = {
+  rose: {
+    label: 'Rose',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/35',
+    activeChipClass: 'bg-rose-500 text-slate-950 border-rose-400',
+    barClass: 'bg-rose-500',
+    dotClass: 'bg-rose-400'
+  },
+  sky: {
+    label: 'Sky',
+    badgeClass: 'bg-sky-500/15 text-sky-300 border-sky-500/35',
+    activeChipClass: 'bg-sky-400 text-slate-950 border-sky-300',
+    barClass: 'bg-sky-500',
+    dotClass: 'bg-sky-400'
+  },
+  amber: {
+    label: 'Amber',
+    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeChipClass: 'bg-amber-400 text-slate-950 border-amber-300',
+    barClass: 'bg-amber-500',
+    dotClass: 'bg-amber-400'
+  },
+  emerald: {
+    label: 'Emerald',
+    badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35',
+    activeChipClass: 'bg-emerald-400 text-slate-950 border-emerald-300',
+    barClass: 'bg-emerald-500',
+    dotClass: 'bg-emerald-400'
+  },
+  violet: {
+    label: 'Violet',
+    badgeClass: 'bg-violet-500/15 text-violet-300 border-violet-500/35',
+    activeChipClass: 'bg-violet-400 text-slate-950 border-violet-300',
+    barClass: 'bg-violet-500',
+    dotClass: 'bg-violet-400'
+  },
+  cyan: {
+    label: 'Cyan',
+    badgeClass: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35',
+    activeChipClass: 'bg-cyan-400 text-slate-950 border-cyan-300',
+    barClass: 'bg-cyan-500',
+    dotClass: 'bg-cyan-400'
+  },
+  orange: {
+    label: 'Orange',
+    badgeClass: 'bg-orange-500/15 text-orange-300 border-orange-500/35',
+    activeChipClass: 'bg-orange-400 text-slate-950 border-orange-300',
+    barClass: 'bg-orange-500',
+    dotClass: 'bg-orange-400'
+  },
+  slate: {
+    label: 'Slate',
+    badgeClass: 'bg-slate-800 text-slate-300 border-slate-700',
+    activeChipClass: 'bg-slate-200 text-slate-950 border-slate-100',
+    barClass: 'bg-slate-500',
+    dotClass: 'bg-slate-400'
+  }
+};
+
+export const resolveCategoryMeta = (
+  categoryId: ProblemCategory,
+  customCategories?: CustomProblemCategory[]
+): ProblemCategoryMeta => {
+  const found = (customCategories || []).find(c => c.id === categoryId);
+  if (found) {
+    const style = PROBLEM_COLOR_STYLES[found.color] || PROBLEM_COLOR_STYLES.slate;
+    return {
+      ...style,
+      id: found.id,
+      label: found.label,
+      shortLabel: found.label,
+      hint: found.hint || ''
+    };
+  }
+  if (CATEGORY_MAP[categoryId]) {
+    return CATEGORY_MAP[categoryId];
+  }
+  return {
+    ...PROBLEM_COLOR_STYLES.slate,
+    id: categoryId || 'general',
+    label: categoryId || 'General',
+    shortLabel: categoryId || 'General',
+    hint: ''
+  };
+};
+
+export interface ProblemImpactMeta {
+  id: ProblemImpact;
+  label: string;
+  shortLabel: string;
+  hint: string;
+  dotClass: string;
+  badgeClass: string;
+  activeChipClass: string;
+}
+
+export const PROBLEM_IMPACTS: ProblemImpactMeta[] = [
+  {
+    id: 'critical',
+    label: 'Critical Cost',
+    shortLabel: 'Critical',
+    hint: 'High real-world damage or directly blocks a Roadmap Gate / major goal.',
+    dotClass: 'bg-rose-500',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+    activeChipClass: 'bg-rose-500 text-slate-950 border-rose-400'
+  },
+  {
+    id: 'high',
+    label: 'High Drag',
+    shortLabel: 'High',
+    hint: 'Repeatedly slows execution, energy, or weekly consistency.',
+    dotClass: 'bg-amber-400',
+    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeChipClass: 'bg-amber-400 text-slate-950 border-amber-300'
+  },
+  {
+    id: 'low',
+    label: 'Low / Minor',
+    shortLabel: 'Low',
+    hint: 'Small annoyance or minor friction — monitor unless it compounds.',
+    dotClass: 'bg-slate-500',
+    badgeClass: 'bg-slate-800/90 text-slate-400 border-slate-700',
+    activeChipClass: 'bg-slate-200 text-slate-950 border-slate-100'
+  }
+];
+
+export const IMPACT_META: Record<ProblemImpact, ProblemImpactMeta> = {
+  critical: PROBLEM_IMPACTS[0],
+  high: PROBLEM_IMPACTS[1],
+  low: PROBLEM_IMPACTS[2]
+};
+
+export const IMPACT_RANK: Record<ProblemImpact, number> = {
+  critical: 3,
+  high: 2,
+  low: 1
+};
+
+export const getProblemImpact = (problem: ProblemEntry): ProblemImpact => {
+  if (problem.impact) return problem.impact;
+  const sc = getProblemScale(problem);
+  if (sc === 'blocker') return 'critical';
+  if (sc === 'bottleneck') return 'high';
+  return 'low';
+};
+
+export const isProblemGuardrail = (problem: ProblemEntry): boolean =>
+  Boolean(problem.isGuardrail || problem.fixType === 'rule_guardrail');
+
+// A Root Problem (Constraint) vs an unprocessed Slip sitting in Inbox
+export const isRootProblem = (allProblems: ProblemEntry[], problem: ProblemEntry): boolean => {
+  if (hasExistingParent(allProblems, problem)) return false;
+  if (problem.isTopConstraint) return true;
+  if (getProblemScale(problem) !== 'friction') return true;
+  if (problem.status === 'testing' || problem.status === 'solved') return true;
+  if (problem.fixNote?.trim() || problem.rootCause?.trim() || problem.trigger?.trim()) return true;
+  if (isProblemGuardrail(problem)) return true;
+  if (getDirectChildren(allProblems, problem.id).length > 0) return true;
+  return false;
+};
+
+export const getEligibleRootTargets = (
+  allProblems: ProblemEntry[],
+  excludeId?: string
+): ProblemEntry[] => {
+  const descendants = excludeId
+    ? new Set(getDescendantProblems(allProblems, excludeId).map(d => d.id))
+    : new Set<string>();
+  return allProblems
+    .filter(p => {
+      if (excludeId && (p.id === excludeId || descendants.has(p.id))) return false;
+      if (p.status === 'solved') return false;
+      return isRootProblem(allProblems, p);
+    })
+    .sort((a, b) => {
+      if (Boolean(b.isTopConstraint) !== Boolean(a.isTopConstraint)) {
+        return b.isTopConstraint ? 1 : -1;
+      }
+      const impDiff = IMPACT_RANK[getProblemImpact(b)] - IMPACT_RANK[getProblemImpact(a)];
+      if (impDiff !== 0) return impDiff;
+      return getClusterTotalHits(allProblems, b) - getClusterTotalHits(allProblems, a);
+    });
+};
+
+export const daysBetweenDates = (startDate: string, endDate: string): number => {
+  const s = Date.parse(`${startDate.slice(0, 10)}T12:00:00Z`);
+  const e = Date.parse(`${endDate.slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(s) || Number.isNaN(e)) return 0;
+  return Math.max(0, Math.floor((e - s) / 86400000));
+};
+
+export interface FixVerificationProgress {
+  isTesting: boolean;
+  fixStartedAt?: string;
+  targetDays: number;
+  daysClean: number;
+  pct: number;
+  readyToVerify: boolean;
+}
+
+export const getFixVerificationProgress = (
+  problem: ProblemEntry,
+  todayDate: string,
+  defaultVerifyDays = 14
+): FixVerificationProgress => {
+  const targetDays = Math.max(1, problem.verifyDays || defaultVerifyDays || 14);
+  if (problem.status !== 'testing') {
+    return {
+      isTesting: false,
+      targetDays,
+      daysClean: 0,
+      pct: 0,
+      readyToVerify: false
+    };
+  }
+  const started = (problem.fixStartedAt || problem.updatedAt || problem.createdAt || todayDate).slice(0, 10);
+  const daysClean = daysBetweenDates(started, todayDate);
+  const pct = Math.min(100, Math.round((daysClean / targetDays) * 100));
+  return {
+    isTesting: true,
+    fixStartedAt: started,
+    targetDays,
+    daysClean,
+    pct,
+    readyToVerify: daysClean >= targetDays
+  };
+};
+
+export const computeProblemPriorityScore = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry
+): number => {
+  const impactWeight = IMPACT_RANK[getProblemImpact(problem)] * 100;
+  const topBonus = problem.isTopConstraint ? 1000 : 0;
+  const failedBonus = problem.lastFixFailedAt && problem.status === 'open' ? 50 : 0;
+  const hits = Math.min(40, getClusterTotalHits(allProblems, problem));
+  return topBonus + impactWeight + failedBonus + hits;
 };

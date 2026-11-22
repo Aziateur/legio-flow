@@ -1,38 +1,72 @@
 import React, { useMemo, useState } from 'react';
-import { ProblemCategory, ProblemEntry, ProblemScale } from '../../types/schema';
 import {
-  PROBLEM_CATEGORIES,
-  PROBLEM_SCALES,
-  SCALE_MAP,
-  SCALE_RANK,
+  CustomProblemCategory,
+  ProblemCategory,
+  ProblemColorKey,
+  ProblemEntry,
+  ProblemImpact
+} from '../../types/schema';
+import { INITIAL_PROBLEM_CATEGORIES } from '../../types/defaults';
+import {
+  IMPACT_META,
+  PROBLEM_COLOR_STYLES,
+  PROBLEM_IMPACTS,
   clusterHasTag,
+  computeProblemPriorityScore,
   getClusterTotalHits,
-  getEligibleParentProblems,
+  getFixVerificationProgress,
   getLastOccurrenceDate,
-  getProblemScale,
+  getProblemImpact,
   hasExistingParent,
+  isProblemGuardrail,
+  isRootProblem,
   normalizeTag,
+  resolveCategoryMeta,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
 import { ProblemItemRow } from './ProblemItemRow';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle2,
-  Layers,
+  Crosshair,
+  Filter,
+  Inbox,
   Map as MapIcon,
   Plus,
+  RotateCcw,
   Search,
   Shield,
-  Tag
+  Sliders,
+  Trash2,
+  X
 } from 'lucide-react';
 
-type LedgerStatusFilter = 'all' | 'open' | 'testing' | 'rules' | 'solved';
-type LedgerSort = 'triage' | 'frequency' | 'recent';
+type MainTabMode = 'constraints' | 'inbox' | 'solved';
+type SubStatusFilter = 'all' | 'open' | 'testing' | 'guardrails';
+type LedgerSort = 'priority' | 'frequency' | 'recent';
+
+const COLOR_KEYS: ProblemColorKey[] = [
+  'rose',
+  'sky',
+  'amber',
+  'emerald',
+  'violet',
+  'cyan',
+  'orange',
+  'slate'
+];
 
 export const ProblemsLedgerView: React.FC = () => {
   const {
+    todayDate,
     problems,
+    problemCategories,
+    saveProblemCategories,
+    problemSettings,
+    saveProblemSettings,
     strategyPlans,
     selectedDate,
     selectedWeekId,
@@ -41,21 +75,33 @@ export const ProblemsLedgerView: React.FC = () => {
     updateProblem
   } = useStorage();
 
-  const [statusFilter, setStatusFilter] = useState<LedgerStatusFilter>('all');
-  const [scaleFilter, setScaleFilter] = useState<'all' | ProblemScale>('all');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | ProblemCategory>('all');
-  const [tagFilter, setTagFilter] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<LedgerSort>('triage');
-  const [searchQuery, setSearchQuery] = useState('');
+  const maxTop = problemSettings.maxTopConstraints || 3;
+  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
+  const separateInbox = problemSettings.separateInboxTab !== false;
+  const showBreakdownBar = problemSettings.showBreakdownBar !== false;
 
-  // Progressive-disclosure quick-add state
-  const [composerOpen, setComposerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<MainTabMode>('constraints');
+  const [subStatus, setSubStatus] = useState<SubStatusFilter>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [tagFilter, setTagFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<LedgerSort>('priority');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [showCustomize, setShowCustomize] = useState(false);
+
+  // Clean 1-line quick capture
   const [quickTitle, setQuickTitle] = useState('');
-  const [quickScale, setQuickScale] = useState<ProblemScale>('bottleneck');
-  const [quickCategory, setQuickCategory] = useState<ProblemCategory>('mindset');
-  const [quickParentId, setQuickParentId] = useState<string>('');
-  const [quickTags, setQuickTags] = useState<string[]>([]);
-  const [quickTagInput, setQuickTagInput] = useState('');
+  const [quickKind, setQuickKind] = useState<'constraint' | 'slip'>('constraint');
+  const [quickImpact, setQuickImpact] = useState<ProblemImpact>('high');
+  const [quickCategory, setQuickCategory] = useState<ProblemCategory>(
+    problemCategories[0]?.id || 'mindset'
+  );
+  const [composerExpanded, setComposerExpanded] = useState(false);
+
+  // Customize Categories form
+  const [newCatLabel, setNewCatLabel] = useState('');
+  const [newCatHint, setNewCatHint] = useState('');
+  const [newCatColor, setNewCatColor] = useState<ProblemColorKey>('cyan');
 
   const roadmapTitles = useMemo(
     () => strategyPlans.map(p => p.title.trim()).filter(Boolean),
@@ -81,86 +127,101 @@ export const ProblemsLedgerView: React.FC = () => {
     [problems]
   );
 
-  const eligibleParents = useMemo(
-    () => getEligibleParentProblems(problems, quickScale).filter(p => p.status !== 'solved'),
-    [problems, quickScale]
+  // Top Constraints Spotlight (pinned active constraints, up to maxTop)
+  const topConstraints = useMemo(
+    () =>
+      topLevelProblems
+        .filter(p => p.isTopConstraint && p.status !== 'solved')
+        .sort((a, b) => computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a)),
+    [topLevelProblems, problems]
   );
 
-  const stats = useMemo(() => {
-    const open = topLevelProblems.filter(p => p.status === 'open').length;
-    const testing = topLevelProblems.filter(p => p.status === 'testing').length;
-    const rules = topLevelProblems.filter(
-      p => p.fixType === 'rule_guardrail' && p.status !== 'solved'
-    ).length;
-    const solved = topLevelProblems.filter(p => p.status === 'solved').length;
-    const totalOccurrences = problems.reduce(
-      (sum, p) => sum + Math.max(1, p.occurrences?.length || 1),
-      0
-    );
+  // Unpinned active root problems available to pin directly from an empty Top 3 slot
+  const pinnableCandidates = useMemo(
+    () =>
+      topLevelProblems
+        .filter(p => !p.isTopConstraint && p.status !== 'solved')
+        .sort((a, b) => computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a)),
+    [topLevelProblems, problems]
+  );
 
-    const byScale: Record<ProblemScale, number> = {
-      blocker: 0,
-      bottleneck: 0,
-      friction: 0
-    };
-    problems.forEach(p => {
-      byScale[getProblemScale(p)] += 1;
-    });
+  // Partition into 3 clean buckets: Active Constraints | Inbox Slips | Solved
+  const buckets = useMemo(() => {
+    const constraints: ProblemEntry[] = [];
+    const inbox: ProblemEntry[] = [];
+    const solved: ProblemEntry[] = [];
 
-    const byCategory: Record<ProblemCategory, number> = {
-      mindset: 0,
-      skill: 0,
-      logistics: 0,
-      energy: 0,
-      strategy: 0
-    };
-    problems.forEach(p => {
-      const weight = Math.max(1, p.occurrences?.length || 1);
-      if (byCategory[p.category] !== undefined) {
-        byCategory[p.category] += weight;
+    topLevelProblems.forEach(p => {
+      if (p.status === 'solved') {
+        solved.push(p);
+      } else if (separateInbox && !isRootProblem(problems, p)) {
+        inbox.push(p);
+      } else {
+        constraints.push(p);
       }
     });
 
-    return { open, testing, rules, solved, totalOccurrences, byCategory, byScale };
-  }, [problems, topLevelProblems]);
+    return { constraints, inbox, solved };
+  }, [topLevelProblems, problems, separateInbox]);
 
-  // Flat view only when explicitly filtering by a specific child scale or searching text
-  const useFlatPool = scaleFilter === 'friction' || searchQuery.trim().length > 0;
+  // Root-cause breakdown weighted by recurrence across active problems
+  const breakdown = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let total = 0;
+    problems
+      .filter(p => p.status !== 'solved')
+      .forEach(p => {
+        const w = Math.max(1, p.occurrences?.length || 1);
+        counts[p.category] = (counts[p.category] || 0) + w;
+        total += w;
+      });
+    return { counts, total };
+  }, [problems]);
 
-  const filtered = useMemo<ProblemEntry[]>(() => {
+  // Ready-to-verify & failed-fix counters
+  const alertCounts = useMemo(() => {
+    let failed = 0;
+    let ready = 0;
+    buckets.constraints.forEach(p => {
+      if (p.lastFixFailedAt && p.status === 'open') failed++;
+      const v = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
+      if (v.readyToVerify) ready++;
+    });
+    return { failed, ready };
+  }, [buckets.constraints, todayDate, defaultVerifyDays]);
+
+  const effectiveTab: MainTabMode =
+    !separateInbox && activeTab === 'inbox' ? 'constraints' : activeTab;
+
+  const displayedList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const basePool = useFlatPool ? problems : topLevelProblems;
+    const pool =
+      q.length > 0
+        ? problems.filter(p => (effectiveTab === 'solved' ? p.status === 'solved' : p.status !== 'solved'))
+        : effectiveTab === 'constraints'
+        ? buckets.constraints
+        : effectiveTab === 'inbox'
+        ? buckets.inbox
+        : buckets.solved;
 
-    const list = basePool.filter(p => {
-      if (statusFilter === 'open' && p.status !== 'open') return false;
-      if (statusFilter === 'testing' && p.status !== 'testing') return false;
-      if (
-        statusFilter === 'rules' &&
-        !(p.fixType === 'rule_guardrail' && p.status !== 'solved')
-      ) {
-        return false;
+    const list = pool.filter(p => {
+      if (effectiveTab === 'constraints') {
+        if (subStatus === 'open' && p.status !== 'open') return false;
+        if (subStatus === 'testing' && p.status !== 'testing') return false;
+        if (subStatus === 'guardrails' && !isProblemGuardrail(p)) return false;
       }
-      if (statusFilter === 'solved' && p.status !== 'solved') return false;
-      if (scaleFilter !== 'all' && getProblemScale(p) !== scaleFilter) return false;
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
-      if (tagFilter !== 'all') {
-        if (useFlatPool) {
-          if (!(p.tags || []).some(t => tagsMatch(t, tagFilter))) return false;
-        } else if (!clusterHasTag(problems, p, tagFilter)) {
-          return false;
-        }
-      }
+      if (tagFilter !== 'all' && !clusterHasTag(problems, p, tagFilter)) return false;
       if (q) {
-        const matchTitle = p.title.toLowerCase().includes(q);
-        const matchFix = (p.fixNote || '').toLowerCase().includes(q);
-        const matchTag = (p.tags || []).some(t => t.toLowerCase().includes(q));
-        if (!matchTitle && !matchFix && !matchTag) return false;
+        const hitTitle = p.title.toLowerCase().includes(q);
+        const hitFix = (p.fixNote || '').toLowerCase().includes(q);
+        const hitCause = (p.rootCause || '').toLowerCase().includes(q);
+        const hitTrigger = (p.trigger || '').toLowerCase().includes(q);
+        const hitTag = (p.tags || []).some(t => t.toLowerCase().includes(q));
+        if (!hitTitle && !hitFix && !hitCause && !hitTrigger && !hitTag) return false;
       }
       return true;
     });
-
-    const statusWeight = (s: ProblemEntry['status']) =>
-      s === 'open' ? 0 : s === 'testing' ? 1 : 2;
 
     return [...list].sort((a, b) => {
       if (sortBy === 'frequency') {
@@ -171,46 +232,23 @@ export const ProblemsLedgerView: React.FC = () => {
       if (sortBy === 'recent') {
         return (b.updatedAt || '').localeCompare(a.updatedAt || '');
       }
-      const sw = statusWeight(a.status) - statusWeight(b.status);
-      if (sw !== 0) return sw;
-      const scDiff = SCALE_RANK[getProblemScale(b)] - SCALE_RANK[getProblemScale(a)];
-      if (scDiff !== 0) return scDiff;
-      const diff = getClusterTotalHits(problems, b) - getClusterTotalHits(problems, a);
-      if (diff !== 0) return diff;
+      const pDiff = computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a);
+      if (pDiff !== 0) return pDiff;
       return getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a));
     });
   }, [
     problems,
-    topLevelProblems,
-    useFlatPool,
-    statusFilter,
-    scaleFilter,
+    buckets,
+    effectiveTab,
+    subStatus,
     categoryFilter,
     tagFilter,
-    sortBy,
-    searchQuery
+    searchQuery,
+    sortBy
   ]);
 
-  const handleToggleQuickTag = (tag: string) => {
-    const clean = normalizeTag(tag);
-    if (!clean) return;
-    if (quickTags.some(t => tagsMatch(t, clean))) {
-      setQuickTags(quickTags.filter(t => !tagsMatch(t, clean)));
-    } else {
-      setQuickTags([...quickTags, clean]);
-    }
-  };
-
-  const handleAddQuickCustomTag = () => {
-    const clean = normalizeTag(quickTagInput);
-    if (!clean) return;
-    if (!quickTags.some(t => tagsMatch(t, clean))) {
-      setQuickTags([...quickTags, clean]);
-    }
-    setQuickTagInput('');
-  };
-
-  const handleQuickLog = () => {
+  const handleQuickLog = (e: React.FormEvent) => {
+    e.preventDefault();
     const trimmed = quickTitle.trim();
     if (!trimmed) return;
     const existing = problems.find(
@@ -219,509 +257,889 @@ export const ProblemsLedgerView: React.FC = () => {
     if (existing) {
       recordProblemRecurrence(existing.id, {
         date: selectedDate,
-        sourceType: quickScale === 'blocker' ? 'monthly' : quickScale === 'bottleneck' ? 'weekly' : 'daily',
+        sourceType: quickKind === 'constraint' ? 'weekly' : 'daily',
         sourceRef: selectedDate
       });
-      if (quickTags.length > 0) {
-        updateProblem(existing.id, {
-          tags: Array.from(new Set([...existing.tags, ...quickTags]))
-        });
-      }
     } else {
       addProblem({
         title: trimmed,
-        category: quickCategory,
-        scale: quickScale,
-        ...(quickParentId ? { parentProblemId: quickParentId } : {}),
-        tags: quickTags,
-        sourceType: quickScale === 'blocker' ? 'monthly' : quickScale === 'bottleneck' ? 'weekly' : 'daily',
+        category: quickCategory || problemCategories[0]?.id || 'mindset',
+        scale:
+          quickKind === 'slip'
+            ? 'friction'
+            : quickImpact === 'critical'
+            ? 'blocker'
+            : 'bottleneck',
+        impact: quickKind === 'slip' ? 'low' : quickImpact,
+        sourceType: quickKind === 'constraint' ? 'weekly' : 'daily',
         date: selectedDate,
         sourceRef: selectedDate
       });
     }
     setQuickTitle('');
-    setQuickParentId('');
-    setQuickTags([]);
-    setComposerOpen(false);
+    setComposerExpanded(false);
   };
 
-  const showOptions = composerOpen || quickTitle.trim().length > 0;
+  // Custom Category CRUD
+  const handleAddCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    const label = newCatLabel.trim();
+    if (!label) return;
+    const id = `cat_${label.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${Date.now().toString(36).slice(-3)}`;
+    const next: CustomProblemCategory = {
+      id,
+      label,
+      hint: newCatHint.trim(),
+      color: newCatColor
+    };
+    saveProblemCategories([...problemCategories, next]);
+    setNewCatLabel('');
+    setNewCatHint('');
+  };
+
+  const handleMoveCategory = (idx: number, delta: -1 | 1) => {
+    const target = idx + delta;
+    if (target < 0 || target >= problemCategories.length) return;
+    const next = [...problemCategories];
+    const [moved] = next.splice(idx, 1);
+    next.splice(target, 0, moved);
+    saveProblemCategories(next);
+  };
+
+  const activeFilterCount =
+    (categoryFilter !== 'all' ? 1 : 0) +
+    (tagFilter !== 'all' ? 1 : 0) +
+    (searchQuery.trim() ? 1 : 0);
 
   return (
-    <div className="space-y-6">
-      {/* Top KPI + Root-Cause Breakdown Card */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <button
-            type="button"
-            onClick={() => setStatusFilter('open')}
-            className={`text-left p-3.5 rounded-2xl border transition-all ${
-              statusFilter === 'open'
-                ? 'bg-orange-500/15 border-orange-500/45'
-                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-            }`}
-          >
-            <div className="text-[10px] font-extrabold uppercase tracking-wider text-orange-400">
-              Open
-            </div>
-            <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
-              {stats.open}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('testing')}
-            className={`text-left p-3.5 rounded-2xl border transition-all ${
-              statusFilter === 'testing'
-                ? 'bg-sky-500/15 border-sky-500/45'
-                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-            }`}
-          >
-            <div className="text-[10px] font-extrabold uppercase tracking-wider text-sky-400">
-              Testing Fix
-            </div>
-            <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
-              {stats.testing}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('rules')}
-            className={`text-left p-3.5 rounded-2xl border transition-all ${
-              statusFilter === 'rules'
-                ? 'bg-rose-500/15 border-rose-500/45'
-                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-            }`}
-          >
-            <div className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400 flex items-center space-x-1">
-              <Shield className="w-3 h-3" />
-              <span>Active Rules</span>
-            </div>
-            <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
-              {stats.rules}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('solved')}
-            className={`text-left p-3.5 rounded-2xl border transition-all ${
-              statusFilter === 'solved'
-                ? 'bg-emerald-500/15 border-emerald-500/45'
-                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-            }`}
-          >
-            <div className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1">
-              <CheckCircle2 className="w-3 h-3" />
-              <span>Verified Solved</span>
-            </div>
-            <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
-              {stats.solved}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('all')}
-            className={`col-span-2 sm:col-span-1 text-left p-3.5 rounded-2xl border transition-all ${
-              statusFilter === 'all'
-                ? 'bg-amber-500/15 border-amber-500/45'
-                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-            }`}
-          >
-            <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-              Total Hits
-            </div>
-            <div className="text-2xl font-mono font-extrabold text-slate-100 mt-0.5">
-              {stats.totalOccurrences}
-            </div>
-          </button>
-        </div>
-
-        {/* Visual Root-Cause Breakdown Bar */}
-        <div className="space-y-2.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-extrabold uppercase tracking-wider text-slate-400 text-[11px]">
-              Root-Cause Breakdown (Weighted by Recurrence)
+    <div className="w-full max-w-[1280px] mx-auto space-y-6">
+      {/* ================================================================ */}
+      {/* 1. TOP 3 CONSTRAINTS SPOTLIGHT (Mirrors Top 3 Focuses in Plans)  */}
+      {/* ================================================================ */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 flex items-center space-x-1.5">
+              <Crosshair className="w-3.5 h-3.5" />
+              <span>Theory of Constraints · Active Attack Focus</span>
             </span>
-            {categoryFilter !== 'all' && (
-              <button
-                type="button"
-                onClick={() => setCategoryFilter('all')}
-                className="text-[11px] font-bold text-amber-400 hover:text-amber-300"
-              >
-                Clear category filter
-              </button>
-            )}
+            <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+              Top {maxTop} Constraints ({topConstraints.length}/{maxTop})
+            </h2>
           </div>
 
-          {stats.totalOccurrences > 0 ? (
-            <>
-              <div className="h-3 w-full rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex">
-                {PROBLEM_CATEGORIES.map(c => {
-                  const count = stats.byCategory[c.id];
-                  if (count === 0) return null;
-                  const pct = (count / stats.totalOccurrences) * 100;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() =>
-                        setCategoryFilter(prev => (prev === c.id ? 'all' : c.id))
-                      }
-                      style={{ width: `${pct}%` }}
-                      className={`${c.barClass} h-full transition-opacity ${
-                        categoryFilter !== 'all' && categoryFilter !== c.id
-                          ? 'opacity-30'
-                          : 'opacity-90 hover:opacity-100'
-                      }`}
-                      title={`${c.label}: ${count} hit(s) (${Math.round(pct)}%)`}
-                    />
-                  );
-                })}
-              </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+            {alertCounts.failed > 0 && (
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35">
+                <AlertTriangle className="w-3 h-3" />
+                <span>{alertCounts.failed} fix failed</span>
+              </span>
+            )}
+            {alertCounts.ready > 0 && (
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/35">
+                <CheckCircle2 className="w-3 h-3" />
+                <span>{alertCounts.ready} ready to verify solved</span>
+              </span>
+            )}
+          </div>
+        </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {PROBLEM_CATEGORIES.map(c => {
-                  const count = stats.byCategory[c.id];
-                  const pct =
-                    stats.totalOccurrences > 0
-                      ? Math.round((count / stats.totalOccurrences) * 100)
-                      : 0;
-                  const active = categoryFilter === c.id;
-                  return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+          {Array.from({ length: maxTop }).map((_, slotIdx) => {
+            const prob = topConstraints[slotIdx];
+            if (!prob) {
+              return (
+                <div
+                  key={`slot_${slotIdx}`}
+                  className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col justify-between space-y-3 min-h-[132px]"
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="w-6 h-6 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center font-mono text-xs font-extrabold text-slate-500">
+                      #{slotIdx + 1}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500">
+                      Open Constraint Slot
+                    </span>
+                  </div>
+
+                  {pinnableCandidates.length > 0 ? (
+                    <select
+                      value=""
+                      onChange={e => {
+                        if (e.target.value) {
+                          updateProblem(e.target.value, {
+                            isTopConstraint: true,
+                            scale: 'bottleneck'
+                          });
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 hover:border-rose-500/40 rounded-xl px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none"
+                    >
+                      <option value="">+ Pin a constraint here...</option>
+                      {pinnableCandidates.map(c => (
+                        <option key={c.id} value={c.id}>
+                          [{IMPACT_META[getProblemImpact(c)].shortLabel}] {c.title}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-[11px] text-slate-600">
+                      Log a constraint below and click the crosshair icon to pin it here.
+                    </p>
+                  )}
+                </div>
+              );
+            }
+
+            const imp = IMPACT_META[getProblemImpact(prob)];
+            const cat = resolveCategoryMeta(prob.category, problemCategories);
+            const hits = getClusterTotalHits(problems, prob);
+            const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
+            const failed = Boolean(prob.lastFixFailedAt && prob.status === 'open');
+
+            return (
+              <div
+                key={prob.id}
+                className={`p-4 rounded-2xl bg-slate-950 border flex flex-col justify-between space-y-3 ${
+                  failed
+                    ? 'border-rose-500/45'
+                    : ver.readyToVerify
+                    ? 'border-emerald-500/45'
+                    : 'border-slate-800'
+                }`}
+              >
+                <div className="space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-6 h-6 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 flex items-center justify-center font-mono text-xs font-extrabold shrink-0">
+                        #{slotIdx + 1}
+                      </span>
+                      <span className={`w-2 h-2 rounded-full ${imp.dotClass}`} title={imp.label} />
+                      <span className="text-[11px] font-bold text-slate-400">{cat.shortLabel}</span>
+                      {hits > 1 && (
+                        <span className="font-mono text-[10px] font-bold text-orange-300">×{hits}</span>
+                      )}
+                    </div>
                     <button
-                      key={c.id}
+                      type="button"
+                      onClick={() => updateProblem(prob.id, { isTopConstraint: false })}
+                      className="p-1 text-slate-600 hover:text-slate-300"
+                      title="Unpin from Top Constraints"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <p className="text-xs sm:text-sm font-bold text-slate-100 leading-snug">
+                    {prob.title}
+                  </p>
+
+                  {prob.fixNote?.trim() ? (
+                    <p className="text-[11px] text-slate-300 leading-snug">
+                      {prob.trigger?.trim() && (
+                        <span className="text-slate-400">
+                          <strong className="text-amber-400">IF</strong> {prob.trigger.trim()}{' '}
+                          <strong className="text-emerald-400">→</strong>{' '}
+                        </span>
+                      )}
+                      {prob.fixNote.trim()}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 italic">
+                      No countermeasure set yet — open below to diagnose &amp; install fix.
+                    </p>
+                  )}
+                </div>
+
+                {/* Experiment Status Bar + Quick Verify / +1 */}
+                <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                  {failed && (
+                    <div className="text-[10px] font-bold text-rose-300 flex items-center space-x-1">
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      <span>Fix failed on {prob.lastFixFailedAt} — needs stronger fix</span>
+                    </div>
+                  )}
+
+                  {ver.isTesting && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <span className={ver.readyToVerify ? 'text-emerald-300 font-bold' : 'text-sky-300'}>
+                          {ver.readyToVerify ? '✓ Ready to verify solved' : `Testing · ${ver.daysClean}/${ver.targetDays}d clean`}
+                        </span>
+                        <span className="text-slate-500">{ver.pct}%</span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${ver.readyToVerify ? 'bg-emerald-400' : 'bg-sky-400'}`}
+                          style={{ width: `${ver.pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-2">
+                    <button
                       type="button"
                       onClick={() =>
-                        setCategoryFilter(prev => (prev === c.id ? 'all' : c.id))
+                        recordProblemRecurrence(prob.id, {
+                          date: selectedDate,
+                          sourceType: 'daily',
+                          sourceRef: selectedDate
+                        })
                       }
-                      className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-all ${
-                        active
-                          ? c.activeChipClass
-                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 text-orange-300 border border-slate-800 hover:border-orange-500/40 text-[10px] font-extrabold transition-colors"
+                    >
+                      +1 Fired
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => updateProblem(prob.id, { status: 'solved' })}
+                      className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-colors ${
+                        ver.readyToVerify
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                          : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800 hover:border-emerald-500/35'
                       }`}
                     >
-                      <span className={`w-2 h-2 rounded-full ${active ? 'bg-slate-950' : c.dotClass}`} />
-                      <span>{c.shortLabel}</span>
-                      <span className="font-mono opacity-80">{pct}%</span>
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Verify Solved</span>
                     </button>
-                  );
-                })}
+                  </div>
+                </div>
               </div>
-            </>
-          ) : (
-            <div className="text-xs text-slate-500">
-              Log problems in any review (or below) to reveal your primary bottleneck category.
-            </div>
-          )}
+            );
+          })}
         </div>
       </div>
 
-      {/* 1-Line Progressive-Disclosure Quick Log Strip */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl space-y-3">
-        <div className="flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
-          <input
-            type="text"
-            value={quickTitle}
-            onFocus={() => setComposerOpen(true)}
-            onChange={e => setQuickTitle(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleQuickLog();
-              }
-            }}
-            placeholder="Log a new Blocker, Bottleneck, or Friction (Enter to add)..."
-            className="flex-1 bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl px-4 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleQuickLog}
-            disabled={!quickTitle.trim()}
-            className="flex items-center space-x-1 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Log</span>
-          </button>
-        </div>
+      {/* ================================================================ */}
+      {/* 2. CLEAN WORKSPACE: 1-LINE CAPTURE + 3 TABS + OPTIONAL DRAWERS   */}
+      {/* ================================================================ */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+        {/* Clean 1-Line Quick Capture */}
+        <form onSubmit={handleQuickLog} className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={quickTitle}
+              onFocus={() => setComposerExpanded(true)}
+              onChange={e => setQuickTitle(e.target.value)}
+              placeholder="Capture a constraint or quick slip (press Enter)..."
+              className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!quickTitle.trim()}
+              className="inline-flex items-center space-x-1 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Log</span>
+            </button>
+          </div>
 
-        {showOptions && (
-          <div className="space-y-2.5 pt-2 border-t border-slate-800/70">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Scale:
-                </span>
-                {PROBLEM_SCALES.map(sc => (
+          {(composerExpanded || quickTitle.trim().length > 0) && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800">
                   <button
-                    key={sc.id}
                     type="button"
-                    onClick={() => {
-                      setQuickScale(sc.id);
-                      setQuickParentId('');
-                    }}
-                    title={sc.hint}
-                    className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-extrabold transition-all ${
-                      quickScale === sc.id
-                        ? sc.activeChipClass
-                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    onClick={() => setQuickKind('constraint')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      quickKind === 'constraint'
+                        ? 'bg-amber-500/20 text-amber-300'
+                        : 'text-slate-500 hover:text-slate-300'
                     }`}
                   >
-                    {sc.shortLabel}
+                    Root Constraint
                   </button>
-                ))}
-              </div>
-              {!quickTitle.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setComposerOpen(false)}
-                  className="text-[10px] font-bold text-slate-500 hover:text-slate-300"
-                >
-                  Collapse
-                </button>
-              )}
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => setQuickKind('slip')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      quickKind === 'slip'
+                        ? 'bg-slate-800 text-slate-100'
+                        : 'text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    Quick Slip (Inbox)
+                  </button>
+                </div>
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Category:
-              </span>
-              {PROBLEM_CATEGORIES.map(c => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setQuickCategory(c.id)}
-                  className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-bold transition-all ${
-                    quickCategory === c.id
-                      ? c.activeChipClass
-                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                  }`}
-                >
-                  {c.shortLabel}
-                </button>
-              ))}
-            </div>
+                {quickKind === 'constraint' && (
+                  <div className="flex items-center gap-1">
+                    {PROBLEM_IMPACTS.map(im => (
+                      <button
+                        key={im.id}
+                        type="button"
+                        onClick={() => setQuickImpact(im.id)}
+                        className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
+                          quickImpact === im.id
+                            ? im.activeChipClass
+                            : 'bg-slate-950 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        {im.shortLabel}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-            {eligibleParents.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-amber-400">
-                  <Layers className="w-3 h-3" />
-                  <span>Group under:</span>
-                </span>
                 <select
-                  value={quickParentId}
-                  onChange={e => setQuickParentId(e.target.value)}
-                  className="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-2.5 py-1 text-xs text-slate-200 focus:outline-none"
+                  value={quickCategory}
+                  onChange={e => setQuickCategory(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-300 focus:outline-none"
                 >
-                  <option value="">Standalone {SCALE_MAP[quickScale].shortLabel}</option>
-                  {eligibleParents.map(ep => (
-                    <option key={ep.id} value={ep.id}>
-                      ↳ [{SCALE_MAP[getProblemScale(ep)].shortLabel}] {ep.title}
+                  {problemCategories.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
                     </option>
                   ))}
                 </select>
               </div>
-            )}
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                <Tag className="w-3 h-3" />
-                <span>Tie to Plan / Tag:</span>
-              </span>
-              {roadmapTitles.map(rt => {
-                const active = quickTags.some(t => tagsMatch(t, rt));
-                return (
-                  <button
-                    key={rt}
-                    type="button"
-                    onClick={() => handleToggleQuickTag(rt)}
-                    className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full border text-[11px] font-bold transition-all ${
-                      active
-                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
-                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    <MapIcon className="w-3 h-3" />
-                    <span>{rt}</span>
-                  </button>
-                );
-              })}
-              {quickTags
-                .filter(t => !roadmapTitles.some(rt => tagsMatch(rt, t)))
-                .map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => handleToggleQuickTag(t)}
-                    className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-100 border border-slate-600 text-[11px] font-bold"
-                  >
-                    #{t} ×
-                  </button>
-                ))}
-              <input
-                type="text"
-                value={quickTagInput}
-                onChange={e => setQuickTagInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ',') {
-                    e.preventDefault();
-                    handleAddQuickCustomTag();
-                  }
-                }}
-                placeholder="+ tag"
-                className="bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-full px-2.5 py-0.5 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none w-20"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Filters + Search + Clustered Problem List */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          {/* Status + Scale Pills */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
-              {(
-                [
-                  { id: 'all', label: `All (${topLevelProblems.length})` },
-                  { id: 'open', label: `Open (${stats.open})` },
-                  { id: 'testing', label: `Testing (${stats.testing})` },
-                  { id: 'rules', label: `Rules (${stats.rules})` },
-                  { id: 'solved', label: `Solved (${stats.solved})` }
-                ] as const
-              ).map(tab => (
+              {!quickTitle.trim() && (
                 <button
-                  key={tab.id}
                   type="button"
-                  onClick={() => setStatusFilter(tab.id)}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    statusFilter === tab.id
-                      ? 'bg-amber-500 text-slate-950'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
+                  onClick={() => setComposerExpanded(false)}
+                  className="text-slate-500 hover:text-slate-300 font-bold"
                 >
-                  {tab.label}
+                  Hide options
                 </button>
-              ))}
+              )}
             </div>
+          )}
+        </form>
 
-            <div className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+        {/* SINGLE CLEAN TAB BAR + FILTERS & CUSTOMIZE TOGGLES */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t border-slate-800/80">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
               <button
                 type="button"
-                onClick={() => setScaleFilter('all')}
-                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  scaleFilter === 'all'
-                    ? 'bg-slate-800 text-slate-100'
+                onClick={() => setActiveTab('constraints')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  effectiveTab === 'constraints'
+                    ? 'bg-amber-500 text-slate-950'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                All Scales
+                Active Constraints ({buckets.constraints.length})
               </button>
-              {(['blocker', 'bottleneck', 'friction'] as ProblemScale[]).map(sc => (
+
+              {separateInbox && (
                 <button
-                  key={sc}
                   type="button"
-                  onClick={() => setScaleFilter(sc)}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    scaleFilter === sc
-                      ? SCALE_MAP[sc].activeChipClass
+                  onClick={() => setActiveTab('inbox')}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    effectiveTab === 'inbox'
+                      ? 'bg-slate-200 text-slate-950'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {SCALE_MAP[sc].shortLabel} ({stats.byScale[sc]})
+                  <Inbox className="w-3.5 h-3.5" />
+                  <span>Inbox / Slips ({buckets.inbox.length})</span>
                 </button>
-              ))}
+              )}
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('solved')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  effectiveTab === 'solved'
+                    ? 'bg-emerald-500 text-slate-950'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Solved ({buckets.solved.length})
+              </button>
             </div>
+
+            {effectiveTab === 'constraints' && (
+              <div className="flex items-center gap-1 text-[11px]">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'open', label: 'Needs Fix' },
+                    { id: 'testing', label: 'Testing' },
+                    { id: 'guardrails', label: 'Guardrails' }
+                  ] as const
+                ).map(st => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setSubStatus(st.id)}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+                      subStatus === st.id
+                        ? 'bg-slate-800 text-slate-100'
+                        : 'text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Search + Sort */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 sm:w-52">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search problems, fixes, tags..."
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
-              />
-            </div>
-
-            <select
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value as LedgerSort)}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none focus:border-amber-500/50"
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowFilters(v => !v)}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
+                showFilters || activeFilterCount > 0
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
             >
-              <option value="triage">Sort: Scale & Priority</option>
-              <option value="frequency">Sort: Most Frequent (×N)</option>
-              <option value="recent">Sort: Most Recent</option>
-            </select>
+              <Filter className="w-3.5 h-3.5" />
+              <span>Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowCustomize(v => !v)}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
+                showCustomize
+                  ? 'bg-slate-100 text-slate-950 border-slate-100'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-700'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Customize</span>
+            </button>
           </div>
         </div>
 
-        {/* Plan / Tag Filter Strip */}
-        {allTags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/70">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-              Plan / Tag:
-            </span>
-            <button
-              type="button"
-              onClick={() => setTagFilter('all')}
-              className={`px-2.5 py-0.5 rounded-full border text-[11px] font-bold ${
-                tagFilter === 'all'
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
-                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-              }`}
-            >
-              All
-            </button>
-            {allTags.map(t => {
-              const isPlan = roadmapTitles.some(rt => tagsMatch(rt, t));
-              const active = tagsMatch(tagFilter, t);
-              return (
+        {/* SLIM ROOT-CAUSE BREAKDOWN BAR (Optional, clickable to filter) */}
+        {showBreakdownBar && breakdown.total > 0 && (
+          <div className="space-y-2">
+            <div className="h-2 w-full rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex">
+              {problemCategories.map(c => {
+                const count = breakdown.counts[c.id] || 0;
+                if (count === 0) return null;
+                const pct = (count / breakdown.total) * 100;
+                const style = PROBLEM_COLOR_STYLES[c.color] || PROBLEM_COLOR_STYLES.slate;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setCategoryFilter(prev => (prev === c.id ? 'all' : c.id))}
+                    style={{ width: `${pct}%` }}
+                    className={`${style.barClass} h-full transition-opacity ${
+                      categoryFilter !== 'all' && categoryFilter !== c.id ? 'opacity-25' : 'opacity-90'
+                    }`}
+                    title={`${c.label}: ${Math.round(pct)}% (${count} hits)`}
+                  />
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              {problemCategories.map(c => {
+                const count = breakdown.counts[c.id] || 0;
+                if (count === 0) return null;
+                const pct = Math.round((count / breakdown.total) * 100);
+                const meta = resolveCategoryMeta(c.id, problemCategories);
+                const active = categoryFilter === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setCategoryFilter(prev => (prev === c.id ? 'all' : c.id))}
+                    className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-lg border font-bold transition-all ${
+                      active
+                        ? meta.activeChipClass
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-slate-950' : meta.dotClass}`} />
+                    <span>{c.label}</span>
+                    <span className="font-mono opacity-80">{pct}%</span>
+                  </button>
+                );
+              })}
+              {categoryFilter !== 'all' && (
                 <button
-                  key={t}
                   type="button"
-                  onClick={() => setTagFilter(active ? 'all' : t)}
-                  className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full border text-[11px] font-bold transition-all ${
-                    active
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
-                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                  }`}
+                  onClick={() => setCategoryFilter('all')}
+                  className="text-amber-400 hover:text-amber-300 font-bold"
                 >
-                  {isPlan ? <MapIcon className="w-2.5 h-2.5" /> : <span>#</span>}
-                  <span>{t}</span>
+                  Clear
                 </button>
-              );
-            })}
+              )}
+            </div>
           </div>
         )}
 
-        {/* Problem Cards */}
-        {filtered.length === 0 ? (
+        {/* COLLAPSIBLE FILTERS BAR */}
+        {showFilters && (
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search titles, root causes, triggers, fixes, tags..."
+                  className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/40 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
+              </div>
+
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value as LedgerSort)}
+                className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none"
+              >
+                <option value="priority">Sort: Impact &amp; Priority</option>
+                <option value="frequency">Sort: Most Frequent (×N)</option>
+                <option value="recent">Sort: Most Recent</option>
+              </select>
+
+              {activeFilterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCategoryFilter('all');
+                    setTagFilter('all');
+                    setSearchQuery('');
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+
+            {allTags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                  Roadmap / Tag:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTagFilter('all')}
+                  className={`px-2 py-0.5 rounded-full border text-[11px] font-bold ${
+                    tagFilter === 'all'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                      : 'bg-slate-900 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  All
+                </button>
+                {allTags.map(t => {
+                  const isPlan = roadmapTitles.some(rt => tagsMatch(rt, t));
+                  const active = tagsMatch(tagFilter, t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTagFilter(active ? 'all' : t)}
+                      className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full border text-[11px] font-bold ${
+                        active
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {isPlan ? <MapIcon className="w-2.5 h-2.5" /> : <span>#</span>}
+                      <span>{t}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* COLLAPSIBLE CUSTOMIZE PANEL (Custom Categories + Settings — Cloud Synced!) */}
+        {showCustomize && (
+          <div className="p-5 rounded-2xl bg-slate-950 border border-slate-700 space-y-5 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <div className="font-extrabold text-sm text-slate-100">Customize Problem Log</div>
+                <p className="text-[11px] text-slate-400">
+                  Tailor your categories, Top Constraints limit, verification window, and pre-flight guardrail strips.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCustomize(false)}
+                className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"
+              >
+                Done
+              </button>
+            </div>
+
+            {/* Behavior & View Settings */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-300">Max Top Constraints</span>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => saveProblemSettings({ ...problemSettings, maxTopConstraints: n })}
+                        className={`w-7 py-1 rounded-lg font-mono font-bold border ${
+                          maxTop === n
+                            ? 'bg-rose-500 text-slate-950 border-rose-400'
+                            : 'bg-slate-900 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-300">Default Verification Window</span>
+                  <div className="flex items-center gap-1">
+                    {[7, 14, 30].map(d => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => saveProblemSettings({ ...problemSettings, defaultVerifyDays: d })}
+                        className={`px-2.5 py-1 rounded-lg font-mono font-bold border ${
+                          defaultVerifyDays === d
+                            ? 'bg-sky-500 text-slate-950 border-sky-400'
+                            : 'bg-slate-900 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        {d}d
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {[
+                  {
+                    key: 'showBreakdownBar' as const,
+                    label: 'Show Root-Cause Breakdown bar',
+                    val: showBreakdownBar
+                  },
+                  {
+                    key: 'separateInboxTab' as const,
+                    label: 'Separate Inbox / Slips tab from Active Constraints',
+                    val: separateInbox
+                  },
+                  {
+                    key: 'showPreFlightInDaily' as const,
+                    label: 'Show Pre-Flight Guardrails strip in Daily Plan',
+                    val: problemSettings.showPreFlightInDaily !== false
+                  },
+                  {
+                    key: 'showPreFlightInGws' as const,
+                    label: 'Show Pre-Flight Guardrails strip in GWS Studio',
+                    val: problemSettings.showPreFlightInGws !== false
+                  }
+                ].map(toggle => (
+                  <label
+                    key={toggle.key}
+                    className="flex items-center space-x-2.5 cursor-pointer text-slate-300"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={toggle.val}
+                      onChange={e =>
+                        saveProblemSettings({ ...problemSettings, [toggle.key]: e.target.checked })
+                      }
+                      className="rounded accent-amber-500"
+                    />
+                    <span>{toggle.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Problem Categories CRUD */}
+            <div className="space-y-2.5 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+                  Custom Problem Categories ({problemCategories.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => saveProblemCategories(INITIAL_PROBLEM_CATEGORIES)}
+                  className="inline-flex items-center space-x-1 text-[11px] text-slate-400 hover:text-slate-200 font-semibold"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Reset Defaults</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                {problemCategories.map((cat, idx) => (
+                  <div
+                    key={cat.id}
+                    className="flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-xl bg-slate-900 border border-slate-800"
+                  >
+                    <input
+                      type="text"
+                      value={cat.label}
+                      onChange={e =>
+                        saveProblemCategories(
+                          problemCategories.map(c =>
+                            c.id === cat.id ? { ...c, label: e.target.value } : c
+                          )
+                        )
+                      }
+                      className="sm:w-40 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 font-bold text-slate-100 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={cat.hint || ''}
+                      onChange={e =>
+                        saveProblemCategories(
+                          problemCategories.map(c =>
+                            c.id === cat.id ? { ...c, hint: e.target.value } : c
+                          )
+                        )
+                      }
+                      placeholder="Short hint..."
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-slate-300 placeholder-slate-600 focus:outline-none"
+                    />
+                    <select
+                      value={cat.color}
+                      onChange={e =>
+                        saveProblemCategories(
+                          problemCategories.map(c =>
+                            c.id === cat.id ? { ...c, color: e.target.value as ProblemColorKey } : c
+                          )
+                        )
+                      }
+                      className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 focus:outline-none"
+                    >
+                      {COLOR_KEYS.map(ck => (
+                        <option key={ck} value={ck}>
+                          {PROBLEM_COLOR_STYLES[ck].label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex items-center space-x-1 shrink-0">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => handleMoveCategory(idx, -1)}
+                        className="p-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-100 disabled:opacity-30"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === problemCategories.length - 1}
+                        onClick={() => handleMoveCategory(idx, 1)}
+                        className="p-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-100 disabled:opacity-30"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={problemCategories.length <= 1}
+                        onClick={() =>
+                          saveProblemCategories(problemCategories.filter(c => c.id !== cat.id))
+                        }
+                        className="p-1.5 rounded-lg bg-slate-950 text-slate-500 hover:text-rose-400 disabled:opacity-30"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={newCatLabel}
+                  onChange={e => setNewCatLabel(e.target.value)}
+                  placeholder="New category (e.g. Risk Rules, Environment, Sales)..."
+                  className="sm:w-52 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 placeholder-slate-500 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={newCatHint}
+                  onChange={e => setNewCatHint(e.target.value)}
+                  placeholder="Description (optional)..."
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 placeholder-slate-600 focus:outline-none"
+                />
+                <select
+                  value={newCatColor}
+                  onChange={e => setNewCatColor(e.target.value as ProblemColorKey)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-slate-200 focus:outline-none"
+                >
+                  {COLOR_KEYS.map(ck => (
+                    <option key={ck} value={ck}>
+                      {PROBLEM_COLOR_STYLES[ck].label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={!newCatLabel.trim()}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-300 border border-amber-500/30 font-bold"
+                >
+                  + Add
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* INBOX GUIDANCE LINE */}
+        {effectiveTab === 'inbox' && buckets.inbox.length > 0 && (
+          <div className="px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 flex items-center space-x-2">
+            <Inbox className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>
+              Fast 10-second triage: <strong className="text-amber-300">Merge</strong> related slips into a Root Constraint,{' '}
+              <strong className="text-slate-200">Promote</strong> a recurring slip to its own Root Constraint, or{' '}
+              <strong className="text-slate-200">Dismiss</strong> one-off noise.
+            </span>
+          </div>
+        )}
+
+        {/* PROBLEM LIST */}
+        {displayedList.length === 0 ? (
           <div className="p-10 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-center space-y-2">
-            <AlertTriangle className="w-7 h-7 text-slate-600 mx-auto" />
-            <p className="text-sm font-bold text-slate-400">No matching problems</p>
-            <p className="text-xs text-slate-500">
-              Try clearing filters or log a problem during any review.
-            </p>
+            {effectiveTab === 'inbox' ? (
+              <>
+                <CheckCircle2 className="w-7 h-7 text-emerald-500/70 mx-auto" />
+                <p className="text-sm font-bold text-slate-300">Inbox clear</p>
+                <p className="text-xs text-slate-500">
+                  Quick slips captured during GWS sprints and Daily Reviews land here for fast triage.
+                </p>
+              </>
+            ) : effectiveTab === 'solved' ? (
+              <>
+                <Shield className="w-7 h-7 text-slate-600 mx-auto" />
+                <p className="text-sm font-bold text-slate-400">No verified solved problems yet</p>
+                <p className="text-xs text-slate-500">
+                  Once a countermeasure holds through its verification window, verify it solved to archive it here.
+                </p>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="w-7 h-7 text-slate-600 mx-auto" />
+                <p className="text-sm font-bold text-slate-400">No matching constraints</p>
+                <p className="text-xs text-slate-500">
+                  Log a constraint above, or promote a slip from Inbox.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="space-y-2.5">
-            {filtered.map(prob => (
+            {displayedList.map(prob => (
               <ProblemItemRow
                 key={prob.id}
                 problem={prob}
                 contextDate={selectedDate}
                 contextSourceType="daily"
                 targetWeekId={selectedWeekId}
-                showParentBreadcrumb={useFlatPool}
+                showParentBreadcrumb={searchQuery.trim().length > 0}
+                inboxMode={effectiveTab === 'inbox'}
               />
             ))}
           </div>

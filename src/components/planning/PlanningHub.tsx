@@ -11,6 +11,7 @@ import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
 import { StrategyRoadmapsView } from './StrategyRoadmapsView';
 import { QuarterlyPlanSection } from './QuarterlyPlanSection';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
+import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import { getQuarterKeyForDate, getQuarterInfo } from '../../lib/macroAnalytics';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
@@ -762,7 +763,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               {knownMonthKeys.map((mKey) => {
                 const isSelected = mKey === selectedMonthKey;
                 const mPlan = monthlyPlans[mKey];
-                const hasContent = !!(mPlan && (mPlan.tasks.length > 0 || mPlan.focusTheme.trim()));
+                const hasContent = !!(
+                  mPlan &&
+                  (mPlan.tasks.length > 0 ||
+                    mPlan.focusTheme.trim() ||
+                    (mPlan.topFocuses || []).some(f => f.trim()))
+                );
                 return (
                   <button
                     key={mKey}
@@ -802,6 +808,16 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               <span className="self-start sm:self-center px-3 py-1 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30 text-xs font-mono font-bold shrink-0">
                 {monthlyDoneCount} / {activeMonthPlan.tasks.length} goals
               </span>
+            </div>
+
+            {/* Monthly Top 3 Focuses */}
+            <div className="pt-4 border-t border-slate-800/80">
+              <TopFocusesEditor
+                focuses={activeMonthPlan.topFocuses}
+                onChange={next => saveMonthlyPlan({ ...activeMonthPlan, topFocuses: next })}
+                accent="purple"
+                title={`Top 3 Focuses • ${formatMonthLabel(selectedMonthKey)}`}
+              />
             </div>
 
             {/* Monthly Deliverables Checklist */}
@@ -999,7 +1015,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               {knownYearKeys.map((yKey) => {
                 const isSelected = yKey === selectedYearKey;
                 const yPlan = yearlyPlans[yKey];
-                const hasContent = !!(yPlan && (yPlan.tasks.length > 0 || yPlan.focusTheme.trim()));
+                const hasContent = !!(
+                  yPlan &&
+                  (yPlan.tasks.length > 0 ||
+                    yPlan.focusTheme.trim() ||
+                    (yPlan.topFocuses || []).some(f => f.trim()))
+                );
                 return (
                   <button
                     key={yKey}
@@ -1039,6 +1060,16 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               <span className="self-start sm:self-center px-3 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30 text-xs font-mono font-bold shrink-0">
                 {yearlyDoneCount} / {activeYearPlan.tasks.length} goals
               </span>
+            </div>
+
+            {/* Yearly Top 3 Focuses */}
+            <div className="pt-4 border-t border-slate-800/80">
+              <TopFocusesEditor
+                focuses={activeYearPlan.topFocuses}
+                onChange={next => saveYearlyPlan({ ...activeYearPlan, topFocuses: next })}
+                accent="rose"
+                title={`Top 3 Focuses • ${selectedYearKey}`}
+              />
             </div>
 
             {/* Yearly Objectives Checklist */}

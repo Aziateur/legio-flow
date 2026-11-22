@@ -3068,6 +3068,32 @@ export const ReviewHub: React.FC = () => {
                 </div>
               </div>
 
+              {(mData.monthPlan.topFocuses || []).some(f => f.trim()) && (
+                <div className="space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-400 block">
+                    Top 3 Focuses • {mData.info.label}
+                  </span>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    {(mData.monthPlan.topFocuses || [])
+                      .map((f, idx) => ({ text: f.trim(), idx }))
+                      .filter(item => item.text)
+                      .map(item => (
+                        <div
+                          key={item.idx}
+                          className="flex items-start space-x-2.5 p-3 rounded-2xl bg-slate-950 border border-purple-500/25"
+                        >
+                          <span className="w-5 h-5 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center justify-center font-mono text-[11px] font-extrabold shrink-0">
+                            {item.idx + 1}
+                          </span>
+                          <span className="text-xs font-semibold text-slate-100 leading-snug">
+                            {item.text}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
               {mData.monthGoals.length === 0 ? (
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
                   No Monthly goals logged for {mData.info.label} yet. Add them in Planning Hub → Monthly Plan.

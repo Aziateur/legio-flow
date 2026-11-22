@@ -3,34 +3,36 @@ import {
   ProblemCategory,
   ProblemDispatchTarget,
   ProblemEntry,
-  ProblemFixType,
-  ProblemScale,
+  ProblemImpact,
   ProblemSourceType
 } from '../../types/schema';
 import {
-  CATEGORY_MAP,
   DISPATCH_TARGET_LABELS,
-  FIX_TYPE_MAP,
-  PROBLEM_CATEGORIES,
-  PROBLEM_FIX_TYPES,
-  PROBLEM_SCALES,
-  SCALE_MAP,
-  STATUS_META,
+  IMPACT_META,
+  PROBLEM_IMPACTS,
   getClusterTotalHits,
   getDescendantProblems,
   getDirectChildren,
-  getEligibleParentProblems,
+  getEligibleRootTargets,
+  getFixVerificationProgress,
   getLastOccurrenceDate,
-  getProblemScale,
+  getProblemImpact,
+  isProblemGuardrail,
+  isRootProblem,
   normalizeTag,
+  resolveCategoryMeta,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
 import {
+  AlertTriangle,
+  ArrowUpRight,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   CornerDownRight,
+  Crosshair,
+  History,
   Layers,
   Map as MapIcon,
   Plus,
@@ -55,7 +57,21 @@ interface ProblemItemRowProps {
   defaultExpanded?: boolean;
   showParentBreadcrumb?: boolean;
   nested?: boolean;
+  inboxMode?: boolean;
 }
+
+const VERIFY_DAY_OPTIONS = [7, 14, 30];
+
+const DIRECT_DISPATCH_BUTTONS: Array<{
+  target: ProblemDispatchTarget;
+  label: string;
+}> = [
+  { target: 'weekly_plan', label: 'Weekly Plan' },
+  { target: 'checklist_daily', label: 'Daily Habit' },
+  { target: 'checklist_weekly', label: 'Weekly Habit' },
+  { target: 'checklist_oneoff', label: 'One-Off' },
+  { target: 'reps_board', label: 'Reps Board' }
+];
 
 export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   problem,
@@ -67,10 +83,14 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   compact = false,
   defaultExpanded = false,
   showParentBreadcrumb = false,
-  nested = false
+  nested = false,
+  inboxMode = false
 }) => {
   const {
+    todayDate,
     problems,
+    problemCategories,
+    problemSettings,
     strategyPlans,
     updateProblem,
     recordProblemRecurrence,
@@ -82,27 +102,44 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [childrenOpen, setChildrenOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState(problem.title);
+  const [triggerDraft, setTriggerDraft] = useState(problem.trigger || '');
+  const [rootCauseDraft, setRootCauseDraft] = useState(problem.rootCause || '');
   const [fixNoteDraft, setFixNoteDraft] = useState(problem.fixNote || '');
   const [tagInput, setTagInput] = useState('');
   const [newParentTitle, setNewParentTitle] = useState('');
   const [justLoggedPlusOne, setJustLoggedPlusOne] = useState(false);
   const [dispatchFeedback, setDispatchFeedback] = useState<string | null>(null);
+  const [showAttempts, setShowAttempts] = useState(false);
 
   useEffect(() => {
     setTitleDraft(problem.title);
   }, [problem.title]);
 
   useEffect(() => {
+    setTriggerDraft(problem.trigger || '');
+  }, [problem.trigger]);
+
+  useEffect(() => {
+    setRootCauseDraft(problem.rootCause || '');
+  }, [problem.rootCause]);
+
+  useEffect(() => {
     setFixNoteDraft(problem.fixNote || '');
   }, [problem.fixNote]);
 
-  const scale = getProblemScale(problem);
-  const scaleMeta = SCALE_MAP[scale];
-  const catMeta = CATEGORY_MAP[problem.category] || CATEGORY_MAP.mindset;
-  const statusMeta = STATUS_META[problem.status] || STATUS_META.open;
-  const fixMeta = problem.fixType ? FIX_TYPE_MAP[problem.fixType] : null;
+  const impact = getProblemImpact(problem);
+  const impactMeta = IMPACT_META[impact];
+  const catMeta = resolveCategoryMeta(problem.category, problemCategories);
+  const isGuardrail = isProblemGuardrail(problem);
   const lastDate = getLastOccurrenceDate(problem);
   const roadmapTitles = strategyPlans.map(p => p.title.trim()).filter(Boolean);
+  const maxTop = problemSettings.maxTopConstraints || 3;
+  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
+
+  const verification = useMemo(
+    () => getFixVerificationProgress(problem, todayDate, defaultVerifyDays),
+    [problem, todayDate, defaultVerifyDays]
+  );
 
   const directChildren = useMemo(
     () => getDirectChildren(problems, problem.id),
@@ -120,11 +157,30 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => (problem.parentProblemId ? problems.find(p => p.id === problem.parentProblemId) : undefined),
     [problems, problem.parentProblemId]
   );
-  const eligibleParents = useMemo(
-    () => getEligibleParentProblems(problems, scale, problem.id),
-    [problems, scale, problem.id]
+  const eligibleRoots = useMemo(
+    () => getEligibleRootTargets(problems, problem.id),
+    [problems, problem.id]
+  );
+  const ungroupedSlips = useMemo(
+    () =>
+      problems.filter(
+        p =>
+          p.id !== problem.id &&
+          p.status === 'open' &&
+          !p.parentProblemId &&
+          !isRootProblem(problems, p)
+      ),
+    [problems, problem.id]
   );
   const activeDescendantCount = allDescendants.filter(d => d.status !== 'solved').length;
+  const currentTopCount = useMemo(
+    () => problems.filter(p => p.isTopConstraint && p.status !== 'solved').length,
+    [problems]
+  );
+
+  const failedAttempts = (problem.fixAttempts || []).filter(a => a.outcome === 'failed');
+  const allAttempts = problem.fixAttempts || [];
+  const justFailedFix = Boolean(problem.lastFixFailedAt && problem.status === 'open');
 
   const handlePlusOne = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -137,13 +193,33 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     setTimeout(() => setJustLoggedPlusOne(false), 1400);
   };
 
-  const handleSelectFixType = (fixType: ProblemFixType) => {
-    const nextStatus =
-      problem.status === 'open' && fixType !== 'watch' ? 'testing' : problem.status;
+  const handleToggleTopConstraint = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (problem.isTopConstraint) {
+      updateProblem(problem.id, { isTopConstraint: false });
+      return;
+    }
+    if (currentTopCount >= maxTop) {
+      setDispatchFeedback(`Top ${maxTop} full — unpin one first`);
+      setTimeout(() => setDispatchFeedback(null), 2200);
+      return;
+    }
     updateProblem(problem.id, {
-      fixType,
-      status: nextStatus
+      isTopConstraint: true,
+      scale: problem.scale === 'blocker' ? 'blocker' : 'bottleneck',
+      ...(problem.status === 'solved' ? { status: 'open' } : {})
     });
+  };
+
+  const handleSaveDiagnosisField = (field: 'trigger' | 'rootCause', value: string) => {
+    const trimmed = value.trim();
+    const prev = (problem[field] || '').trim();
+    if (trimmed !== prev) {
+      updateProblem(problem.id, {
+        [field]: trimmed,
+        ...(trimmed && (!problem.scale || problem.scale === 'friction') ? { scale: 'bottleneck' } : {})
+      });
+    }
   };
 
   const handleSaveFixNote = () => {
@@ -151,10 +227,39 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     if (trimmed !== (problem.fixNote || '').trim()) {
       updateProblem(problem.id, {
         fixNote: trimmed,
-        ...(trimmed && problem.status === 'open' && problem.fixType !== 'watch'
-          ? { status: 'testing' }
+        ...(trimmed && (!problem.scale || problem.scale === 'friction') ? { scale: 'bottleneck' } : {}),
+        ...(trimmed && problem.status === 'open'
+          ? { status: 'testing', fixStartedAt: todayDate }
           : {})
       });
+    }
+  };
+
+  const handleToggleGuardrail = () => {
+    const nextVal = !isGuardrail;
+    const trimmedFix = fixNoteDraft.trim();
+    updateProblem(problem.id, {
+      isGuardrail: nextVal,
+      fixType: nextVal ? 'rule_guardrail' : problem.fixType === 'rule_guardrail' ? undefined : problem.fixType,
+      ...(trimmedFix ? { fixNote: trimmedFix } : {}),
+      ...(nextVal && problem.status === 'open' ? { status: 'testing', fixStartedAt: todayDate } : {}),
+      ...(nextVal && (!problem.scale || problem.scale === 'friction') ? { scale: 'bottleneck' } : {})
+    });
+    if (nextVal) {
+      setDispatchFeedback('Pinned as Pre-Flight Guardrail');
+      setTimeout(() => setDispatchFeedback(null), 2000);
+    }
+  };
+
+  const handleDispatch = (target: ProblemDispatchTarget) => {
+    const textToSend = fixNoteDraft.trim() || problem.fixNote?.trim() || problem.title;
+    if (fixNoteDraft.trim() && fixNoteDraft.trim() !== (problem.fixNote || '').trim()) {
+      updateProblem(problem.id, { fixNote: fixNoteDraft.trim() });
+    }
+    const ok = dispatchProblemFix(problem.id, target, textToSend, targetWeekId);
+    if (ok) {
+      setDispatchFeedback(`Sent → ${DISPATCH_TARGET_LABELS[target]}`);
+      setTimeout(() => setDispatchFeedback(null), 2200);
     }
   };
 
@@ -177,87 +282,84 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     setTagInput('');
   };
 
-  const handleDispatch = (target: ProblemDispatchTarget) => {
-    const textToSend = fixNoteDraft.trim() || problem.fixNote?.trim() || problem.title;
-    if (fixNoteDraft.trim() && fixNoteDraft.trim() !== (problem.fixNote || '').trim()) {
-      updateProblem(problem.id, { fixNote: fixNoteDraft.trim() });
-    }
-    const ok = dispatchProblemFix(problem.id, target, textToSend, targetWeekId);
-    if (ok) {
-      setDispatchFeedback(`Sent to ${DISPATCH_TARGET_LABELS[target]}`);
-      setTimeout(() => setDispatchFeedback(null), 2000);
-    }
-  };
-
-  const handleChangeScale = (nextScale: ProblemScale) => {
-    // If promoting to blocker (highest level), clear any parent link; if current parent isn't strictly larger, clear it
-    const nextPatch: Partial<ProblemEntry> = { scale: nextScale };
-    if (parentProblem) {
-      const parentScale = getProblemScale(parentProblem);
-      const rank = { friction: 1, bottleneck: 2, blocker: 3 };
-      if (rank[parentScale] <= rank[nextScale]) {
-        nextPatch.parentProblemId = undefined;
-      }
-    }
-    updateProblem(problem.id, nextPatch);
+  const handlePromoteToRoot = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    updateProblem(problem.id, {
+      scale: 'bottleneck',
+      impact: impact === 'low' ? 'high' : impact
+    });
   };
 
   const handleCreateAndCluster = () => {
     const trimmed = newParentTitle.trim();
     if (!trimmed) return;
-    const targetParentScale: 'bottleneck' | 'blocker' =
-      scale === 'bottleneck' ? 'blocker' : 'bottleneck';
-    clusterIntoNewParent(problem.id, trimmed, targetParentScale);
+    clusterIntoNewParent(problem.id, trimmed, 'bottleneck');
     setNewParentTitle('');
     setExpanded(false);
   };
 
   const isRoadmapTag = (tag: string) => roadmapTitles.some(rt => tagsMatch(rt, tag));
 
+  const borderStyle = nested
+    ? 'bg-slate-900/70 border-slate-800/80'
+    : problem.status === 'solved'
+    ? 'bg-slate-950/60 border-emerald-500/20'
+    : justFailedFix
+    ? 'bg-slate-950/95 border-rose-500/40'
+    : verification.readyToVerify
+    ? 'bg-slate-950/95 border-emerald-500/40'
+    : problem.isTopConstraint
+    ? 'bg-slate-950/95 border-amber-500/35'
+    : 'bg-slate-950/90 border-slate-800 hover:border-slate-700';
+
   return (
-    <div
-      className={`rounded-2xl border transition-all ${
-        nested
-          ? 'bg-slate-900/70 border-slate-800/80'
-          : problem.status === 'solved'
-          ? 'bg-slate-950/60 border-emerald-500/25'
-          : scale === 'blocker'
-          ? 'bg-slate-950/95 border-rose-500/30 hover:border-rose-500/45'
-          : scale === 'bottleneck'
-          ? 'bg-slate-950/95 border-amber-500/25 hover:border-amber-500/40'
-          : problem.status === 'testing'
-          ? 'bg-slate-950/90 border-sky-500/30'
-          : 'bg-slate-950/90 border-slate-800 hover:border-slate-700'
-      }`}
-    >
-      {/* Main Row */}
-      <div className={`${compact || nested ? 'p-2.5' : 'p-3.5'} space-y-2`}>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0 space-y-1.5">
-            {/* Badges Line */}
-            <div className="flex flex-wrap items-center gap-1.5">
+    <div className={`rounded-2xl border transition-all ${borderStyle}`}>
+      {/* QUIET, HIGH-SIGNAL COLLAPSED ROW */}
+      <div className={`${compact || nested ? 'p-3' : 'p-4'} space-y-1.5`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0 space-y-1">
+            {/* Title Line (Impact Dot + Clean Title + Optional Top Pin) */}
+            <div className="flex items-start space-x-2.5">
               <span
-                className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold uppercase tracking-wider ${scaleMeta.badgeClass}`}
-                title={scaleMeta.hint}
-              >
-                {scaleMeta.shortLabel}
-              </span>
-              <span
-                className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold uppercase tracking-wider ${statusMeta.badgeClass}`}
-              >
-                {statusMeta.label}
-              </span>
-              <span
-                className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${catMeta.badgeClass}`}
-              >
-                {catMeta.shortLabel}
-              </span>
-              {clusterHits > 1 && (
-                <span
-                  className="px-1.5 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/30 text-orange-300 font-mono text-[10px] font-extrabold"
-                  title={`${clusterHits} total hits across this problem${allDescendants.length > 0 ? ' and its linked items' : ''} (last: ${lastDate})`}
+                className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 ${
+                  problem.status === 'solved' ? 'bg-emerald-400' : impactMeta.dotClass
+                }`}
+                title={`${impactMeta.label}: ${impactMeta.hint}`}
+              />
+              <div className="min-w-0 flex-1">
+                {showParentBreadcrumb && parentProblem && (
+                  <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/80 mb-0.5">
+                    <CornerDownRight className="w-3 h-3 shrink-0" />
+                    <span className="truncate max-w-[260px]">Inside: {parentProblem.title}</span>
+                  </div>
+                )}
+
+                <p
+                  className={`text-xs sm:text-sm font-semibold leading-snug break-words ${
+                    problem.status === 'solved' ? 'text-slate-400 line-through' : 'text-slate-100'
+                  }`}
                 >
-                  ×{clusterHits}
+                  {problem.title}
+                </p>
+              </div>
+            </div>
+
+            {/* Single Quiet Metadata Line */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-[11px] text-slate-400">
+              <span className="inline-flex items-center space-x-1 font-semibold text-slate-300">
+                <span className={`w-1.5 h-1.5 rounded-full ${catMeta.dotClass}`} />
+                <span>{catMeta.shortLabel}</span>
+              </span>
+
+              {impact === 'critical' && problem.status !== 'solved' && (
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
+                  · Critical
+                </span>
+              )}
+
+              {clusterHits > 1 && (
+                <span className="font-mono text-[11px] font-bold text-orange-300">
+                  · ×{clusterHits}
                   {periodOccurrenceCount !== undefined &&
                   periodOccurrenceCount !== clusterHits &&
                   periodOccurrenceCount > 0
@@ -265,197 +367,244 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     : ''}
                 </span>
               )}
-              {problem.fixType === 'rule_guardrail' && problem.status !== 'solved' && (
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-bold">
-                  <Shield className="w-2.5 h-2.5" />
-                  <span>Active Rule</span>
+
+              {/* Live Experiment / Verification Signal */}
+              {justFailedFix && (
+                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/35 text-rose-300 text-[10px] font-bold">
+                  <AlertTriangle className="w-2.5 h-2.5" />
+                  <span>
+                    Fix failed ({failedAttempts.length}×) — try deeper fix
+                  </span>
                 </span>
               )}
-              <span className="text-[10px] font-mono text-slate-500">{lastDate}</span>
+
+              {verification.isTesting && verification.readyToVerify && (
+                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 text-[10px] font-bold">
+                  <CheckCircle2 className="w-2.5 h-2.5" />
+                  <span>
+                    Clean {verification.daysClean}/{verification.targetDays}d — Verify Solved?
+                  </span>
+                </span>
+              )}
+
+              {verification.isTesting && !verification.readyToVerify && (
+                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/30 text-sky-300 font-mono text-[10px] font-bold">
+                  <span>
+                    Testing · {verification.daysClean}/{verification.targetDays}d clean
+                  </span>
+                </span>
+              )}
+
+              {isGuardrail && problem.status !== 'solved' && (
+                <span className="inline-flex items-center space-x-1 text-amber-300 text-[10px] font-bold">
+                  <Shield className="w-2.5 h-2.5" />
+                  <span>Guardrail</span>
+                </span>
+              )}
+
+              {directChildren.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setChildrenOpen(prev => !prev)}
+                  className="inline-flex items-center space-x-1 text-amber-300 hover:text-amber-200 font-bold text-[10px]"
+                >
+                  <Layers className="w-2.5 h-2.5" />
+                  <span>
+                    {directChildren.length} {directChildren.length === 1 ? 'slip' : 'slips'}
+                  </span>
+                  {childrenOpen ? (
+                    <ChevronUp className="w-2.5 h-2.5" />
+                  ) : (
+                    <ChevronDown className="w-2.5 h-2.5" />
+                  )}
+                </button>
+              )}
+
+              {problem.tags.slice(0, 2).map(tag => (
+                <span key={tag} className="text-[10px] text-slate-500">
+                  · {isRoadmapTag(tag) ? tag : `#${tag}`}
+                </span>
+              ))}
+
+              <span className="text-[10px] font-mono text-slate-600">· {lastDate}</span>
             </div>
 
-            {/* Parent Breadcrumb (when shown in flat/search view) */}
-            {showParentBreadcrumb && parentProblem && (
-              <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/80">
-                <CornerDownRight className="w-3 h-3 shrink-0" />
-                <span>Inside {SCALE_MAP[getProblemScale(parentProblem)].shortLabel}:</span>
-                <span className="text-slate-300 truncate max-w-[260px]">{parentProblem.title}</span>
+            {/* Compact Trigger -> Fix Preview (when collapsed) */}
+            {!expanded && (problem.trigger?.trim() || problem.fixNote?.trim()) && (
+              <div className="pl-5 pt-0.5 text-[11px] text-slate-300 leading-snug">
+                {problem.trigger?.trim() && (
+                  <span className="text-slate-400">
+                    <strong className="text-amber-400/90">IF</strong> {problem.trigger.trim()}{' '}
+                    <strong className="text-emerald-400">→</strong>{' '}
+                  </span>
+                )}
+                {problem.fixNote?.trim() && <span>{problem.fixNote.trim()}</span>}
+                {(problem.dispatchedTo || []).length > 0 && (
+                  <span className="ml-2 text-[10px] text-emerald-400/80 font-semibold">
+                    (✓ {(problem.dispatchedTo || []).map(d => DISPATCH_TARGET_LABELS[d]).join(', ')})
+                  </span>
+                )}
               </div>
             )}
 
-            {/* Problem Title */}
-            <p
-              className={`text-xs sm:text-sm font-semibold leading-snug break-words ${
-                problem.status === 'solved' ? 'text-slate-400 line-through' : 'text-slate-100'
-              }`}
-            >
-              {problem.title}
-            </p>
-
-            {/* Tags + Clustered Children Fold Pill */}
-            {(problem.tags.length > 0 || directChildren.length > 0) && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {directChildren.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setChildrenOpen(prev => !prev)}
-                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full border text-[10px] font-extrabold transition-colors ${
-                      childrenOpen
-                        ? 'bg-amber-500/20 text-amber-200 border-amber-500/45'
-                        : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-500/30'
-                    }`}
-                  >
-                    <Layers className="w-2.5 h-2.5 shrink-0" />
-                    <span>
-                      {directChildren.length} linked{' '}
-                      {directChildren.length === 1 ? 'item' : 'items'}
-                    </span>
-                    {childrenOpen ? (
-                      <ChevronUp className="w-2.5 h-2.5" />
-                    ) : (
-                      <ChevronDown className="w-2.5 h-2.5" />
-                    )}
-                  </button>
-                )}
-
-                {problem.tags.map(tag => (
-                  <span
-                    key={tag}
-                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                      isRoadmapTag(tag)
-                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                        : 'bg-slate-900 text-slate-400 border-slate-800'
-                    }`}
-                  >
-                    {isRoadmapTag(tag) ? (
-                      <MapIcon className="w-2.5 h-2.5 shrink-0" />
-                    ) : (
-                      <span>#</span>
-                    )}
-                    <span>{tag}</span>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Compact Fix Summary when collapsed */}
-            {!expanded && (fixMeta || problem.fixNote?.trim()) && (
-              <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[11px] text-slate-300">
-                {fixMeta && (
-                  <span
-                    className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${fixMeta.badgeClass}`}
-                  >
-                    {fixMeta.shortLabel}
-                  </span>
-                )}
-                {problem.fixNote?.trim() && (
-                  <span className="text-slate-300">{problem.fixNote.trim()}</span>
-                )}
-                {(problem.dispatchedTo || []).map(dest => (
-                  <span
-                    key={dest}
-                    className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-[9px] font-bold"
-                  >
-                    ✓ {DISPATCH_TARGET_LABELS[dest]}
-                  </span>
-                ))}
-              </div>
+            {dispatchFeedback && !expanded && (
+              <div className="pl-5 text-[11px] font-bold text-amber-300">{dispatchFeedback}</div>
             )}
           </div>
 
-          {/* Right Quick Actions */}
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={handlePlusOne}
-              title={
-                problem.status === 'solved'
-                  ? 'Happened again — re-open and log recurrence'
-                  : 'Happened again (+1 recurrence)'
-              }
-              className={`px-2 py-1 rounded-lg border text-[10px] font-extrabold transition-all active:scale-95 ${
-                justLoggedPlusOne
-                  ? 'bg-orange-500 text-slate-950 border-orange-400'
-                  : 'bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 hover:border-orange-500/40'
-              }`}
-            >
-              {justLoggedPlusOne ? 'Logged!' : '+1'}
-            </button>
+          {/* RIGHT QUICK ACTIONS */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {inboxMode ? (
+              <>
+                {eligibleRoots.length > 0 && (
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (e.target.value) {
+                        updateProblem(problem.id, { parentProblemId: e.target.value });
+                      }
+                    }}
+                    className="bg-slate-900 border border-slate-700 hover:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] font-bold text-amber-300 focus:outline-none max-w-[140px]"
+                    title="Merge this slip into an existing Root Problem"
+                  >
+                    <option value="">Merge into...</option>
+                    {eligibleRoots.map(r => (
+                      <option key={r.id} value={r.id}>
+                        ↳ {r.title}
+                      </option>
+                    ))}
+                  </select>
+                )}
 
-            {nested && parentProblem && (
-              <button
-                type="button"
-                onClick={() => updateProblem(problem.id, { parentProblemId: undefined })}
-                title="Unlink from parent cluster"
-                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-300 border border-slate-800 transition-colors"
-              >
-                <Unlink className="w-3 h-3" />
-              </button>
+                <button
+                  type="button"
+                  onClick={handlePromoteToRoot}
+                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-[11px] font-bold transition-colors"
+                  title="Promote slip into a Root Problem to diagnose & solve"
+                >
+                  <ArrowUpRight className="w-3 h-3" />
+                  <span>Promote</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => deleteProblem(problem.id)}
+                  className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 text-[11px] font-bold transition-colors"
+                  title="Dismiss one-off noise"
+                >
+                  Dismiss
+                </button>
+              </>
+            ) : (
+              <>
+                {!nested && problem.status !== 'solved' && (
+                  <button
+                    type="button"
+                    onClick={handleToggleTopConstraint}
+                    title={
+                      problem.isTopConstraint
+                        ? `Unpin from Top ${maxTop} Constraints`
+                        : `Pin to Top ${maxTop} Constraints`
+                    }
+                    className={`p-1.5 rounded-lg border transition-all ${
+                      problem.isTopConstraint
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/45'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-500 hover:text-amber-300 border-slate-800'
+                    }`}
+                  >
+                    <Crosshair className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handlePlusOne}
+                  title={
+                    problem.status === 'testing'
+                      ? 'Fired again — marks current fix attempt as Failed and re-opens'
+                      : problem.status === 'solved'
+                      ? 'Happened again — re-open and log recurrence'
+                      : 'Happened again (+1 recurrence)'
+                  }
+                  className={`px-2 py-1 rounded-lg border text-[11px] font-extrabold transition-all active:scale-95 ${
+                    justLoggedPlusOne
+                      ? 'bg-orange-500 text-slate-950 border-orange-400'
+                      : 'bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 hover:border-orange-500/40'
+                  }`}
+                >
+                  {justLoggedPlusOne ? 'Logged!' : '+1'}
+                </button>
+
+                {nested && parentProblem && (
+                  <button
+                    type="button"
+                    onClick={() => updateProblem(problem.id, { parentProblemId: undefined })}
+                    title="Unlink slip from parent problem"
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-300 border border-slate-800"
+                  >
+                    <Unlink className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {problem.status === 'testing' && (
+                  <button
+                    type="button"
+                    onClick={() => updateProblem(problem.id, { status: 'solved' })}
+                    title={
+                      activeDescendantCount > 0
+                        ? `Fix held — mark Solved & close ${activeDescendantCount} linked slip(s)`
+                        : 'Fix held — mark Verified Solved'
+                    }
+                    className={`p-1.5 rounded-lg border transition-colors ${
+                      verification.readyToVerify
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm shadow-emerald-500/20'
+                        : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {problem.status === 'solved' && (
+                  <button
+                    type="button"
+                    onClick={() => updateProblem(problem.id, { status: 'open' })}
+                    title="Re-open problem"
+                    className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-300 border border-slate-800"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setExpanded(prev => !prev)}
+                  className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                    expanded
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                  }`}
+                >
+                  <Wrench className="w-3 h-3" />
+                  <span className="hidden sm:inline">{problem.fixNote?.trim() ? 'Edit' : 'Solve'}</span>
+                  {expanded ? (
+                    <ChevronUp className="w-3 h-3" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3" />
+                  )}
+                </button>
+              </>
             )}
-
-            {problem.status === 'testing' && (
-              <button
-                type="button"
-                onClick={() => updateProblem(problem.id, { status: 'solved' })}
-                title={
-                  activeDescendantCount > 0
-                    ? `Fix worked — mark Solved & close ${activeDescendantCount} linked item(s)`
-                    : 'Fix worked — mark verified Solved'
-                }
-                className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 transition-colors"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {problem.status === 'solved' && (
-              <button
-                type="button"
-                onClick={() => updateProblem(problem.id, { status: 'open' })}
-                title="Re-open problem"
-                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-300 border border-slate-800 transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setExpanded(prev => !prev)}
-              className={`flex items-center space-x-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-colors ${
-                expanded
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
-              }`}
-              title="Solve, group under bigger problem, or edit"
-            >
-              <Wrench className="w-3 h-3" />
-              <span className="hidden sm:inline">{problem.fixType ? 'Fix' : 'Solve'}</span>
-              {expanded ? (
-                <ChevronUp className="w-3 h-3" />
-              ) : (
-                <ChevronDown className="w-3 h-3" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => deleteProblem(problem.id)}
-              title="Delete problem"
-              className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
           </div>
         </div>
       </div>
 
-      {/* Nested Clustered Children (Collapsed by Default for Zero Clutter) */}
+      {/* NESTED ABSORBED SLIPS */}
       {childrenOpen && directChildren.length > 0 && (
-        <div className="px-3.5 pb-3 pt-2 border-t border-slate-800/70 bg-slate-950/50 space-y-1.5">
+        <div className="px-4 pb-3 pt-2 border-t border-slate-800/70 bg-slate-950/50 space-y-1.5">
           <div className="flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
             <CornerDownRight className="w-3 h-3 text-amber-400" />
-            <span>Clustered inside this {scaleMeta.shortLabel} ({directChildren.length})</span>
+            <span>Absorbed Slips ({directChildren.length})</span>
           </div>
           <div className="space-y-1.5 pl-2 border-l border-amber-500/25">
             {directChildren.map(child => (
@@ -474,11 +623,15 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
         </div>
       )}
 
-      {/* Expandable Feedback Loop, Clustering & Fix Drawer */}
+      {/* CLEAN 3-STEP DEEP SOLVE DRAWER (Diagnose -> Countermeasure -> Verify) */}
       {expanded && (
-        <div className="px-3.5 pb-3.5 pt-2.5 border-t border-slate-800/80 bg-slate-900/40 space-y-3 rounded-b-2xl">
-          {/* Editable Title, Scale & Category */}
-          <div className="space-y-2">
+        <div className="px-4 pb-4 pt-3 border-t border-slate-800/80 bg-slate-900/40 space-y-4 rounded-b-2xl text-xs">
+          {/* STEP 1: DIAGNOSE (Cost, Category, Trigger, Root Cause, Clustering) */}
+          <div className="space-y-3">
+            <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400 block">
+              1. Diagnose — Mechanism &amp; Cost
+            </span>
+
             <input
               type="text"
               value={titleDraft}
@@ -497,132 +650,112 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   }
                 }
               }}
-              className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-100 focus:outline-none"
-              placeholder="Problem description..."
+              className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-2 text-xs font-semibold text-slate-100 focus:outline-none"
+              placeholder="Problem statement..."
             />
 
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-              {/* Scale Selector */}
+            {/* Impact + Custom Categories */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-                  Scale:
+                  Cost / Impact:
                 </span>
-                {PROBLEM_SCALES.map(sc => (
+                {PROBLEM_IMPACTS.map(im => (
                   <button
-                    key={sc.id}
+                    key={im.id}
                     type="button"
-                    onClick={() => handleChangeScale(sc.id)}
-                    title={sc.hint}
+                    onClick={() =>
+                      updateProblem(problem.id, {
+                        impact: im.id as ProblemImpact,
+                        scale: im.id === 'critical' ? 'blocker' : im.id === 'high' ? 'bottleneck' : problem.scale || 'friction'
+                      })
+                    }
+                    title={im.hint}
                     className={`px-2 py-0.5 rounded-lg border text-[10px] font-extrabold transition-all ${
-                      scale === sc.id
-                        ? sc.activeChipClass
+                      impact === im.id
+                        ? im.activeChipClass
                         : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
                     }`}
                   >
-                    {sc.shortLabel}
+                    {im.shortLabel}
                   </button>
                 ))}
               </div>
 
-              {/* Category Selector */}
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
                   Category:
                 </span>
-                {PROBLEM_CATEGORIES.map(c => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => updateProblem(problem.id, { category: c.id as ProblemCategory })}
-                    className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
-                      problem.category === c.id
-                        ? c.activeChipClass
-                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    {c.shortLabel}
-                  </button>
-                ))}
+                {problemCategories.map(c => {
+                  const meta = resolveCategoryMeta(c.id, problemCategories);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => updateProblem(problem.id, { category: c.id as ProblemCategory })}
+                      title={c.hint}
+                      className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
+                        problem.category === c.id
+                          ? meta.activeChipClass
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          </div>
 
-          {/* Cluster / Group Under Bigger Problem (for Friction & Bottleneck) */}
-          {scale !== 'blocker' && (
-            <div className="rounded-xl bg-slate-950/80 border border-slate-800 p-2.5 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="inline-flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-                  <Layers className="w-3 h-3" />
-                  <span>
-                    Group under bigger {scale === 'friction' ? 'Bottleneck / Blocker' : 'Blocker'}
-                  </span>
-                </span>
-                {parentProblem && (
-                  <button
-                    type="button"
-                    onClick={() => updateProblem(problem.id, { parentProblemId: undefined })}
-                    className="inline-flex items-center space-x-1 text-[10px] font-bold text-slate-400 hover:text-rose-400"
-                  >
-                    <Unlink className="w-2.5 h-2.5" />
-                    <span>Unlink</span>
-                  </button>
-                )}
-              </div>
-
-              {eligibleParents.length > 0 && (
-                <select
-                  value={problem.parentProblemId || ''}
-                  onChange={e =>
-                    updateProblem(problem.id, {
-                      parentProblemId: e.target.value || undefined
-                    })
-                  }
-                  className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
-                >
-                  <option value="">Not grouped (standalone {scaleMeta.shortLabel})</option>
-                  {eligibleParents.map(ep => (
-                    <option key={ep.id} value={ep.id}>
-                      [{SCALE_MAP[getProblemScale(ep)].shortLabel}] {ep.title}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              {/* 1-click create & cluster into a brand-new Root Bottleneck/Blocker */}
-              <div className="flex items-center gap-1.5">
+            {/* Trigger + Root Cause */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Trigger / Context (When does it fire?)
+                </label>
                 <input
                   type="text"
-                  value={newParentTitle}
-                  onChange={e => setNewParentTitle(e.target.value)}
+                  value={triggerDraft}
+                  onChange={e => setTriggerDraft(e.target.value)}
+                  onBlur={() => handleSaveDiagnosisField('trigger', triggerDraft)}
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      e.stopPropagation();
-                      handleCreateAndCluster();
+                      handleSaveDiagnosisField('trigger', triggerDraft);
                     }
                   }}
-                  placeholder={`Or cluster into new ${scale === 'bottleneck' ? 'Blocker' : 'Bottleneck'} (Enter)...`}
-                  className="flex-1 bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                  placeholder="e.g. Right after a losing trade, or after 10pm with phone..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
                 />
-                <button
-                  type="button"
-                  disabled={!newParentTitle.trim()}
-                  onClick={handleCreateAndCluster}
-                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-300 border border-amber-500/35 text-[11px] font-bold shrink-0"
-                >
-                  + Cluster
-                </button>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  True Root Cause (Why is it actually happening?)
+                </label>
+                <input
+                  type="text"
+                  value={rootCauseDraft}
+                  onChange={e => setRootCauseDraft(e.target.value)}
+                  onBlur={() => handleSaveDiagnosisField('rootCause', rootCauseDraft)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveDiagnosisField('rootCause', rootCauseDraft);
+                    }
+                  }}
+                  placeholder="e.g. Task wasn't broken down before session, or ego wanting loss back..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
               </div>
             </div>
-          )}
 
-          {/* Tags / Linked Plans */}
-          <div className="space-y-1.5">
-            <div className="flex items-center space-x-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              <Tag className="w-3 h-3" />
-              <span>Linked Plans & Tags</span>
-            </div>
+            {/* Roadmap Link + Tags */}
             <div className="flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                <Tag className="w-3 h-3" />
+                <span>Roadmap / Tags:</span>
+              </span>
               {roadmapTitles.map(rt => {
                 const active = problem.tags.some(t => tagsMatch(t, rt));
                 return (
@@ -641,7 +774,6 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   </button>
                 );
               })}
-
               {problem.tags
                 .filter(t => !isRoadmapTag(t))
                 .map(tag => (
@@ -659,8 +791,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     </button>
                   </span>
                 ))}
-
-              <div className="inline-flex items-center bg-slate-950 border border-slate-800 focus-within:border-amber-500/50 rounded-full px-2 py-0.5">
+              <div className="inline-flex items-center bg-slate-950 border border-slate-800 rounded-full px-2 py-0.5">
                 <input
                   type="text"
                   value={tagInput}
@@ -672,54 +803,117 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                       handleAddCustomTag();
                     }
                   }}
-                  placeholder="+ custom tag"
-                  className="bg-transparent text-[10px] text-slate-200 placeholder-slate-600 focus:outline-none w-20"
+                  placeholder="+ tag"
+                  className="bg-transparent text-[10px] text-slate-200 placeholder-slate-600 focus:outline-none w-16"
                 />
                 {tagInput.trim() && (
-                  <button
-                    type="button"
-                    onClick={handleAddCustomTag}
-                    className="text-amber-400 hover:text-amber-300 ml-1"
-                  >
+                  <button type="button" onClick={handleAddCustomTag} className="text-amber-400 ml-1">
                     <Plus className="w-2.5 h-2.5" />
                   </button>
                 )}
               </div>
             </div>
-          </div>
 
-          {/* Step 1: Fix Type */}
-          <div className="space-y-1.5 pt-2 border-t border-slate-800/70">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-sky-400 block">
-              How should this be solved? (Fix Type)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {PROBLEM_FIX_TYPES.map(ft => {
-                const selected = problem.fixType === ft.id;
-                return (
-                  <button
-                    key={ft.id}
-                    type="button"
-                    onClick={() => handleSelectFixType(ft.id)}
-                    title={ft.hint}
-                    className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-all ${
-                      selected
-                        ? `${ft.badgeClass} ring-1 ring-current`
-                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    {ft.label}
-                  </button>
-                );
-              })}
+            {/* Clean Clustering: Absorb a Slip OR Merge under a Root Problem */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {ungroupedSlips.length > 0 && !nested && (
+                <select
+                  value=""
+                  onChange={e => {
+                    if (e.target.value) {
+                      updateProblem(e.target.value, { parentProblemId: problem.id });
+                      if (!problem.scale || problem.scale === 'friction') {
+                        updateProblem(problem.id, { scale: 'bottleneck' });
+                      }
+                    }
+                  }}
+                  className="bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-300 focus:outline-none"
+                >
+                  <option value="">+ Absorb a slip under this problem ({ungroupedSlips.length})</option>
+                  {ungroupedSlips.map(s => (
+                    <option key={s.id} value={s.id}>
+                      ↳ {s.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {eligibleRoots.length > 0 && (
+                <select
+                  value={problem.parentProblemId || ''}
+                  onChange={e =>
+                    updateProblem(problem.id, { parentProblemId: e.target.value || undefined })
+                  }
+                  className="bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-300 focus:outline-none"
+                >
+                  <option value="">Standalone Root Problem</option>
+                  {eligibleRoots.map(r => (
+                    <option key={r.id} value={r.id}>
+                      Merge under: {r.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {!parentProblem && directChildren.length === 0 && (
+                <div className="inline-flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={newParentTitle}
+                    onChange={e => setNewParentTitle(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleCreateAndCluster();
+                      }
+                    }}
+                    placeholder="Or group into new Root Problem..."
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none w-48"
+                  />
+                  {newParentTitle.trim() && (
+                    <button
+                      type="button"
+                      onClick={handleCreateAndCluster}
+                      className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/35 text-[10px] font-bold"
+                    >
+                      Group
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            {fixMeta && (
-              <p className="text-[11px] text-slate-400">{fixMeta.hint}</p>
-            )}
           </div>
 
-          {/* Step 2: 1-Line Fix / Rule / Adjustment */}
-          <div className="space-y-1.5">
+          {/* STEP 2: COUNTERMEASURE & EXPERIMENT (Direct Destination — NO Fix Type Bureaucracy!) */}
+          <div className="space-y-2.5 pt-3 border-t border-slate-800/80">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-sky-400">
+                2. Countermeasure — Experiment &amp; Where It Lives
+              </span>
+
+              {/* Verification Window Picker */}
+              <div className="flex items-center space-x-1">
+                <span className="text-[10px] text-slate-500 font-bold">Verify after:</span>
+                {VERIFY_DAY_OPTIONS.map(days => {
+                  const active = (problem.verifyDays || defaultVerifyDays) === days;
+                  return (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => updateProblem(problem.id, { verifyDays: days })}
+                      className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-bold border transition-all ${
+                        active
+                          ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                          : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
+                      }`}
+                    >
+                      {days}d
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <input
               type="text"
               value={fixNoteDraft}
@@ -732,57 +926,106 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   handleSaveFixNote();
                 }
               }}
-              placeholder={
-                problem.fixType === 'rule_guardrail'
-                  ? 'Write the exact boundary / If-Then rule (e.g. No phone in bedroom after 10:30pm)...'
-                  : problem.fixType === 'habit_rewire'
-                  ? 'Write the daily/weekly habit rewire (e.g. 10:30pm alarm + lights out)...'
-                  : problem.fixType === 'skill_reps'
-                  ? 'Write the rep protocol (e.g. 50 chart backtests, 10 min drill)...'
-                  : problem.fixType === 'plan_change'
-                  ? 'Write what changes in your Weekly Plan or Roadmap...'
-                  : 'Write the concrete 1-line fix or intervention...'
-              }
-              className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
+              placeholder="Write the exact countermeasure or If-Then rule (e.g. Phone stays in living room at 10:30pm)..."
+              className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500/50 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
             />
-          </div>
 
-          {/* Step 3: 1-Click Dispatch into Legio (contextual by Fix Type) */}
-          {fixMeta && fixMeta.dispatchTargets.length > 0 && (
+            {/* Direct Action Destinations (1 click, zero intermediate dropdowns!) */}
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Push action to:
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-0.5">
+                Install in:
               </span>
-              {fixMeta.dispatchTargets.map(target => {
-                const alreadySent = (problem.dispatchedTo || []).includes(target);
+              {DIRECT_DISPATCH_BUTTONS.map(btn => {
+                const alreadySent = (problem.dispatchedTo || []).includes(btn.target);
                 return (
                   <button
-                    key={target}
+                    key={btn.target}
                     type="button"
-                    onClick={() => handleDispatch(target)}
-                    className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-all active:scale-95 ${
+                    onClick={() => handleDispatch(btn.target)}
+                    className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all active:scale-95 ${
                       alreadySent
-                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35 hover:bg-emerald-500/25'
-                        : 'bg-slate-950 hover:bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                        : 'bg-slate-950 hover:bg-amber-500/15 text-slate-200 hover:text-amber-300 border-slate-800 hover:border-amber-500/35'
                     }`}
                   >
-                    <Send className="w-3 h-3" />
-                    <span>
-                      {alreadySent
-                        ? `✓ Sent to ${DISPATCH_TARGET_LABELS[target]}`
-                        : `→ ${DISPATCH_TARGET_LABELS[target]}`}
-                    </span>
+                    <Send className="w-2.5 h-2.5" />
+                    <span>{alreadySent ? `✓ ${btn.label}` : btn.label}</span>
                   </button>
                 );
               })}
+
+              <button
+                type="button"
+                onClick={handleToggleGuardrail}
+                className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all ${
+                  isGuardrail
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                    : 'bg-slate-950 hover:bg-amber-500/10 text-slate-300 border-slate-800 hover:border-amber-500/35'
+                }`}
+                title="Surfaces this rule in the Pre-Flight strip on Daily Plan & GWS Studio"
+              >
+                <Shield className="w-3 h-3" />
+                <span>{isGuardrail ? '✓ Pre-Flight Guardrail' : 'Pin as Guardrail'}</span>
+              </button>
+
               {dispatchFeedback && (
-                <span className="text-[11px] font-bold text-emerald-400">{dispatchFeedback}</span>
+                <span className="text-[11px] font-bold text-emerald-400 ml-1">
+                  {dispatchFeedback}
+                </span>
               )}
             </div>
-          )}
 
-          {/* Step 4: Feedback Loop Status Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/70">
+            {/* Experiment Attempt History (Never Repeat Failed Fixes!) */}
+            {allAttempts.length > 0 && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAttempts(v => !v)}
+                  className="inline-flex items-center space-x-1.5 text-[11px] font-bold text-slate-400 hover:text-slate-200"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>
+                    Experiment History ({allAttempts.length} attempt{allAttempts.length === 1 ? '' : 's'}
+                    {failedAttempts.length > 0 ? ` · ${failedAttempts.length} failed` : ''})
+                  </span>
+                  {showAttempts ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+
+                {showAttempts && (
+                  <div className="mt-2 space-y-1.5 pl-3 border-l border-slate-800">
+                    {allAttempts.map((att, idx) => (
+                      <div
+                        key={att.id}
+                        className="flex flex-wrap items-center justify-between gap-2 text-[11px] p-2 rounded-lg bg-slate-950/90 border border-slate-800/80"
+                      >
+                        <div className="min-w-0">
+                          <span
+                            className={`font-extrabold mr-1.5 ${
+                              att.outcome === 'failed'
+                                ? 'text-rose-400'
+                                : att.outcome === 'verified'
+                                ? 'text-emerald-400'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {att.outcome === 'failed' ? '✗ Failed' : att.outcome === 'verified' ? '✓ Worked' : '↺ Replaced'} #{idx + 1}:
+                          </span>
+                          <span className="text-slate-200">"{att.fixText}"</span>
+                          {att.note && <span className="text-slate-500 ml-1.5">({att.note})</span>}
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                          held {att.daysHeld}d · {att.endedAt}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* STEP 3: VERIFY & LIFECYCLE */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800/80">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
@@ -799,7 +1042,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 type="button"
                 onClick={() => {
                   handleSaveFixNote();
-                  updateProblem(problem.id, { status: 'testing' });
+                  updateProblem(problem.id, { status: 'testing', fixStartedAt: todayDate });
                 }}
                 className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
                   problem.status === 'testing'
@@ -818,23 +1061,26 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
                   problem.status === 'solved'
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                    : 'bg-slate-950 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/15'
+                    : 'bg-slate-950 text-emerald-300 border-emerald-500/35 hover:bg-emerald-500/15'
                 }`}
               >
                 <CheckCircle2 className="w-3 h-3" />
                 <span>
                   {activeDescendantCount > 0
-                    ? `Verified Solved (Closes ${activeDescendantCount + 1})`
-                    : 'Verified Solved'}
+                    ? `Verify Solved (Closes ${activeDescendantCount + 1})`
+                    : 'Verify Solved'}
                 </span>
               </button>
             </div>
 
-            {problem.occurrences.length > 0 && (
-              <span className="text-[10px] text-slate-500 font-mono">
-                {clusterHits} hit{clusterHits === 1 ? '' : 's'} · last {lastDate}
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => deleteProblem(problem.id)}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Delete</span>
+            </button>
           </div>
         </div>
       )}
