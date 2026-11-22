@@ -13,6 +13,7 @@ import {
   LifePillar,
   CustomReviewPrompt,
   MacroReviewSettings,
+  TargetGateRef,
   TaskItem,
   ReviewEntry,
   SystemLevel,
@@ -1250,6 +1251,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       clientUpdatedAt = new Date().toISOString();
     }
     return {
+      schemaVersion: 2,
       onboardingStartDate: getEffectiveEpochMonday(weeklyPlansRef.current),
       templates: templatesRef.current,
       dailyEntries: dailyEntriesRef.current,
@@ -1280,33 +1282,36 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const plans = Array.isArray(st.strategyPlans) ? st.strategyPlans.length : 0;
     const probs = Array.isArray(st.problems) ? st.problems.length : 0;
     const checks = Array.isArray(st.checklistItems) ? st.checklistItems.length : 0;
-    return `${days}d · ${gws} GWS · ${plans} plans · ${probs} probs · ${checks} habits`;
+    const revs = Array.isArray(st.reviews) ? st.reviews.length : 0;
+    return `${days}d · ${gws} GWS · ${plans} plans · ${probs} probs · ${checks} habits · ${revs} revs`;
   };
 
   const saveAutoLocalSnapshot = (reason: string) => {
     try {
       const payload = buildCloudPayloadFromRefs();
       const summary = summarizeStateSnapshot(payload);
-      // Avoid duplicate back-to-back identical snapshots
+      // Avoid duplicate back-to-back identical snapshots across ALL state domains
       const latest = localSnapshotsRef.current[0];
       if (latest) {
-        const prevSig = JSON.stringify({
-          d: latest.state.dailyEntries,
-          g: latest.state.gwsSessions,
-          w: latest.state.weeklyPlans,
-          s: latest.state.strategyPlans,
-          p: latest.state.problems,
-          c: latest.state.checklistItems
-        });
-        const curSig = JSON.stringify({
-          d: payload.dailyEntries,
-          g: payload.gwsSessions,
-          w: payload.weeklyPlans,
-          s: payload.strategyPlans,
-          p: payload.problems,
-          c: payload.checklistItems
-        });
-        if (prevSig === curSig) return;
+        const makeSig = (st: Record<string, any>) =>
+          JSON.stringify({
+            d: st.dailyEntries,
+            g: st.gwsSessions,
+            w: st.weeklyPlans,
+            m: st.monthlyPlans,
+            q: st.quarterlyPlans,
+            y: st.yearlyPlans,
+            lp: st.lifePillars,
+            crp: st.customReviewPrompts,
+            mrs: st.macroReviewSettings,
+            pc: st.problemCategories,
+            ps: st.problemSettings,
+            s: st.strategyPlans,
+            p: st.problems,
+            r: st.reviews,
+            c: st.checklistItems
+          });
+        if (makeSig(latest.state) === makeSig(payload)) return;
       }
       const snap: LocalRecoverySnapshot = {
         id: `snap_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
@@ -2098,6 +2103,45 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const syncLinkedStrategyGoals = (
+    toggles: Array<{
+      strategyPlanId: string;
+      strategyStageId: string;
+      strategyGoalId: string;
+      completed: boolean;
+    }>
+  ) => {
+    if (toggles.length === 0) return;
+    const curPlans = strategyPlansRef.current;
+    let anyChanged = false;
+    const nowIso = new Date().toISOString();
+    const nextPlans = curPlans.map(sp => {
+      const planHits = toggles.filter(g => g.strategyPlanId === sp.id);
+      if (planHits.length === 0) return sp;
+      let planChanged = false;
+      const nextStages = sp.stages.map(st => {
+        const stageHits = planHits.filter(g => g.strategyStageId === st.id);
+        if (stageHits.length === 0) return st;
+        let stageChanged = false;
+        const nextGoals = st.proximalGoals.map(pg => {
+          const hit = stageHits.find(g => g.strategyGoalId === pg.id);
+          if (hit && pg.completed !== hit.completed) {
+            stageChanged = true;
+            planChanged = true;
+            anyChanged = true;
+            return { ...pg, completed: hit.completed };
+          }
+          return pg;
+        });
+        return stageChanged ? { ...st, proximalGoals: nextGoals } : st;
+      });
+      return planChanged ? { ...sp, stages: nextStages, updatedAt: nowIso } : sp;
+    });
+    if (anyChanged) {
+      commitStrategyPlans(nextPlans);
+    }
+  };
+
   const propagateWeeklyTaskCompletionUpward = (prevPlan: WeeklyPlan | undefined, savedPlan: WeeklyPlan) => {
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
@@ -2178,34 +2222,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     if (strategyGoalToggles.length > 0) {
-      const curPlans = strategyPlansRef.current;
-      let anyChanged = false;
-      const nowIso = new Date().toISOString();
-      const nextPlans = curPlans.map(sp => {
-        const planHits = strategyGoalToggles.filter(g => g.strategyPlanId === sp.id);
-        if (planHits.length === 0) return sp;
-        let planChanged = false;
-        const nextStages = sp.stages.map(st => {
-          const stageHits = planHits.filter(g => g.strategyStageId === st.id);
-          if (stageHits.length === 0) return st;
-          let stageChanged = false;
-          const nextGoals = st.proximalGoals.map(pg => {
-            const hit = stageHits.find(g => g.strategyGoalId === pg.id);
-            if (hit && pg.completed !== hit.completed) {
-              stageChanged = true;
-              planChanged = true;
-              anyChanged = true;
-              return { ...pg, completed: hit.completed };
-            }
-            return pg;
-          });
-          return stageChanged ? { ...st, proximalGoals: nextGoals } : st;
-        });
-        return planChanged ? { ...sp, stages: nextStages, updatedAt: nowIso } : sp;
-      });
-      if (anyChanged) {
-        commitStrategyPlans(nextPlans);
-      }
+      syncLinkedStrategyGoals(strategyGoalToggles);
     }
   };
 
@@ -2363,7 +2380,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const updateGWSSession = (id: string, updates: Partial<GWSSession>) => {
-    commitGwsSessions(gwsSessionsRef.current.map(s => (s.id === id ? { ...s, ...updates } : s)));
+    const nowIso = new Date().toISOString();
+    commitGwsSessions(
+      gwsSessionsRef.current.map(s => (s.id === id ? { ...s, ...updates, updatedAt: nowIso } : s))
+    );
     markLocalMutation();
   };
 
@@ -2576,11 +2596,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync: propagate completed monthly goal to linked quarterly & yearly goals
+    // Upward ID-linked sync: propagate completed monthly goal to linked quarterly, yearly & roadmap goals
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
     const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    const strategyToggles: Array<{
+      strategyPlanId: string;
+      strategyStageId: string;
+      strategyGoalId: string;
+      completed: boolean;
+    }> = [];
     saved.tasks.forEach(t => {
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
@@ -2590,12 +2616,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (changed && t.yearlyTaskId) {
         yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
       }
+      if (changed && t.strategyPlanId && t.strategyStageId && t.strategyGoalId) {
+        strategyToggles.push({
+          strategyPlanId: t.strategyPlanId,
+          strategyStageId: t.strategyStageId,
+          strategyGoalId: t.strategyGoalId,
+          completed: t.completed
+        });
+      }
     });
     if (quarterlyToggles.length > 0) {
       syncLinkedQuarterlyTasks(quarterlyToggles);
     }
     if (yearlyToggles.length > 0) {
       syncLinkedYearlyTasks(yearlyToggles);
+    }
+    if (strategyToggles.length > 0) {
+      syncLinkedStrategyGoals(strategyToggles);
     }
 
     markLocalMutation();
@@ -2629,19 +2666,36 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync: propagate completed quarterly outcome to linked yearly goal
+    // Upward ID-linked sync: propagate completed quarterly outcome to linked yearly & roadmap goals
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
+    const strategyToggles: Array<{
+      strategyPlanId: string;
+      strategyStageId: string;
+      strategyGoalId: string;
+      completed: boolean;
+    }> = [];
     saved.tasks.forEach(t => {
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
       if (changed && t.yearlyTaskId) {
         yearlyToggles.push({ yearlyTaskId: t.yearlyTaskId, completed: t.completed });
       }
+      if (changed && t.strategyPlanId && t.strategyStageId && t.strategyGoalId) {
+        strategyToggles.push({
+          strategyPlanId: t.strategyPlanId,
+          strategyStageId: t.strategyStageId,
+          strategyGoalId: t.strategyGoalId,
+          completed: t.completed
+        });
+      }
     });
     if (yearlyToggles.length > 0) {
       syncLinkedYearlyTasks(yearlyToggles);
+    }
+    if (strategyToggles.length > 0) {
+      syncLinkedStrategyGoals(strategyToggles);
     }
 
     markLocalMutation();
@@ -3227,6 +3281,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       backupType: 'single_account' as const,
       version: 2,
       exportedAt: new Date().toISOString(),
+      schemaVersion: 2,
       accountEmail: user?.email || '',
       displayName: user?.displayName || '',
       userId: user?.id || '',
@@ -3248,7 +3303,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       problems: problemsRef.current,
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
-      checklistItems: checklistItemsRef.current
+      checklistItems: checklistItemsRef.current,
+      deletedIds: deletedIdsRef.current
     };
     return JSON.stringify(data, null, 2);
   };
@@ -3277,6 +3333,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         (src.yearlyPlans && typeof src.yearlyPlans === 'object') ||
         Array.isArray(src.lifePillars) ||
         Array.isArray(src.customReviewPrompts) ||
+        (src.macroReviewSettings && typeof src.macroReviewSettings === 'object') ||
+        Array.isArray(src.problemCategories) ||
+        (src.problemSettings && typeof src.problemSettings === 'object') ||
         Array.isArray(src.strategyPlans) ||
         Array.isArray(src.problems) ||
         Array.isArray(src.reviews) ||
@@ -3343,6 +3402,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (Array.isArray(src.reviews)) commitReviews(src.reviews);
       if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
       if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
+      if (src.deletedIds && typeof src.deletedIds === 'object') {
+        commitDeletedIds(src.deletedIds);
+      }
       if (src.systemLevel >= 1 && src.systemLevel <= 5) {
         commitSystemLevel(src.systemLevel as SystemLevel);
       }
@@ -3863,7 +3925,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (!match) return pt;
         const pSubs = pt.subTasks || [];
         const sSubs = match.subTasks || [];
-        if (sSubs.length === 0) return pt;
         const mergedSubs = [...pSubs];
         const pSubIds = new Set(pSubs.map(s => s.id));
         sSubs.forEach(ss => {
@@ -3875,7 +3936,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             needsCloudPush = true;
           }
         });
-        return mergedSubs.length > pSubs.length ? { ...pt, subTasks: mergedSubs } : pt;
+        return {
+          ...pt,
+          monthlyTaskId: pt.monthlyTaskId || match.monthlyTaskId,
+          quarterlyTaskId: pt.quarterlyTaskId || match.quarterlyTaskId,
+          yearlyTaskId: pt.yearlyTaskId || match.yearlyTaskId,
+          strategyPlanId: pt.strategyPlanId || match.strategyPlanId,
+          strategyStageId: pt.strategyStageId || match.strategyStageId,
+          strategyGoalId: pt.strategyGoalId || match.strategyGoalId,
+          sourceLabel: pt.sourceLabel || match.sourceLabel,
+          ...(mergedSubs.length > 0 ? { subTasks: mergedSubs } : {})
+        };
       });
       const existingIds = new Set(primaryTasks.map(t => t.id));
       const existingTexts = new Set(primaryTasks.map(t => t.text.trim().toLowerCase()));
@@ -3952,6 +4023,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
 
         const mergedTasks = mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime);
+        const mergedWeekAudits =
+          primary.outcomeAudits || secondary.outcomeAudits
+            ? { ...(secondary.outcomeAudits || {}), ...(primary.outcomeAudits || {}) }
+            : undefined;
         mergedWeeklyPlans[weekId] = {
           ...primary,
           focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
@@ -3961,6 +4036,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             ? primary.courseCorrectionNotes
             : secondary.courseCorrectionNotes,
           reviewNotes: primary.reviewNotes?.trim() ? primary.reviewNotes : secondary.reviewNotes,
+          prevPromiseVerdict: primary.prevPromiseVerdict || secondary.prevPromiseVerdict,
+          prevPromiseNote: primary.prevPromiseNote?.trim()
+            ? primary.prevPromiseNote
+            : secondary.prevPromiseNote,
+          ...(mergedWeekAudits ? { outcomeAudits: mergedWeekAudits } : {}),
           tasks: mergedTasks,
           achievedScore: computeWeeklyAchievedScore(mergedTasks)
         };
@@ -4076,13 +4156,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             secondaryTime = hasPendingPush ? cTime : lTime;
           }
 
-          const primaryFocuses = Array.isArray(primary.topFocuses) && primary.topFocuses.some(f => f.trim().length > 0)
-            ? primary.topFocuses
-            : secondary.topFocuses;
+          // Slot-by-slot merge of topFocuses so concurrent focus edits on two devices never wipe each other
+          const pFocuses = Array.isArray(primary.topFocuses) ? primary.topFocuses : [];
+          const sFocuses = Array.isArray(secondary.topFocuses) ? secondary.topFocuses : [];
+          const maxFocusSlots = Math.max(pFocuses.length, sFocuses.length);
+          const mergedFocuses =
+            maxFocusSlots > 0
+              ? Array.from({ length: maxFocusSlots }, (_, i) =>
+                  (pFocuses[i] || '').trim() ? pFocuses[i] : sFocuses[i] || ''
+                )
+              : undefined;
           const mergedBase: any = {
             ...primary,
             focusTheme: primary.focusTheme?.trim() ? primary.focusTheme : secondary.focusTheme || '',
-            ...(primaryFocuses ? { topFocuses: primaryFocuses } : {}),
+            ...(mergedFocuses ? { topFocuses: mergedFocuses } : {}),
             notes: primary.notes?.trim() ? primary.notes : secondary.notes || '',
             tasks: mergeTaskItemLists(primary.tasks || [], secondary.tasks || [], secondaryTime)
           };
@@ -4096,7 +4183,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if ('targetGateRefs' in primary || 'targetGateRefs' in secondary) {
             const pGates = (primary as QuarterlyPlan).targetGateRefs || [];
             const sGates = (secondary as QuarterlyPlan).targetGateRefs || [];
-            mergedBase.targetGateRefs = pGates.length > 0 ? pGates : sGates;
+            const gateSeen = new Set<string>();
+            const unionGates: TargetGateRef[] = [];
+            [...pGates, ...sGates].forEach(g => {
+              const sig = `${g.planId}|${g.stageId}`;
+              if (!gateSeen.has(sig)) {
+                gateSeen.add(sig);
+                unionGates.push(g);
+              }
+            });
+            mergedBase.targetGateRefs = unionGates;
           }
           merged[k] = mergedBase as T;
         }
@@ -4131,7 +4227,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const mergedGwsSessions = mergeCollectionById<GWSSession>(
       local.gwsSessions,
       cloudState?.gwsSessions,
-      s => Date.parse(s.createdAt || '') || 0
+      s => Date.parse(s.updatedAt || s.createdAt || '') || 0,
+      (l, c) => {
+        const lT = Date.parse(l.updatedAt || l.createdAt || '') || 0;
+        const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        const primary = lT >= cT ? l : c;
+        const secondary = lT >= cT ? c : l;
+        return {
+          ...primary,
+          focusTag: primary.focusTag?.trim() ? primary.focusTag : secondary.focusTag,
+          roadmapPlanId: primary.roadmapPlanId || secondary.roadmapPlanId,
+          pillarId: primary.pillarId || secondary.pillarId
+        };
+      }
     );
 
     const mergedStrategyPlans = mergeCollectionById<StrategyPlan>(
@@ -4205,10 +4313,26 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const mergedDispatched = Array.from(
           new Set([...(primary.dispatchedTo || []), ...(secondary.dispatchedTo || [])])
         );
+        // Union fixAttempts by id so experiment history from multiple devices is never lost
+        const attSeen = new Set<string>();
+        const mergedAttempts: ProblemFixAttempt[] = [];
+        [...(secondary.fixAttempts || []), ...(primary.fixAttempts || [])].forEach(att => {
+          if (!att?.id || attSeen.has(att.id)) return;
+          attSeen.add(att.id);
+          mergedAttempts.push(att);
+        });
+        mergedAttempts.sort((a, b) => (a.endedAt || a.startedAt).localeCompare(b.endedAt || b.startedAt));
         return {
           ...primary,
+          trigger: primary.trigger?.trim() ? primary.trigger : secondary.trigger,
+          rootCause: primary.rootCause?.trim() ? primary.rootCause : secondary.rootCause,
+          fixNote: primary.fixNote?.trim() ? primary.fixNote : secondary.fixNote,
+          fixStartedAt: primary.fixStartedAt || secondary.fixStartedAt,
+          verifyDays: primary.verifyDays ?? secondary.verifyDays,
+          lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
           occurrences: mergedOccurrences,
           tags: mergedTags,
+          ...(mergedAttempts.length > 0 ? { fixAttempts: mergedAttempts } : {}),
           ...(mergedDispatched.length > 0 ? { dispatchedTo: mergedDispatched } : {})
         };
       }
@@ -4217,7 +4341,52 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const mergedReviews = mergeCollectionById<ReviewEntry>(
       local.reviews,
       cloudState?.reviews,
-      r => Date.parse(r.updatedAt || r.createdAt || '') || 0
+      r => Date.parse(r.updatedAt || r.createdAt || '') || 0,
+      (l, c) => {
+        const lT = Date.parse(l.updatedAt || l.createdAt || '') || 0;
+        const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        const primary = lT >= cT ? l : c;
+        const secondary = lT >= cT ? c : l;
+        return {
+          ...primary,
+          headline: primary.headline?.trim() ? primary.headline : secondary.headline,
+          score: (primary.score || 0) > 0 ? primary.score : secondary.score,
+          wins: primary.wins?.trim() ? primary.wins : secondary.wins || '',
+          blockers: primary.blockers?.trim() ? primary.blockers : secondary.blockers || '',
+          courseCorrections: primary.courseCorrections?.trim()
+            ? primary.courseCorrections
+            : secondary.courseCorrections || '',
+          prevPromiseVerdict: primary.prevPromiseVerdict || secondary.prevPromiseVerdict,
+          prevPromiseNote: primary.prevPromiseNote?.trim()
+            ? primary.prevPromiseNote
+            : secondary.prevPromiseNote,
+          effortVsOutcomeNote: primary.effortVsOutcomeNote?.trim()
+            ? primary.effortVsOutcomeNote
+            : secondary.effortVsOutcomeNote,
+          assumptionsDisproved: primary.assumptionsDisproved?.trim()
+            ? primary.assumptionsDisproved
+            : secondary.assumptionsDisproved,
+          energyAndMountainNote: primary.energyAndMountainNote?.trim()
+            ? primary.energyAndMountainNote
+            : secondary.energyAndMountainNote,
+          outcomeAudits:
+            primary.outcomeAudits || secondary.outcomeAudits
+              ? { ...(secondary.outcomeAudits || {}), ...(primary.outcomeAudits || {}) }
+              : undefined,
+          roadmapAudits:
+            primary.roadmapAudits || secondary.roadmapAudits
+              ? { ...(secondary.roadmapAudits || {}), ...(primary.roadmapAudits || {}) }
+              : undefined,
+          pillarAudits:
+            primary.pillarAudits || secondary.pillarAudits
+              ? { ...(secondary.pillarAudits || {}), ...(primary.pillarAudits || {}) }
+              : undefined,
+          customAnswers:
+            primary.customAnswers || secondary.customAnswers
+              ? { ...(secondary.customAnswers || {}), ...(primary.customAnswers || {}) }
+              : undefined
+        };
+      }
     );
 
     const mergedChecklistCategories = mergeCollectionById<ChecklistCategory>(
@@ -4263,10 +4432,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       () => (localIsNewer ? localMs : cloudMs)
     );
 
-    const mergedMacroReviewSettings: MacroReviewSettings =
+    const primaryMacroSettings =
       localIsNewer || !cloudState?.macroReviewSettings
-        ? local.macroReviewSettings
-        : cloudState.macroReviewSettings;
+        ? local.macroReviewSettings || {}
+        : cloudState.macroReviewSettings || {};
+    const secondaryMacroSettings =
+      localIsNewer || !cloudState?.macroReviewSettings
+        ? cloudState?.macroReviewSettings || {}
+        : local.macroReviewSettings || {};
+    const mergedMacroReviewSettings: MacroReviewSettings = {
+      hiddenStages: {
+        quarterly: primaryMacroSettings.hiddenStages?.quarterly ?? secondaryMacroSettings.hiddenStages?.quarterly,
+        yearly: primaryMacroSettings.hiddenStages?.yearly ?? secondaryMacroSettings.hiddenStages?.yearly
+      },
+      customPromptLabels: {
+        ...(secondaryMacroSettings.customPromptLabels || {}),
+        ...(primaryMacroSettings.customPromptLabels || {})
+      }
+    };
 
     const mergedProblemCategories = mergeCollectionById<CustomProblemCategory>(
       local.problemCategories,
@@ -4276,9 +4459,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const mergedProblemSettings: ProblemSettings = {
       ...DEFAULT_PROBLEM_SETTINGS,
-      ...(localIsNewer || !cloudState?.problemSettings
-        ? local.problemSettings
-        : cloudState.problemSettings)
+      ...(localIsNewer ? cloudState?.problemSettings || {} : local.problemSettings || {}),
+      ...(localIsNewer ? local.problemSettings || {} : cloudState?.problemSettings || {})
     };
 
     const onboardingStartDate =
@@ -4672,6 +4854,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             reviews: raw.reviews,
             checklistCategories: raw.checklistCategories,
             checklistItems: raw.checklistItems,
+            deletedIds: raw.deletedIds,
+            schemaVersion: raw.schemaVersion || 2,
             systemLevel: raw.systemLevel
           };
 

@@ -5,6 +5,8 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
+import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
+import { daysBetweenDates, normalizeTag } from '../../lib/problems';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
   BookOpen,
@@ -99,6 +101,11 @@ export const StrategyRoadmapsView: React.FC = () => {
     selectedWeekId,
     saveWeeklyPlan,
     setSelectedWeekId,
+    getMonthlyPlan,
+    saveMonthlyPlan,
+    getQuarterlyPlan,
+    saveQuarterlyPlan,
+    problems,
     setPlanningSubTab
   } = useStorage();
 
@@ -126,6 +133,10 @@ export const StrategyRoadmapsView: React.FC = () => {
     sortedWeeklyPlans[sortedWeeklyPlans.length - 1];
   const activeWeeklyPlan =
     (pullTargetWeekId && weeklyPlans[pullTargetWeekId]) || defaultWeeklyPlan;
+  const activeMonthKey = selectedDate.slice(0, 7);
+  const activeQuarterKey = getQuarterKeyForDate(selectedDate);
+  const activeMonthPlan = getMonthlyPlan(activeMonthKey);
+  const activeQuarterPlan = getQuarterlyPlan(activeQuarterKey);
 
   const handleCreatePlan = () => {
     const newPlan = createNewPlanTemplate(strategyPlans.length);
@@ -248,6 +259,92 @@ export const StrategyRoadmapsView: React.FC = () => {
     }
     const norm = text.trim().toLowerCase();
     return !!norm && activeWeeklyPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+  };
+
+  const isGoalInActiveMonth = (text: string, strategyGoalId?: string): boolean => {
+    if (strategyGoalId && activeMonthPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
+      return true;
+    }
+    const norm = text.trim().toLowerCase();
+    return !!norm && activeMonthPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+  };
+
+  const isGoalInActiveQuarter = (text: string, strategyGoalId?: string): boolean => {
+    if (strategyGoalId && activeQuarterPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
+      return true;
+    }
+    const norm = text.trim().toLowerCase();
+    return !!norm && activeQuarterPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+  };
+
+  const handlePullGoalToMonth = (
+    text: string,
+    links?: {
+      strategyPlanId?: string;
+      strategyStageId?: string;
+      strategyGoalId?: string;
+      sourceLabel?: string;
+      completed?: boolean;
+    }
+  ) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (isGoalInActiveMonth(trimmed, links?.strategyGoalId)) {
+      setPlanningSubTab('monthly');
+      return;
+    }
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: [
+        ...activeMonthPlan.tasks,
+        {
+          id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          text: trimmed,
+          completed: Boolean(links?.completed),
+          ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
+          ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
+          ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
+          ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
+        }
+      ]
+    });
+    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeMonthKey} Monthly Plan`);
+    setTimeout(() => setPullNotice(null), 2400);
+  };
+
+  const handlePullGoalToQuarter = (
+    text: string,
+    links?: {
+      strategyPlanId?: string;
+      strategyStageId?: string;
+      strategyGoalId?: string;
+      sourceLabel?: string;
+      completed?: boolean;
+    }
+  ) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (isGoalInActiveQuarter(trimmed, links?.strategyGoalId)) {
+      setPlanningSubTab('quarterly');
+      return;
+    }
+    saveQuarterlyPlan({
+      ...activeQuarterPlan,
+      tasks: [
+        ...activeQuarterPlan.tasks,
+        {
+          id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          text: trimmed,
+          completed: Boolean(links?.completed),
+          ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
+          ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
+          ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
+          ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
+        }
+      ]
+    });
+    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeQuarterKey} Quarterly Plan`);
+    setTimeout(() => setPullNotice(null), 2400);
   };
 
   const handlePullGoalToWeek = (
@@ -758,9 +855,53 @@ export const StrategyRoadmapsView: React.FC = () => {
                                 <span>Gate Passed</span>
                               </span>
                             ) : isCurrent ? (
-                              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wider">
-                                Active Stage
-                              </span>
+                              <>
+                                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wider">
+                                  Active Stage
+                                </span>
+                                {(() => {
+                                  const prevGateDate =
+                                    idx > 0 ? activePlan.stages[idx - 1]?.gatePassedAt : undefined;
+                                  const startRef =
+                                    stage.startedAt ||
+                                    prevGateDate ||
+                                    (activePlan.createdAt || todayDate).slice(0, 10);
+                                  const daysOnStage = daysBetweenDates(startRef, todayDate);
+                                  const isStalled = daysOnStage >= 21 && completedGoals === 0;
+                                  const normTitle = normalizeTag(activePlan.title);
+                                  const activeTaggedProblems = normTitle
+                                    ? problems.filter(
+                                        p =>
+                                          p.status !== 'solved' &&
+                                          ((p.tags || []).some(t => normalizeTag(t) === normTitle) ||
+                                            p.title.toLowerCase().includes(activePlan.title.trim().toLowerCase()))
+                                      ).length
+                                    : 0;
+                                  return (
+                                    <>
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold border ${
+                                          isStalled
+                                            ? 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+                                            : 'bg-slate-900 text-slate-400 border-slate-800'
+                                        }`}
+                                        title={
+                                          isStalled
+                                            ? `Active for ${daysOnStage} days with 0 proximal goals checked — break down goals or diagnose constraints`
+                                            : `Days in this active stage (since ${startRef})`
+                                        }
+                                      >
+                                        {isStalled ? `⚠ Stalled ${daysOnStage}d` : `${daysOnStage}d active`}
+                                      </span>
+                                      {activeTaggedProblems > 0 && (
+                                        <span className="px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/30 font-mono text-[10px] font-bold">
+                                          {activeTaggedProblems} open blocker{activeTaggedProblems === 1 ? '' : 's'}
+                                        </span>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </>
                             ) : (
                               <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold uppercase tracking-wider">
                                 <Pencil className="w-3 h-3" />
@@ -858,6 +999,15 @@ export const StrategyRoadmapsView: React.FC = () => {
                                   <div className="space-y-1.5">
                                     {stage.proximalGoals.map(goal => {
                                       const inWeek = isGoalInActiveWeek(goal.text, goal.id);
+                                      const inMonth = isGoalInActiveMonth(goal.text, goal.id);
+                                      const inQuarter = isGoalInActiveQuarter(goal.text, goal.id);
+                                      const goalLinks = {
+                                        strategyPlanId: activePlan.id,
+                                        strategyStageId: stage.id,
+                                        strategyGoalId: goal.id,
+                                        sourceLabel: `${activePlan.title} · Stage ${idx}`,
+                                        completed: goal.completed
+                                      };
                                       return (
                                         <div
                                           key={goal.id}
@@ -902,33 +1052,59 @@ export const StrategyRoadmapsView: React.FC = () => {
                                                 : 'text-slate-200'
                                             }`}
                                           />
-                                          {activeWeeklyPlan && (
+                                          <div className="flex items-center space-x-1 shrink-0">
                                             <button
                                               type="button"
-                                              onClick={() =>
-                                                handlePullGoalToWeek(goal.text, {
-                                                  strategyPlanId: activePlan.id,
-                                                  strategyStageId: stage.id,
-                                                  strategyGoalId: goal.id,
-                                                  sourceLabel: `${activePlan.title} · Stage ${idx}`,
-                                                  completed: goal.completed
-                                                })
-                                              }
+                                              onClick={() => handlePullGoalToQuarter(goal.text, goalLinks)}
                                               title={
-                                                inWeek
-                                                  ? `In Week ${activeWeeklyPlan.weekNumber} — open Weekly Plan`
-                                                  : `Pull into Week ${activeWeeklyPlan.weekNumber}`
+                                                inQuarter
+                                                  ? `In ${activeQuarterKey} — open Quarterly Plan`
+                                                  : `Pull into ${activeQuarterKey} Quarterly Plan`
                                               }
-                                              className={`shrink-0 inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
-                                                inWeek
-                                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                                  : 'bg-slate-950 text-amber-400 border-amber-500/30 hover:bg-amber-500/15'
+                                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
+                                                inQuarter
+                                                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/35'
+                                                  : 'bg-slate-950 text-cyan-400 border-slate-800 hover:border-cyan-500/40'
+                                              }`}
+                                            >
+                                              {inQuarter ? `✓ ${activeQuarterKey.slice(5)}` : `+ ${activeQuarterKey.slice(5)}`}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handlePullGoalToMonth(goal.text, goalLinks)}
+                                              title={
+                                                inMonth
+                                                  ? `In ${activeMonthKey} — open Monthly Plan`
+                                                  : `Pull into ${activeMonthKey} Monthly Plan`
+                                              }
+                                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
+                                                inMonth
+                                                  ? 'bg-purple-500/20 text-purple-300 border-purple-500/35'
+                                                  : 'bg-slate-950 text-purple-400 border-slate-800 hover:border-purple-500/40'
+                                              }`}
+                                            >
+                                              {inMonth ? '✓ Mo' : '+ Mo'}
+                                            </button>
+                                            {activeWeeklyPlan && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handlePullGoalToWeek(goal.text, goalLinks)}
+                                                title={
+                                                  inWeek
+                                                    ? `In Week ${activeWeeklyPlan.weekNumber} — open Weekly Plan`
+                                                    : `Pull into Week ${activeWeeklyPlan.weekNumber}`
+                                                }
+                                                className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold border transition-colors ${
+                                                  inWeek
+                                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                                    : 'bg-slate-950 text-amber-400 border-amber-500/30 hover:bg-amber-500/15'
                                               }`}
                                             >
                                               {!inWeek && <ArrowDownToLine className="w-2.5 h-2.5" />}
                                               <span>{inWeek ? `✓ W${activeWeeklyPlan.weekNumber}` : `+ W${activeWeeklyPlan.weekNumber}`}</span>
                                             </button>
-                                          )}
+                                            )}
+                                          </div>
                                           <button
                                             type="button"
                                             onClick={() =>
@@ -1125,12 +1301,24 @@ export const StrategyRoadmapsView: React.FC = () => {
                               <button
                                 type="button"
                                 disabled={isLocked && !stage.gatePassed}
-                                onClick={() =>
-                                  updateStage(stage.id, {
-                                    gatePassed: !stage.gatePassed,
-                                    gatePassedAt: !stage.gatePassed ? todayDate : undefined
-                                  })
-                                }
+                                onClick={() => {
+                                  const nextPassed = !stage.gatePassed;
+                                  updateActivePlan({
+                                    stages: activePlan.stages.map((s, sIdx) => {
+                                      if (s.id === stage.id) {
+                                        return {
+                                          ...s,
+                                          gatePassed: nextPassed,
+                                          gatePassedAt: nextPassed ? todayDate : undefined
+                                        };
+                                      }
+                                      if (nextPassed && sIdx === idx + 1 && !s.startedAt) {
+                                        return { ...s, startedAt: todayDate };
+                                      }
+                                      return s;
+                                    })
+                                  });
+                                }}
                                 title={
                                   isLocked && !stage.gatePassed
                                     ? `Pass Stage ${idx - 1}'s gate first`

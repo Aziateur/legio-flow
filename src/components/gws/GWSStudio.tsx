@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   useStorage,
   getPriorityItemsForEntry,
@@ -6,8 +6,8 @@ import {
   findBestWeeklyPlanForDate,
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
-import { GWSSession } from '../../types/schema';
-import { ProblemCategory } from '../../types/schema';
+import { GWSSession, ProblemCategory } from '../../types/schema';
+import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 import { 
@@ -25,8 +25,37 @@ import {
   Award,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Crosshair,
+  Compass,
+  Volume2,
+  VolumeX,
+  Zap
 } from 'lucide-react';
+
+const playSprintBellChime = () => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    [523.25, 659.25].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const start = ctx.currentTime + idx * 0.22;
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.exponentialRampToValueAtTime(0.18, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.55);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.58);
+    });
+  } catch {
+    // Ignore autoplay/WebAudio restrictions
+  }
+};
 
 interface GWSStudioProps {
   onClose?: () => void;
@@ -47,6 +76,10 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     weeklyPlans,
     selectedWeekId,
     saveWeeklyPlan,
+    getMonthlyPlan,
+    getQuarterlyPlan,
+    strategyPlans,
+    lifePillars,
     problems,
     addProblem,
     recordProblemRecurrence
@@ -57,10 +90,22 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   const activeWeeklyPlan =
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId];
+  const activeMonthPlan = getMonthlyPlan(selectedDate.slice(0, 7));
+  const activeQuarterPlan = getQuarterlyPlan(getQuarterKeyForDate(selectedDate));
+  const activeFocusOptions = Array.from(
+    new Set(
+      [...(activeMonthPlan.topFocuses || []), ...(activeQuarterPlan.topFocuses || [])]
+        .map(f => f.trim())
+        .filter(Boolean)
+    )
+  );
 
   // Active session state (hydrates from persistent activeGwsTimer so tab switches/reloads never lose a sprint)
   const [taskName, setTaskName] = useState(() => activeGwsTimer?.taskName || '');
   const [linkedPriorityId, setLinkedPriorityId] = useState<string | null>(() => activeGwsTimer?.linkedPriorityId || null);
+  const [focusTag, setFocusTag] = useState<string>(() => activeGwsTimer?.focusTag || '');
+  const [roadmapPlanId, setRoadmapPlanId] = useState<string>(() => activeGwsTimer?.roadmapPlanId || '');
+  const [pillarId, setPillarId] = useState<string>(() => activeGwsTimer?.pillarId || '');
   const [completePriorityOnSave, setCompletePriorityOnSave] = useState(true);
   const [plannedMinutes, setPlannedMinutes] = useState(() => activeGwsTimer?.plannedMinutes || 50);
   const [actualMinutes, setActualMinutes] = useState(() => {
@@ -70,6 +115,18 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       (activeGwsTimer.startedAt ? Math.max(0, Math.floor((Date.now() - activeGwsTimer.startedAt) / 1000)) : 0);
     return secs > 0 ? Math.max(1, Math.round(secs / 60)) : 0;
   });
+
+  // Live sprint ergonomics (audio bell toggle, end-of-block alert fired flag, mid-sprint slip logger)
+  const [chimeEnabled, setChimeEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('legio_gws_chime_v1') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const chimeFiredRef = useRef(false);
+  const [quickSlipText, setQuickSlipText] = useState('');
+  const [quickSlipNotice, setQuickSlipNotice] = useState<string | null>(null);
 
   // Wall-clock driven live timer state
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -117,13 +174,84 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     }
   }, [timerSeconds, activeGwsTimer]);
 
-  // Sync task/priority/plannedMinutes edits into active persistent timer if one is active
+  // Live browser tab title while sprint timer is running + end-of-block chime when hitting plannedMinutes
+  const hitPlannedBlock = plannedMinutes > 0 && timerSeconds >= plannedMinutes * 60;
+  useEffect(() => {
+    if (!isTimerRunning) {
+      document.title = 'LEGIO — Operating System';
+      return;
+    }
+    const mins = Math.floor(timerSeconds / 60);
+    const secs = timerSeconds % 60;
+    const clock = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    document.title = `${clock}${hitPlannedBlock ? ' ✓' : ''} · GWS — LEGIO`;
+    return () => {
+      document.title = 'LEGIO — Operating System';
+    };
+  }, [isTimerRunning, timerSeconds, hitPlannedBlock]);
+
+  useEffect(() => {
+    if (!hitPlannedBlock) {
+      chimeFiredRef.current = false;
+      return;
+    }
+    if (isTimerRunning && chimeEnabled && !chimeFiredRef.current) {
+      chimeFiredRef.current = true;
+      playSprintBellChime();
+    }
+  }, [hitPlannedBlock, isTimerRunning, chimeEnabled]);
+
+  const toggleChime = () => {
+    const next = !chimeEnabled;
+    setChimeEnabled(next);
+    try {
+      localStorage.setItem('legio_gws_chime_v1', String(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleLogMidSprintSlip = () => {
+    const trimmed = quickSlipText.trim();
+    if (!trimmed) return;
+    const existing = problems.find(p => p.title.trim().toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      recordProblemRecurrence(existing.id, {
+        date: selectedDate,
+        sourceType: 'gws',
+        sourceRef: taskName.trim() || 'Live GWS Sprint'
+      });
+    } else {
+      const autoTags: string[] = [];
+      if (roadmapPlanId) {
+        const sp = strategyPlans.find(p => p.id === roadmapPlanId);
+        if (sp) autoTags.push(sp.title);
+      }
+      addProblem({
+        title: trimmed,
+        category: heldBackCategory,
+        scale: 'friction',
+        tags: autoTags,
+        sourceType: 'gws',
+        date: selectedDate,
+        sourceRef: taskName.trim() || 'Live GWS Sprint'
+      });
+    }
+    setQuickSlipText('');
+    setQuickSlipNotice(`Caught slip → Problem Inbox`);
+    setTimeout(() => setQuickSlipNotice(null), 2200);
+  };
+
+  // Sync task/priority/plannedMinutes/strategic tags into active persistent timer if one is active
   useEffect(() => {
     if (!activeGwsTimer) return;
     if (
       activeGwsTimer.taskName !== taskName ||
       activeGwsTimer.linkedPriorityId !== linkedPriorityId ||
-      activeGwsTimer.plannedMinutes !== plannedMinutes
+      activeGwsTimer.plannedMinutes !== plannedMinutes ||
+      (activeGwsTimer.focusTag || '') !== focusTag ||
+      (activeGwsTimer.roadmapPlanId || '') !== roadmapPlanId ||
+      (activeGwsTimer.pillarId || '') !== pillarId
     ) {
       updateActiveGwsTimer(prev =>
         prev
@@ -131,12 +259,15 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
               ...prev,
               taskName,
               linkedPriorityId,
-              plannedMinutes
+              plannedMinutes,
+              focusTag: focusTag || undefined,
+              roadmapPlanId: roadmapPlanId || undefined,
+              pillarId: pillarId || undefined
             }
           : prev
       );
     }
-  }, [taskName, linkedPriorityId, plannedMinutes]);
+  }, [taskName, linkedPriorityId, plannedMinutes, focusTag, roadmapPlanId, pillarId]);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -151,6 +282,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       taskName,
       linkedPriorityId,
       plannedMinutes,
+      focusTag: focusTag || undefined,
+      roadmapPlanId: roadmapPlanId || undefined,
+      pillarId: pillarId || undefined,
       startedAt: startTs,
       accumulatedSeconds: prev?.accumulatedSeconds || 0
     }));
@@ -167,6 +301,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
         taskName,
         linkedPriorityId,
         plannedMinutes,
+        focusTag: focusTag || undefined,
+        roadmapPlanId: roadmapPlanId || undefined,
+        pillarId: pillarId || undefined,
         startedAt: null,
         accumulatedSeconds: prev.accumulatedSeconds + added
       };
@@ -175,14 +312,19 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
 
   const handleResetTimer = () => {
     clearActiveGwsTimer();
+    chimeFiredRef.current = false;
     setActualMinutes(0);
   };
 
   const handleCancelSprint = () => {
     clearActiveGwsTimer();
+    chimeFiredRef.current = false;
     setActualMinutes(0);
     setTaskName('');
     setLinkedPriorityId(null);
+    setFocusTag('');
+    setRoadmapPlanId('');
+    setPillarId('');
   };
 
   const getScoreBadge = (score: number) => {
@@ -235,6 +377,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       taskName: taskName.trim(),
       plannedMinutes,
       actualMinutes: sessionActual,
+      ...(focusTag.trim() ? { focusTag: focusTag.trim() } : {}),
+      ...(roadmapPlanId ? { roadmapPlanId } : {}),
+      ...(pillarId ? { pillarId } : {}),
       ratings: {
         focus,
         execution,
@@ -310,6 +455,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     // Reset form
     setTaskName('');
     setLinkedPriorityId(null);
+    setFocusTag('');
+    setRoadmapPlanId('');
+    setPillarId('');
     handleResetTimer();
     setAccomplished('');
     setHeldBackDraft('');
@@ -410,7 +558,14 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                         type="button"
                         onClick={() => {
                           setTaskName(prio.text);
-                          setLinkedPriorityId(isSelectedPrio ? null : prio.id);
+                          const nextId = isSelectedPrio ? null : prio.id;
+                          setLinkedPriorityId(nextId);
+                          if (nextId && prio.weeklyTaskId && activeWeeklyPlan) {
+                            const wt = activeWeeklyPlan.tasks.find(t => t.id === prio.weeklyTaskId);
+                            if (wt?.strategyPlanId) {
+                              setRoadmapPlanId(wt.strategyPlanId);
+                            }
+                          }
                         }}
                         className={`text-xs px-2.5 py-1.5 rounded-xl border transition-all flex items-center space-x-1.5 ${
                           isSelectedPrio
@@ -448,10 +603,79 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                   <span>Mark linked Daily Priority as Completed when saving this GWS sprint</span>
                 </label>
               )}
+
+              {/* Strategic Alignment Tag (Optional — powers Stated Priorities vs. Actual Hours in Reviews) */}
+              {(activeFocusOptions.length > 0 || strategyPlans.length > 0 || lifePillars.length > 0) && (
+                <div className="pt-2 space-y-2">
+                  {activeFocusOptions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center space-x-1 text-[10px] font-extrabold uppercase tracking-wider text-purple-400 mr-1">
+                        <Crosshair className="w-3 h-3" />
+                        <span>Top Focus:</span>
+                      </span>
+                      {activeFocusOptions.map((f, idx) => {
+                        const active = focusTag === f;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setFocusTag(active ? '' : f)}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold border transition-all ${
+                              active
+                                ? 'bg-purple-500 text-slate-950 border-purple-400 font-bold shadow-sm'
+                                : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                            }`}
+                          >
+                            {f}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {(strategyPlans.length > 0 || lifePillars.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {strategyPlans.length > 0 && (
+                        <div className="flex items-center space-x-1.5">
+                          <Compass className="w-3 h-3 text-cyan-400 shrink-0" />
+                          <select
+                            value={roadmapPlanId}
+                            onChange={e => setRoadmapPlanId(e.target.value)}
+                            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-[11px] font-semibold text-cyan-300 focus:outline-none focus:border-cyan-500/40"
+                          >
+                            <option value="">Roadmap (optional)...</option>
+                            {strategyPlans.map(sp => (
+                              <option key={sp.id} value={sp.id}>
+                                {sp.title}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {lifePillars.length > 0 && (
+                        <select
+                          value={pillarId}
+                          onChange={e => setPillarId(e.target.value)}
+                          className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-[11px] font-semibold text-emerald-300 focus:outline-none focus:border-emerald-500/40"
+                        >
+                          <option value="">Life Pillar (optional)...</option>
+                          {lifePillars.map(lp => (
+                            <option key={lp.id} value={lp.id}>
+                              {lp.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Time: Planned vs Actual + Live Stopwatch */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80">
+            <div className="mb-6 p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               
               {/* Planned Minutes */}
               <div className="space-y-2">
@@ -480,8 +704,25 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
               {/* Actual Minutes / Live Timer */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-400 flex items-center justify-between">
-                  <span>Actual Time Spent:</span>
-                  <span className="font-mono text-slate-100 font-bold">{formatTimer(timerSeconds)} ({actualMinutes}m)</span>
+                  <span className="flex items-center space-x-1.5">
+                    <span>Actual Time Spent:</span>
+                    {hitPlannedBlock && (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 text-[10px] font-bold">
+                        ✓ {plannedMinutes}m hit
+                      </span>
+                    )}
+                  </span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="font-mono text-slate-100 font-bold">{formatTimer(timerSeconds)} ({actualMinutes}m)</span>
+                    <button
+                      type="button"
+                      onClick={toggleChime}
+                      title={chimeEnabled ? 'End-of-block bell ON (click to mute)' : 'End-of-block bell muted (click to enable)'}
+                      className="p-1 rounded-md text-slate-400 hover:text-amber-300 transition-colors"
+                    >
+                      {chimeEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5 text-slate-600" />}
+                    </button>
+                  </div>
                 </label>
                 
                 <div className="flex items-center space-x-2">
@@ -526,6 +767,38 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                   )}
                 </div>
               </div>
+              </div>
+
+              {/* 1-Tap Mid-Sprint Slip Catcher (logs straight to Problem Inbox without breaking flow) */}
+              {(isTimerRunning || timerSeconds > 0) && (
+                <div className="pt-2.5 border-t border-slate-800/80 flex items-center gap-2">
+                  <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={quickSlipText}
+                    onChange={e => setQuickSlipText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleLogMidSprintSlip();
+                      }
+                    }}
+                    placeholder="Distraction or friction mid-sprint? Type & press Enter → logs to Problem Inbox..."
+                    className="flex-1 bg-slate-900/90 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={!quickSlipText.trim()}
+                    onClick={handleLogMidSprintSlip}
+                    className="px-2.5 py-1.5 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 disabled:opacity-40 text-orange-300 border border-orange-500/30 text-[11px] font-bold shrink-0"
+                  >
+                    + Slip
+                  </button>
+                  {quickSlipNotice && (
+                    <span className="text-[11px] font-bold text-emerald-400 shrink-0">{quickSlipNotice}</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Performance Ratings (1-5): Focus, Execution, Output */}
@@ -751,12 +1024,29 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 cursor-pointer" onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="text-[11px] font-mono text-amber-400 font-semibold">{session.date}</span>
                           <span className="text-slate-600">•</span>
                           <span className="text-[11px] text-slate-400 font-mono">
                             {session.actualMinutes || session.plannedMinutes}m
                           </span>
+                          {session.focusTag && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-bold">
+                              {session.focusTag}
+                            </span>
+                          )}
+                          {session.roadmapPlanId &&
+                            strategyPlans.find(sp => sp.id === session.roadmapPlanId) && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold">
+                                {strategyPlans.find(sp => sp.id === session.roadmapPlanId)?.title}
+                              </span>
+                            )}
+                          {session.pillarId &&
+                            lifePillars.find(lp => lp.id === session.pillarId) && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                {lifePillars.find(lp => lp.id === session.pillarId)?.name}
+                              </span>
+                            )}
                         </div>
                         <h4 className="text-sm font-bold text-slate-100 mt-1 hover:text-amber-400 transition-colors">
                           {session.taskName}

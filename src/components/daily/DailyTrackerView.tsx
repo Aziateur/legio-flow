@@ -17,8 +17,6 @@ import {
   CheckCircle2,
   Circle,
   Sliders,
-  Clock,
-  Sparkles,
   Target,
   ArrowRight,
   Plus,
@@ -33,7 +31,7 @@ import {
 } from '../../lib/checklistSchedule';
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
-import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
+import { DailyContextBrief } from './DailyContextBrief';
 
 export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
   onOpenGWS,
@@ -561,109 +559,20 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       </div>
 
-      {/* Pre-Flight Guardrails & Top Constraints (prevention before execution) */}
-      <PreFlightGuardrailsStrip context="daily" date={selectedDate} sourceRef={selectedDate} />
-
-      {/* Course Correction Feedback Loop (Surfaces Yesterday's Review & Next-Sprint Commitment) */}
-      {(latestPreviousReview || latestGwsCommitment) && (
-        <div className="bg-slate-900/70 border border-emerald-500/25 rounded-2xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-          <div className="flex items-start sm:items-center space-x-2 min-w-0">
-            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
-            <div className="truncate">
-              <span className="font-extrabold uppercase tracking-wider text-[10px] text-emerald-400 mr-2">
-                Active Course Correction:
-              </span>
-              <span className="text-slate-200">
-                {latestPreviousReview
-                  ? `"${latestPreviousReview.reviewNotes}" (${latestPreviousReview.date})`
-                  : `"${latestGwsCommitment?.reflexions.improveNext}" (GWS)`}
-              </span>
-            </div>
-          </div>
-          {latestPreviousReview && latestGwsCommitment && (
-            <span className="text-[11px] text-amber-400 font-mono truncate max-w-xs shrink-0">
-              Sprint Focus: "{latestGwsCommitment.reflexions.improveNext}"
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Unfinished Carry-Forward Strip from Previous Day */}
-      {unfinishedFromPrevDay.length > 0 && prevDayWithUnfinished && (
-        <div className="bg-slate-900/70 border border-amber-500/25 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span className="font-extrabold uppercase tracking-wider text-[10px] text-amber-400 mr-1 shrink-0">
-              Unfinished ({prevDayWithUnfinished.date.slice(5)}):
-            </span>
-            {unfinishedFromPrevDay.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handlePullGoalToDay(item.text, false, item.weeklyTaskId, item.subTaskId)}
-                className="px-2.5 py-1 rounded-xl bg-slate-950 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border border-slate-800 hover:border-amber-500/30 text-[11px] font-medium transition-colors"
-                title={`Carry "${item.text}" into ${selectedDate}`}
-              >
-                + {item.text}
-              </button>
-            ))}
-          </div>
-          {unfinishedFromPrevDay.length > 1 && (
-            <button
-              type="button"
-              onClick={handleCarryAllPrevUnfinished}
-              className="px-2.5 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[11px] font-bold shrink-0 transition-colors"
-            >
-              Carry All ({unfinishedFromPrevDay.length})
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Scheduled Weekly / Monthly Checklist Tasks Due Today or Overdue */}
-      {scheduledDueForDay.length > 0 && (
-        <div className="bg-slate-900/75 border border-purple-500/30 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span className="inline-flex items-center space-x-1 font-extrabold uppercase tracking-wider text-[10px] text-purple-300 mr-1 shrink-0">
-              <Clock className="w-3 h-3 text-purple-400" />
-              <span>Scheduled ({selectedDayShortName}):</span>
-            </span>
-            {scheduledDueForDay.map((item) => {
-              const due = getChecklistDueStatus(item, selectedDate, activeWeeklyPlan.id);
-              const schedLabel = getChecklistScheduleLabel(item);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handlePullGoalToDay(item.text, false, undefined, undefined, item.id)}
-                  className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-medium transition-colors ${
-                    due === 'overdue'
-                      ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 border-rose-500/35'
-                      : 'bg-slate-950 hover:bg-purple-500/15 text-slate-200 hover:text-purple-200 border-slate-800 hover:border-purple-500/40'
-                  }`}
-                  title={`Pull scheduled ${item.recurrence} task "${item.text}" into ${selectedDate}`}
-                >
-                  <span className="font-bold text-amber-400">+</span>
-                  <span>{item.text}</span>
-                  {schedLabel && (
-                    <span className="text-[9px] font-mono font-bold uppercase opacity-75">
-                      {due === 'overdue' ? `Late · ${schedLabel}` : schedLabel}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          {scheduledDueForDay.length > 1 && (
-            <button
-              type="button"
-              onClick={handlePullAllScheduledDue}
-              className="px-2.5 py-1 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/35 text-[11px] font-bold shrink-0 transition-colors"
-            >
-              Pull All Due ({scheduledDueForDay.length})
-            </button>
-          )}
-        </div>
-      )}
+      {/* Unified Today's Context Brief (Macro Compass + Guardrails + Course Correction + Carry-Forward + Scheduled Due) */}
+      <DailyContextBrief
+        selectedDate={selectedDate}
+        selectedDayShortName={selectedDayShortName}
+        activeWeeklyPlanId={activeWeeklyPlan.id}
+        latestPreviousReview={latestPreviousReview}
+        latestGwsCommitment={latestGwsCommitment}
+        unfinishedFromPrevDay={unfinishedFromPrevDay}
+        prevDayWithUnfinished={prevDayWithUnfinished}
+        scheduledDueForDay={scheduledDueForDay}
+        onPullGoalToDay={handlePullGoalToDay}
+        onCarryAllPrevUnfinished={handleCarryAllPrevUnfinished}
+        onPullAllScheduledDue={handlePullAllScheduledDue}
+      />
 
       {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
       {dailyTemplate && (

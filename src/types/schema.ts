@@ -75,6 +75,9 @@ export interface ActiveGWSTimer {
   plannedMinutes: number;
   startedAt: number | null; // Epoch ms while actively running; null while paused
   accumulatedSeconds: number;
+  focusTag?: string; // Optional Top Focus label or custom focus tag
+  roadmapPlanId?: string; // Optional linked StrategyPlan ID
+  pillarId?: string; // Optional linked LifePillar ID
 }
 
 export interface RewardTier {
@@ -89,6 +92,9 @@ export interface GWSSession {
   taskName: string;
   plannedMinutes: number;
   actualMinutes: number;
+  focusTag?: string; // Optional Top Focus label (from Monthly/Quarterly Top 3 Focuses)
+  roadmapPlanId?: string; // Optional linked Strategy Roadmap ID
+  pillarId?: string; // Optional linked Life Pillar ID
   ratings: {
     focus: number;     // 1-5
     execution: number; // 1-5
@@ -102,6 +108,7 @@ export interface GWSSession {
   };
   customFields?: Record<string, any>;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface DailyPriorityItem {
@@ -145,6 +152,9 @@ export interface WeeklyPlan {
   problemsEncountered?: string;
   courseCorrectionNotes?: string;
   reviewNotes?: string;
+  prevPromiseVerdict?: PromiseVerdict;
+  prevPromiseNote?: string;
+  outcomeAudits?: Record<string, OutcomeAuditEntry>;
   updatedAt: string;
 }
 
@@ -307,6 +317,7 @@ export interface StrategyStage {
   gateCriterion: string;     // Exact gate proof required to unlock the next stage
   gatePassed: boolean;
   gatePassedAt?: string;     // YYYY-MM-DD when gate was marked passed
+  startedAt?: string;        // YYYY-MM-DD when stage became active (for velocity tracking)
 }
 
 export interface StrategyPlan {

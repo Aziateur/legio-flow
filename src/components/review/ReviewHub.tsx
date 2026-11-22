@@ -3,16 +3,26 @@ import {
   useStorage,
   ReviewSubTab,
   getCurrentWeekRange,
+  getWeekRangeForWeekNumber,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
   computeWeeklyAchievedScore,
   getActiveDailyChecklistItemsForDate
 } from '../../context/StorageContext';
-import { WeeklyPlan, ReviewEntry, ProblemCategory } from '../../types/schema';
+import {
+  WeeklyPlan,
+  ReviewEntry,
+  ProblemCategory,
+  OutcomeRootCause,
+  PromiseVerdict
+} from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
+import { GwsAllocationCard } from '../common/GwsAllocationCard';
+import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import { MacroReviewView } from './MacroReviewView';
+import { computeGwsAllocationInRange } from '../../lib/macroAnalytics';
 import {
   formatProblemsForReviewText,
   hasExistingParent,
@@ -210,6 +220,8 @@ export const ReviewHub: React.FC = () => {
     getYearlyPlan,
     checklistItems,
     saveChecklistItems,
+    strategyPlans,
+    lifePillars,
     problems,
     addProblem,
     recordProblemRecurrence,
@@ -228,6 +240,9 @@ export const ReviewHub: React.FC = () => {
 
   // Modal-specific draft state for compact ProblemLoggerPanel inside Create Review modal
   const [modalProblemCategory, setModalProblemCategory] = useState<ProblemCategory>('mindset');
+  // Direct Close-the-Loop drafts for Weekly & Monthly reviews
+  const [nextWeekGoalDraft, setNextWeekGoalDraft] = useState('');
+  const [nextMonthGoalDraft, setNextMonthGoalDraft] = useState('');
   const [modalProblemTags, setModalProblemTags] = useState<string[]>([]);
 
   const activeProblemCount = problems.filter(
@@ -2636,9 +2651,88 @@ export const ReviewHub: React.FC = () => {
             </form>
           )}
 
+          {/* Promise vs. Proof Check on Previous Week's Course Correction */}
+          {(() => {
+            const prevWeekPlan =
+              targetPlanForReview.weekNumber > 1
+                ? weeklyPlans[`week_${targetPlanForReview.weekNumber - 1}`]
+                : undefined;
+            const prevCorrection = (
+              prevWeekPlan?.courseCorrectionNotes ||
+              prevWeekPlan?.reviewNotes ||
+              ''
+            ).trim();
+            if (!prevCorrection) return null;
+            const verdicts: Array<{ id: PromiseVerdict; label: string; activeCls: string }> = [
+              { id: 'executed', label: 'Followed Through', activeCls: 'bg-emerald-500 text-slate-950 border-emerald-400' },
+              { id: 'partial', label: 'Partially', activeCls: 'bg-amber-500 text-slate-950 border-amber-400' },
+              { id: 'repeated', label: 'Repeated Old Loop', activeCls: 'bg-rose-500 text-slate-950 border-rose-400' }
+            ];
+            return (
+              <div className="p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-amber-500/30 shadow-xl space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Promise vs. Proof · Your Week {targetPlanForReview.weekNumber - 1} Course Correction</span>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {verdicts.map(v => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() =>
+                          saveWeeklyPlan({ ...targetPlanForReview, prevPromiseVerdict: v.id })
+                        }
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                          targetPlanForReview.prevPromiseVerdict === v.id
+                            ? v.activeCls
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap pl-3 border-l-2 border-amber-500/40">
+                  &ldquo;{prevCorrection}&rdquo;
+                </p>
+                <input
+                  type="text"
+                  value={targetPlanForReview.prevPromiseNote || ''}
+                  onChange={e =>
+                    saveWeeklyPlan({ ...targetPlanForReview, prevPromiseNote: e.target.value })
+                  }
+                  placeholder="Honest check: did you actually apply last week's correction?"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-amber-500/40"
+                />
+              </div>
+            );
+          })()}
+
           {/* Goal Fulfillment & Unlocked Rewards Summary */}
           {(() => {
             const liveWeekAchieved = computeWeeklyAchievedScore(targetPlanForReview.tasks);
+            const handleToggleWeekGoalInReview = (taskId: string) => {
+              const nextTasks = targetPlanForReview.tasks.map(t =>
+                t.id === taskId ? { ...t, completed: !t.completed } : t
+              );
+              saveWeeklyPlan({
+                ...targetPlanForReview,
+                tasks: nextTasks,
+                achievedScore: computeWeeklyAchievedScore(nextTasks)
+              });
+            };
+            const handleSetWeekGoalMissCause = (taskId: string, rootCause?: OutcomeRootCause) => {
+              const prevAudits = targetPlanForReview.outcomeAudits || {};
+              saveWeeklyPlan({
+                ...targetPlanForReview,
+                outcomeAudits: {
+                  ...prevAudits,
+                  [taskId]: { ...(prevAudits[taskId] || {}), rootCause }
+                }
+              });
+            };
             return (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
@@ -2664,16 +2758,51 @@ export const ReviewHub: React.FC = () => {
                 {targetPlanForReview.tasks.length === 0 ? (
                   <p className="text-xs text-slate-500">No weekly deliverables logged for this week.</p>
                 ) : (
-                  targetPlanForReview.tasks.map((t) => (
+                  targetPlanForReview.tasks.map((t) => {
+                    const missCause = targetPlanForReview.outcomeAudits?.[t.id]?.rootCause || '';
+                    return (
                     <div key={t.id} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs text-slate-300">
-                        <span className={t.completed ? 'line-through text-slate-500' : 'font-medium'}>
-                          {t.completed ? '✓' : '•'} {t.text}
-                        </span>
-                        <span className="font-mono text-amber-400 shrink-0">{t.score} pts</span>
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleWeekGoalInReview(t.id)}
+                          className="flex items-center space-x-2 min-w-0 text-left hover:text-amber-300 transition-colors"
+                          title="Click to check/uncheck deliverable"
+                        >
+                          {t.completed ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          ) : (
+                            <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          )}
+                          <span className={t.completed ? 'line-through text-slate-500' : 'font-medium'}>
+                            {t.text}
+                          </span>
+                        </button>
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          {!t.completed && (
+                            <select
+                              value={missCause}
+                              onChange={e =>
+                                handleSetWeekGoalMissCause(
+                                  t.id,
+                                  (e.target.value || undefined) as OutcomeRootCause | undefined
+                                )
+                              }
+                              className="bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 focus:outline-none"
+                              title="Why was this goal missed?"
+                            >
+                              <option value="">Why?</option>
+                              <option value="execution">Execution</option>
+                              <option value="strategy">Strategy</option>
+                              <option value="scope">Scope</option>
+                              <option value="shifted">Shifted</option>
+                            </select>
+                          )}
+                          <span className="font-mono text-amber-400">{t.score} pts</span>
+                        </div>
                       </div>
                       {t.subTasks && t.subTasks.length > 0 && (
-                        <div className="pl-4 space-y-0.5">
+                        <div className="pl-5 space-y-0.5">
                           {t.subTasks.map((sub) => (
                             <div key={sub.id} className="text-[11px] text-slate-400 flex items-center space-x-1.5">
                               <span>{sub.completed ? '☑' : '☐'}</span>
@@ -2683,7 +2812,8 @@ export const ReviewHub: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  ))
+                  );
+                  })
                 )}
               </div>
             </div>
@@ -2735,9 +2865,18 @@ export const ReviewHub: React.FC = () => {
               s => s.date >= targetPlanForReview.startDate && s.date <= targetPlanForReview.endDate
             );
             const weekGwsMinutes = weekGwsList.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
+            const weekMonthFocuses = getMonthlyPlan(targetPlanForReview.startDate.slice(0, 7)).topFocuses;
+            const weekGwsAllocation = computeGwsAllocationInRange(
+              gwsSessions,
+              strategyPlans,
+              lifePillars,
+              targetPlanForReview.startDate,
+              targetPlanForReview.endDate,
+              weekMonthFocuses
+            );
 
             return (
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
                     <Timer className="w-4 h-4" />
@@ -2747,6 +2886,14 @@ export const ReviewHub: React.FC = () => {
                     {(weekGwsMinutes / 60).toFixed(1)}h deep work
                   </span>
                 </div>
+
+                {(weekGwsAllocation.totalSessions > 0 || weekGwsAllocation.neglectedFocuses.length > 0) && (
+                  <GwsAllocationCard
+                    compact
+                    allocation={weekGwsAllocation}
+                    title={`Week ${targetPlanForReview.weekNumber} Time Allocation vs. Monthly Focuses`}
+                  />
+                )}
                 {weekGwsList.length === 0 ? (
                   <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
                     No GWS sprints logged between {targetPlanForReview.startDate} and {targetPlanForReview.endDate}.
@@ -2832,6 +2979,156 @@ export const ReviewHub: React.FC = () => {
                 Save Week {targetPlanForReview.weekNumber} Retrospective & Send to Vault
               </button>
             </form>
+
+            {/* Direct Close-the-Loop Write -> Next Week Plan */}
+            {(() => {
+              const nextWeekNum = targetPlanForReview.weekNumber + 1;
+              const nextWeekId = `week_${nextWeekNum}`;
+              const nextRange = getWeekRangeForWeekNumber(nextWeekNum);
+              const existingNext = weeklyPlans[nextWeekId];
+              const nextWeekPlan: WeeklyPlan = existingNext || {
+                id: nextWeekId,
+                weekNumber: nextWeekNum,
+                startDate: nextRange.startDate,
+                endDate: nextRange.endDate,
+                focusTheme: '',
+                notes: '',
+                tasks: [],
+                totalPossibleScore: 10,
+                achievedScore: 0,
+                rewards: targetPlanForReview.rewards.map(r => ({ ...r })),
+                updatedAt: new Date().toISOString()
+              };
+              const unfinished = targetPlanForReview.tasks.filter(
+                t =>
+                  !t.completed &&
+                  !nextWeekPlan.tasks.some(
+                    nt => nt.text.trim().toLowerCase() === t.text.trim().toLowerCase()
+                  )
+              );
+
+              const handleCarryGoal = (task: typeof unfinished[number]) => {
+                const nextTasks = [
+                  ...nextWeekPlan.tasks,
+                  {
+                    id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    text: task.text,
+                    score: task.score || 2,
+                    completed: false,
+                    ...(task.monthlyTaskId ? { monthlyTaskId: task.monthlyTaskId } : {}),
+                    ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
+                    ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+                    ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+                    ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+                    ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
+                    ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+                  }
+                ];
+                saveWeeklyPlan({
+                  ...nextWeekPlan,
+                  tasks: nextTasks,
+                  achievedScore: computeWeeklyAchievedScore(nextTasks)
+                });
+              };
+
+              const handleCommitNextWeekGoal = (e: React.FormEvent) => {
+                e.preventDefault();
+                const trimmed = nextWeekGoalDraft.trim();
+                if (!trimmed) return;
+                const nextTasks = [
+                  ...nextWeekPlan.tasks,
+                  {
+                    id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    text: trimmed,
+                    score: 2,
+                    completed: false
+                  }
+                ];
+                saveWeeklyPlan({
+                  ...nextWeekPlan,
+                  tasks: nextTasks,
+                  achievedScore: computeWeeklyAchievedScore(nextTasks)
+                });
+                setNextWeekGoalDraft('');
+              };
+
+              return (
+                <div className="pt-5 border-t border-slate-800 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400">
+                      Close the Loop → Direct Write to Week {nextWeekNum} ({nextRange.startDate.slice(5)} → {nextRange.endDate.slice(5)})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedWeekId(nextWeekId);
+                        setActiveTab('planning');
+                        setPlanningSubTab('weekly');
+                      }}
+                      className="text-[11px] font-bold text-slate-400 hover:text-amber-300"
+                    >
+                      Open Week {nextWeekNum} Plan →
+                    </button>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={nextWeekPlan.focusTheme}
+                    onChange={e => saveWeeklyPlan({ ...nextWeekPlan, focusTheme: e.target.value })}
+                    placeholder={`Set Week ${nextWeekNum} Focus Theme...`}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-500/40"
+                  />
+
+                  {unfinished.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mr-1">
+                        Carry Unfinished to Week {nextWeekNum}:
+                      </span>
+                      {unfinished.map(t => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => handleCarryGoal(t)}
+                          className="px-2.5 py-1 rounded-xl bg-slate-950 hover:bg-amber-500/15 text-slate-300 hover:text-amber-300 border border-slate-800 hover:border-amber-500/35 font-medium transition-colors"
+                        >
+                          + {t.text}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {nextWeekPlan.tasks.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {nextWeekPlan.tasks.map(nt => (
+                        <span
+                          key={nt.id}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-200 border border-emerald-500/25 text-[11px] font-semibold"
+                        >
+                          <span>✓ {nt.text}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleCommitNextWeekGoal} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={nextWeekGoalDraft}
+                      onChange={e => setNextWeekGoalDraft(e.target.value)}
+                      placeholder={`Add a deliverable directly into Week ${nextWeekNum}...`}
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/40"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!nextWeekGoalDraft.trim()}
+                      className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-300 border border-amber-500/30 text-xs font-bold"
+                    >
+                      + Week {nextWeekNum}
+                    </button>
+                  </form>
+                </div>
+              );
+            })()}
           </div>
 
         </div>
@@ -2943,14 +3240,45 @@ export const ReviewHub: React.FC = () => {
             </div>
 
             {prevMonthCorrection && (
-              <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-purple-500/30 flex items-start space-x-2.5 text-xs">
-                <Sparkles className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-extrabold uppercase tracking-wider text-[10px] text-purple-400 mr-2">
-                    Target Focus from Last Month ({prevMonthKey} Course Correction):
+              <div className="p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-purple-500/30 shadow-xl space-y-3 text-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="font-extrabold uppercase tracking-wider text-[11px] text-purple-400 flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Promise vs. Proof · Last Month ({prevMonthKey}) Course Correction</span>
                   </span>
-                  <span className="text-slate-200">"{prevMonthCorrection}"</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { id: 'executed', label: 'Followed Through', activeCls: 'bg-emerald-500 text-slate-950 border-emerald-400' },
+                        { id: 'partial', label: 'Partially', activeCls: 'bg-amber-500 text-slate-950 border-amber-400' },
+                        { id: 'repeated', label: 'Repeated Old Loop', activeCls: 'bg-rose-500 text-slate-950 border-rose-400' }
+                      ] as Array<{ id: PromiseVerdict; label: string; activeCls: string }>
+                    ).map(v => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => upsertMonthlyReview(selectedMonth, { prevPromiseVerdict: v.id })}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                          mData.saved?.prevPromiseVerdict === v.id
+                            ? v.activeCls
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap pl-3 border-l-2 border-purple-500/40">
+                  &ldquo;{prevMonthCorrection}&rdquo;
+                </p>
+                <input
+                  type="text"
+                  value={mData.saved?.prevPromiseNote || ''}
+                  onChange={e => upsertMonthlyReview(selectedMonth, { prevPromiseNote: e.target.value })}
+                  placeholder="Honest check: what actually happened with last month's commitment?"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-purple-500/40"
+                />
               </div>
             )}
 
@@ -3306,12 +3634,29 @@ export const ReviewHub: React.FC = () => {
               )}
 
               {/* 3. GWS Sprints in this Month */}
-              {(monthlyScaleFilter === 'all' || monthlyScaleFilter === 'gws') && (
+              {(monthlyScaleFilter === 'all' || monthlyScaleFilter === 'gws') && (() => {
+                const monthGwsAllocation = computeGwsAllocationInRange(
+                  gwsSessions,
+                  strategyPlans,
+                  lifePillars,
+                  mData.info.startDate,
+                  mData.info.endDate,
+                  mData.monthPlan.topFocuses
+                );
+                return (
                 <div className="space-y-3 pt-2">
                   <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
                     <Timer className="w-4 h-4" />
                     <span>3. GWS Deep Work Sprints in {mData.info.label} ({mData.gws.length})</span>
                   </span>
+
+                  {(monthGwsAllocation.totalSessions > 0 || monthGwsAllocation.neglectedFocuses.length > 0) && (
+                    <GwsAllocationCard
+                      compact
+                      allocation={monthGwsAllocation}
+                      title={`${mData.info.label} Deep Work Allocation vs. Top 3 Focuses`}
+                    />
+                  )}
 
                   {mData.gws.length === 0 ? (
                     <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
@@ -3347,7 +3692,8 @@ export const ReviewHub: React.FC = () => {
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
 
             {/* Monthly Synthesis & Course Correction Editor */}
@@ -3445,6 +3791,144 @@ export const ReviewHub: React.FC = () => {
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl p-4 text-xs text-slate-200 focus:outline-none leading-relaxed"
                   />
                 </div>
+
+                {/* Direct Close-the-Loop Write -> Next Month Plan */}
+                {(() => {
+                  const nextMonthKey = shiftMonthKey(selectedMonth, 1);
+                  const nextMonthInfo = getMonthInfo(nextMonthKey);
+                  const nextMonthPlan = getMonthlyPlan(nextMonthKey);
+                  const unfinishedMonthGoals = mData.monthGoals.filter(
+                    g =>
+                      !g.completed &&
+                      !nextMonthPlan.tasks.some(
+                        nt => nt.text.trim().toLowerCase() === g.text.trim().toLowerCase()
+                      )
+                  );
+
+                  const handleCarryMonthGoal = (goal: typeof unfinishedMonthGoals[number]) => {
+                    saveMonthlyPlan({
+                      ...nextMonthPlan,
+                      tasks: [
+                        ...nextMonthPlan.tasks,
+                        {
+                          id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                          text: goal.text,
+                          completed: false,
+                          ...(goal.quarterlyTaskId ? { quarterlyTaskId: goal.quarterlyTaskId } : {}),
+                          ...(goal.yearlyTaskId ? { yearlyTaskId: goal.yearlyTaskId } : {}),
+                          ...(goal.strategyPlanId ? { strategyPlanId: goal.strategyPlanId } : {}),
+                          ...(goal.strategyStageId ? { strategyStageId: goal.strategyStageId } : {}),
+                          ...(goal.strategyGoalId ? { strategyGoalId: goal.strategyGoalId } : {}),
+                          ...(goal.sourceLabel ? { sourceLabel: goal.sourceLabel } : {})
+                        }
+                      ]
+                    });
+                  };
+
+                  const handleAddNextMonthGoal = (e: React.FormEvent) => {
+                    e.preventDefault();
+                    const trimmed = nextMonthGoalDraft.trim();
+                    if (!trimmed) return;
+                    saveMonthlyPlan({
+                      ...nextMonthPlan,
+                      tasks: [
+                        ...nextMonthPlan.tasks,
+                        {
+                          id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                          text: trimmed,
+                          completed: false
+                        }
+                      ]
+                    });
+                    setNextMonthGoalDraft('');
+                  };
+
+                  return (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-purple-500/25 space-y-3.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400">
+                          Close the Loop → Direct Write to {nextMonthInfo.label} Plan
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab('planning');
+                            setPlanningSubTab('monthly');
+                          }}
+                          className="text-[11px] font-bold text-slate-400 hover:text-purple-300"
+                        >
+                          Open Monthly Plan →
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={nextMonthPlan.focusTheme}
+                        onChange={e =>
+                          saveMonthlyPlan({ ...nextMonthPlan, focusTheme: e.target.value })
+                        }
+                        placeholder={`Set ${nextMonthInfo.label} Singular Outcome / Focus Theme...`}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-semibold text-amber-300 placeholder-slate-600 focus:outline-none focus:border-purple-500/40"
+                      />
+
+                      <TopFocusesEditor
+                        compact
+                        focuses={nextMonthPlan.topFocuses}
+                        onChange={next => saveMonthlyPlan({ ...nextMonthPlan, topFocuses: next })}
+                        accent="purple"
+                        title={`Top 3 Focuses • ${nextMonthInfo.label}`}
+                      />
+
+                      {unfinishedMonthGoals.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mr-1">
+                            Carry Unfinished to {nextMonthInfo.monthKey}:
+                          </span>
+                          {unfinishedMonthGoals.map(g => (
+                            <button
+                              key={g.id}
+                              type="button"
+                              onClick={() => handleCarryMonthGoal(g)}
+                              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-purple-500/15 text-slate-300 hover:text-purple-200 border border-slate-800 hover:border-purple-500/35 font-medium transition-colors"
+                            >
+                              + {g.text}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {nextMonthPlan.tasks.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {nextMonthPlan.tasks.map(nt => (
+                            <span
+                              key={nt.id}
+                              className="px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-200 border border-emerald-500/25 text-[11px] font-semibold"
+                            >
+                              ✓ {nt.text}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <form onSubmit={handleAddNextMonthGoal} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={nextMonthGoalDraft}
+                          onChange={e => setNextMonthGoalDraft(e.target.value)}
+                          placeholder={`Commit a goal directly into ${nextMonthInfo.label}...`}
+                          className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500/40"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!nextMonthGoalDraft.trim()}
+                          className="px-3.5 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 disabled:opacity-40 text-purple-200 border border-purple-500/30 text-xs font-bold"
+                        >
+                          + {nextMonthInfo.monthKey}
+                        </button>
+                      </form>
+                    </div>
+                  );
+                })()}
 
                 <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400">
                   <span>Autosaved to Review Vault & included in {mData.info.quarterKey} Quarterly Review</span>

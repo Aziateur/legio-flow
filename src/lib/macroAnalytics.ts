@@ -1,4 +1,11 @@
-import { ChecklistItem, ProblemEntry, WeeklyPlan } from '../types/schema';
+import {
+  ChecklistItem,
+  GWSSession,
+  LifePillar,
+  ProblemEntry,
+  StrategyPlan,
+  WeeklyPlan
+} from '../types/schema';
 import { hasExistingParent, normalizeTag, problemOccurredInRange } from './problems';
 
 export const MONTH_NAMES = [
@@ -310,4 +317,117 @@ export const computeTrajectoryTrend = (values: number[]): 'up' | 'down' | 'flat'
   if (diff >= 0.4) return 'up';
   if (diff <= -0.4) return 'down';
   return 'flat';
+};
+
+export interface GwsAllocationBucket {
+  key: string;
+  label: string;
+  kind: 'focus' | 'roadmap' | 'pillar' | 'untagged';
+  minutes: number;
+  hours: string;
+  pct: number;
+  sessions: number;
+  avgScore: string;
+}
+
+export interface GwsAllocationSummary {
+  totalMinutes: number;
+  totalHours: string;
+  totalSessions: number;
+  taggedPct: number;
+  buckets: GwsAllocationBucket[];
+  neglectedFocuses: string[];
+}
+
+export const computeGwsAllocationInRange = (
+  gwsSessions: GWSSession[],
+  strategyPlans: StrategyPlan[],
+  lifePillars: LifePillar[],
+  startDate: string,
+  endDate: string,
+  activeTopFocuses?: string[]
+): GwsAllocationSummary => {
+  const inRange = gwsSessions.filter(s => s.date >= startDate && s.date <= endDate);
+  const planMap = new Map(strategyPlans.map(sp => [sp.id, sp.title]));
+  const pillarMap = new Map(lifePillars.map(lp => [lp.id, lp.name]));
+
+  const bucketMap = new Map<
+    string,
+    { label: string; kind: GwsAllocationBucket['kind']; minutes: number; sessions: number; scoreSum: number }
+  >();
+
+  let totalMinutes = 0;
+  let taggedMinutes = 0;
+
+  inRange.forEach(s => {
+    const mins = Math.max(0, s.actualMinutes || s.plannedMinutes || 0);
+    totalMinutes += mins;
+
+    let key = 'untagged';
+    let label = 'Untagged / Ad-hoc';
+    let kind: GwsAllocationBucket['kind'] = 'untagged';
+
+    if (s.focusTag?.trim()) {
+      const clean = s.focusTag.trim();
+      key = `focus:${clean.toLowerCase()}`;
+      label = clean;
+      kind = 'focus';
+      taggedMinutes += mins;
+    } else if (s.roadmapPlanId && planMap.has(s.roadmapPlanId)) {
+      key = `roadmap:${s.roadmapPlanId}`;
+      label = planMap.get(s.roadmapPlanId)!;
+      kind = 'roadmap';
+      taggedMinutes += mins;
+    } else if (s.pillarId && pillarMap.has(s.pillarId)) {
+      key = `pillar:${s.pillarId}`;
+      label = pillarMap.get(s.pillarId)!;
+      kind = 'pillar';
+      taggedMinutes += mins;
+    }
+
+    const cur = bucketMap.get(key) || { label, kind, minutes: 0, sessions: 0, scoreSum: 0 };
+    cur.minutes += mins;
+    cur.sessions += 1;
+    cur.scoreSum += s.ratings?.total || 0;
+    bucketMap.set(key, cur);
+  });
+
+  const buckets: GwsAllocationBucket[] = Array.from(bucketMap.entries())
+    .map(([key, v]) => ({
+      key,
+      label: v.label,
+      kind: v.kind,
+      minutes: v.minutes,
+      hours: (v.minutes / 60).toFixed(1),
+      pct: totalMinutes > 0 ? Math.round((v.minutes / totalMinutes) * 100) : 0,
+      sessions: v.sessions,
+      avgScore: v.sessions > 0 ? (v.scoreSum / v.sessions).toFixed(1) : '0.0'
+    }))
+    .sort((a, b) => {
+      if (a.kind === 'untagged' && b.kind !== 'untagged') return 1;
+      if (b.kind === 'untagged' && a.kind !== 'untagged') return -1;
+      return b.minutes - a.minutes;
+    });
+
+  // Detect any stated Top Focus that received 0 tagged deep work in this period
+  const cleanFocuses = (activeTopFocuses || []).map(f => f.trim()).filter(Boolean);
+  const neglectedFocuses = cleanFocuses.filter(focus => {
+    const normFocus = focus.toLowerCase();
+    return !buckets.some(
+      b =>
+        b.kind !== 'untagged' &&
+        (b.label.toLowerCase() === normFocus ||
+          b.label.toLowerCase().includes(normFocus) ||
+          normFocus.includes(b.label.toLowerCase()))
+    );
+  });
+
+  return {
+    totalMinutes,
+    totalHours: (totalMinutes / 60).toFixed(1),
+    totalSessions: inRange.length,
+    taggedPct: totalMinutes > 0 ? Math.round((taggedMinutes / totalMinutes) * 100) : 0,
+    buckets,
+    neglectedFocuses
+  };
 };

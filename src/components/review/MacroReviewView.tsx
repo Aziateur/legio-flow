@@ -26,11 +26,13 @@ import {
   computeRepsVolumeInRange,
   getProblemsForRoadmapInRange,
   getSystemicProblemsInRange,
-  computeTrajectoryTrend
+  computeTrajectoryTrend,
+  computeGwsAllocationInRange
 } from '../../lib/macroAnalytics';
 import { formatProblemsForReviewText, problemOccurredInRange } from '../../lib/problems';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
+import { GwsAllocationCard } from '../common/GwsAllocationCard';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
   ChevronLeft,
@@ -217,6 +219,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     saveYearlyPlan,
     strategyPlans,
     saveStrategyPlan,
+    gwsSessions,
     problems,
     checklistCategories,
     checklistItems,
@@ -346,6 +349,14 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
   );
   const repsRows = computeRepsVolumeInRange(checklistItems, startDate, endDate);
   const systemicProblems = getSystemicProblemsInRange(problems, startDate, endDate, mode);
+  const gwsAllocation = computeGwsAllocationInRange(
+    gwsSessions,
+    strategyPlans,
+    lifePillars,
+    startDate,
+    endDate,
+    currentPlan.topFocuses
+  );
 
   const visibleHabitRows = showAllHabits ? habitRows : habitRows.slice(0, 8);
   const avgHabitDurability =
@@ -694,6 +705,15 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
       habitRows.slice(0, 10).forEach(h => {
         lines.push(`  • ${h.text} (${h.recurrence}): ${h.pct}% (${h.done}/${h.expected})`);
       });
+    }
+    if (gwsAllocation.totalSessions > 0) {
+      lines.push(`Deep Work Allocation (${gwsAllocation.totalHours}h across ${gwsAllocation.totalSessions} sprints):`);
+      gwsAllocation.buckets.forEach(b => {
+        lines.push(`  • ${b.label}: ${b.hours}h (${b.pct}%) · ${b.sessions}× · avg ${b.avgScore}/15`);
+      });
+      if (gwsAllocation.neglectedFocuses.length > 0) {
+        lines.push(`  ! 0h Logged Against Top Focus: ${gwsAllocation.neglectedFocuses.join(', ')}`);
+      }
     }
     if (effortVsOutcomeNote.trim()) {
       lines.push(`Effort vs. Outcome Diagnosis:\n${effortVsOutcomeNote.trim()}`);
@@ -1680,6 +1700,12 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
               )}
             </div>
           </div>
+
+          {/* 2B-bis. Deep Work Time Allocation vs. Top 3 Focuses */}
+          <GwsAllocationCard
+            allocation={gwsAllocation}
+            title={`Deep Work Time Allocation vs. Top Focuses (${periodKey})`}
+          />
 
           {/* 2C. Effort vs. Outcome Diagnosis */}
           <div className="space-y-1.5 pt-2">
