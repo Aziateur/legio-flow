@@ -109,6 +109,7 @@ export interface DailyPriorityItem {
   completed: boolean;
   weeklyTaskId?: string;
   subTaskId?: string;
+  checklistItemId?: string;
 }
 
 export interface DailyEntry {
@@ -201,6 +202,8 @@ export interface ChecklistItem {
   totalCount?: number; // Used when recurrence === 'tally' (cumulative total done — never resets, excluded from weekly matrix)
   volumePerRep?: number; // Optional volume per single rep (e.g. 5 for "5 min guitar session", 500 for "500 ml hydrate")
   volumeUnit?: string; // Optional unit label (e.g. "min", "ml", "pages", "reps")
+  scheduleWeekday?: number; // Optional weekly schedule day: 1=Mon..6=Sat, 0=Sun (undefined = Any day)
+  scheduleDayOfMonth?: number | 'last'; // Optional monthly schedule day: 1..28 or 'last' (undefined = Any day)
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }
 

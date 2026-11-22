@@ -1,13 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import {
   useStorage,
-  getActiveDailyChecklistItemsForDate
+  getActiveDailyChecklistItemsForDate,
+  getPriorityItemsForEntry,
+  formatPriorityItemsToPlanNotes
 } from '../../context/StorageContext';
 import { ChecklistItem, ChecklistRecurrence } from '../../types/schema';
 import {
+  WEEKDAY_OPTIONS,
+  MONTHLY_DAY_OPTIONS,
+  getChecklistDueStatus
+} from '../../lib/checklistSchedule';
+import {
   Activity,
+  ArrowDownToLine,
   ArrowRight,
   BarChart3,
+  Calendar,
   CheckCircle2,
   Circle,
   Flame,
@@ -195,8 +204,10 @@ export const ChecklistView: React.FC = () => {
     todayDate,
     selectedDate,
     selectedWeekId,
+    getEntryForDate,
     saveDailyEntry,
-    setActiveTab
+    setActiveTab,
+    setPlanningSubTab
   } = useStorage();
 
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
@@ -207,8 +218,11 @@ export const ChecklistView: React.FC = () => {
     tally: '',
     none: ''
   });
+  const [draftWeeklyDay, setDraftWeeklyDay] = useState<string>('');
+  const [draftMonthlyDay, setDraftMonthlyDay] = useState<string>('');
   const [draftTallyVolume, setDraftTallyVolume] = useState('');
   const [draftTallyUnit, setDraftTallyUnit] = useState('');
+  const [pulledDailyNotice, setPulledDailyNotice] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -221,6 +235,72 @@ export const ChecklistView: React.FC = () => {
 
   const monthKey = selectedDate.slice(0, 7);
   const weekLabel = selectedWeekId.replace('week_', 'Week ');
+
+  const currentDayEntry = getEntryForDate(selectedDate);
+  const todayPriorities = getPriorityItemsForEntry(currentDayEntry);
+
+  const isChecklistItemInDailyPlan = (item: ChecklistItem): boolean => {
+    const norm = item.text.trim().toLowerCase();
+    return todayPriorities.some(
+      (p) => p.checklistItemId === item.id || (!!norm && p.text.trim().toLowerCase() === norm)
+    );
+  };
+
+  const handlePullToDailyPlan = (item: ChecklistItem) => {
+    const cleanText = item.text.trim();
+    if (!cleanText) return;
+    if (isChecklistItemInDailyPlan(item)) {
+      setPlanningSubTab('daily');
+      setActiveTab('planning');
+      return;
+    }
+    const existingItems = getPriorityItemsForEntry(currentDayEntry);
+    const doneNow = isItemDone(item);
+    const updatedItems = [
+      ...existingItems,
+      {
+        id: `prio_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text: cleanText,
+        completed: doneNow,
+        checklistItemId: item.id
+      }
+    ];
+    saveDailyEntry(selectedDate, {
+      planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+      priorityItems: updatedItems,
+      mainTasksCompleted: updatedItems.filter((i) => i.completed).length,
+      mainTasksTotal: Math.max(3, updatedItems.length)
+    });
+    setPulledDailyNotice(`Pulled "${cleanText.slice(0, 36)}${cleanText.length > 36 ? '…' : ''}" into ${selectedDate} Daily Plan`);
+    setTimeout(() => setPulledDailyNotice(null), 2800);
+  };
+
+  const handleChangeWeeklySchedule = (itemId: string, rawVal: string) => {
+    const updated = checklistItems.map((item) => {
+      if (item.id !== itemId) return item;
+      if (rawVal === '') {
+        const { scheduleWeekday: _w, ...rest } = item;
+        return rest;
+      }
+      return { ...item, scheduleWeekday: parseInt(rawVal, 10) };
+    });
+    saveChecklistItems(updated);
+  };
+
+  const handleChangeMonthlySchedule = (itemId: string, rawVal: string) => {
+    const updated = checklistItems.map((item) => {
+      if (item.id !== itemId) return item;
+      if (rawVal === '') {
+        const { scheduleDayOfMonth: _m, ...rest } = item;
+        return rest;
+      }
+      return {
+        ...item,
+        scheduleDayOfMonth: rawVal === 'last' ? ('last' as const) : parseInt(rawVal, 10)
+      };
+    });
+    saveChecklistItems(updated);
+  };
 
   const getTallyTotal = (item: ChecklistItem): number => {
     if (typeof item.totalCount === 'number' && !Number.isNaN(item.totalCount)) {
@@ -367,6 +447,15 @@ export const ChecklistView: React.FC = () => {
       }
     }
 
+    const scheduleProps: Pick<ChecklistItem, 'scheduleWeekday' | 'scheduleDayOfMonth'> = {};
+    if (recurrence === 'weekly' && draftWeeklyDay !== '') {
+      scheduleProps.scheduleWeekday = parseInt(draftWeeklyDay, 10);
+    }
+    if (recurrence === 'monthly' && draftMonthlyDay !== '') {
+      scheduleProps.scheduleDayOfMonth =
+        draftMonthlyDay === 'last' ? 'last' : parseInt(draftMonthlyDay, 10);
+    }
+
     const newItem: ChecklistItem = {
       id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       categoryId:
@@ -380,6 +469,7 @@ export const ChecklistView: React.FC = () => {
       completed: false,
       completedPeriods: [],
       ...(recurrence === 'tally' ? { totalCount: 0, ...volProps } : {}),
+      ...scheduleProps,
       createdAt: todayDate
     };
 
@@ -387,6 +477,8 @@ export const ChecklistView: React.FC = () => {
     saveChecklistItems(updated);
     syncDailyAutomaticHabits(updated);
     setDrafts((prev) => ({ ...prev, [recurrence]: '' }));
+    if (recurrence === 'weekly') setDraftWeeklyDay('');
+    if (recurrence === 'monthly') setDraftMonthlyDay('');
     if (recurrence === 'tally') {
       setDraftTallyVolume('');
       setDraftTallyUnit('');
@@ -555,13 +647,26 @@ export const ChecklistView: React.FC = () => {
               const done = isItemDone(item);
               const streak = streaksById.get(item.id);
               const isEditing = editingId === item.id;
+              const canPullToDaily =
+                item.recurrence === 'weekly' ||
+                item.recurrence === 'monthly' ||
+                item.recurrence === 'none';
+              const inDaily = canPullToDaily ? isChecklistItemInDailyPlan(item) : false;
+              const dueStatus =
+                item.recurrence === 'weekly' || item.recurrence === 'monthly'
+                  ? getChecklistDueStatus(item, selectedDate, selectedWeekId)
+                  : 'anytime';
 
               return (
                 <div
                   key={item.id}
-                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                  className={`group flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
                     done
                       ? 'border-slate-800/70 bg-slate-950/40'
+                      : dueStatus === 'due_today'
+                      ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60'
+                      : dueStatus === 'overdue'
+                      ? 'border-rose-500/35 bg-rose-500/5 hover:border-rose-500/50'
                       : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
                   }`}
                 >
@@ -598,12 +703,86 @@ export const ChecklistView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => startEditing(item)}
-                      className={`min-w-0 flex-1 text-left text-sm ${
+                      className={`min-w-[120px] flex-1 text-left text-sm ${
                         done ? 'text-slate-500 line-through' : 'text-slate-200'
                       }`}
                       title="Click to rename"
                     >
-                      {item.text}
+                      <span>{item.text}</span>
+                      {dueStatus === 'due_today' && (
+                        <span className="ml-2 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 align-middle">
+                          Due Today
+                        </span>
+                      )}
+                      {dueStatus === 'overdue' && (
+                        <span className="ml-2 inline-flex items-center rounded-full border border-rose-500/40 bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-300 align-middle">
+                          Overdue
+                        </span>
+                      )}
+                    </button>
+                  )}
+
+                  {/* Schedule Picker for Weekly (Mon–Sun) and Monthly (1st–28th / Last day) */}
+                  {item.recurrence === 'weekly' && (
+                    <select
+                      value={typeof item.scheduleWeekday === 'number' ? String(item.scheduleWeekday) : ''}
+                      onChange={(e) => handleChangeWeeklySchedule(item.id, e.target.value)}
+                      aria-label="Scheduled weekday"
+                      title="Schedule day of week (auto-surfaces in Daily Plan on that day)"
+                      className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-semibold outline-none transition-colors ${
+                        typeof item.scheduleWeekday === 'number'
+                          ? 'border-amber-500/35 bg-amber-500/10 text-amber-300'
+                          : 'border-slate-800 bg-slate-900 text-slate-500 hover:border-slate-700 hover:text-slate-300'
+                      }`}
+                    >
+                      <option value="">Any day</option>
+                      {WEEKDAY_OPTIONS.map((w) => (
+                        <option key={w.value} value={String(w.value)}>
+                          {w.short}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {item.recurrence === 'monthly' && (
+                    <select
+                      value={item.scheduleDayOfMonth !== undefined ? String(item.scheduleDayOfMonth) : ''}
+                      onChange={(e) => handleChangeMonthlySchedule(item.id, e.target.value)}
+                      aria-label="Scheduled day of month"
+                      title="Schedule day of month (auto-surfaces in Daily Plan on that day)"
+                      className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-semibold outline-none transition-colors ${
+                        item.scheduleDayOfMonth !== undefined
+                          ? 'border-purple-500/35 bg-purple-500/10 text-purple-300'
+                          : 'border-slate-800 bg-slate-900 text-slate-500 hover:border-slate-700 hover:text-slate-300'
+                      }`}
+                    >
+                      <option value="">Any day</option>
+                      {MONTHLY_DAY_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* 1-Click Pull to Daily Plan Button (Weekly, Monthly & One-Off) */}
+                  {canPullToDaily && (
+                    <button
+                      type="button"
+                      onClick={() => handlePullToDailyPlan(item)}
+                      title={
+                        inDaily
+                          ? `In ${selectedDate} Daily Plan — click to open Daily Plan`
+                          : `Pull into ${selectedDate} Daily Plan`
+                      }
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold transition-colors ${
+                        inDaily
+                          ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+                          : 'border-amber-500/30 bg-slate-900 text-amber-300 hover:bg-amber-500/15'
+                      }`}
+                    >
+                      {!inDaily && <ArrowDownToLine className="h-2.5 w-2.5" />}
+                      <span>{inDaily ? `✓ In ${selectedDate.slice(5)}` : `+ Day`}</span>
                     </button>
                   )}
 
@@ -666,6 +845,38 @@ export const ChecklistView: React.FC = () => {
             placeholder={section.placeholder}
             className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-amber-500/50"
           />
+          {section.recurrence === 'weekly' && (
+            <select
+              value={draftWeeklyDay}
+              onChange={(e) => setDraftWeeklyDay(e.target.value)}
+              aria-label="Default weekday for new weekly task"
+              title="Optional: pick a weekday (e.g. Mon or Sun)"
+              className="shrink-0 rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs font-semibold text-slate-300 outline-none focus:border-amber-500/50"
+            >
+              <option value="">Any day</option>
+              {WEEKDAY_OPTIONS.map((w) => (
+                <option key={w.value} value={String(w.value)}>
+                  {w.short}
+                </option>
+              ))}
+            </select>
+          )}
+          {section.recurrence === 'monthly' && (
+            <select
+              value={draftMonthlyDay}
+              onChange={(e) => setDraftMonthlyDay(e.target.value)}
+              aria-label="Default day of month for new monthly task"
+              title="Optional: pick a day of the month (e.g. 1st or Last day)"
+              className="shrink-0 rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs font-semibold text-slate-300 outline-none focus:border-purple-500/50"
+            >
+              <option value="">Any day</option>
+              {MONTHLY_DAY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="submit"
             disabled={!drafts[section.recurrence].trim()}
@@ -682,6 +893,24 @@ export const ChecklistView: React.FC = () => {
   return (
     <div className="w-full max-w-[1680px] mx-auto space-y-6 px-4 sm:px-6 lg:px-8 py-6">
       {/* Top Bar */}
+      {pulledDailyNotice && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/35 bg-emerald-500/15 px-4 py-2.5 text-xs font-bold text-emerald-300">
+          <span className="flex items-center gap-2">
+            <Calendar className="h-3.5 w-3.5 shrink-0" />
+            <span>✓ {pulledDailyNotice}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setPlanningSubTab('daily');
+              setActiveTab('planning');
+            }}
+            className="shrink-0 underline hover:text-emerald-200"
+          >
+            Open Daily Plan →
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/80 p-4">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2.5">

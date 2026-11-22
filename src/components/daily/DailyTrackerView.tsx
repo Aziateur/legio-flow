@@ -8,20 +8,29 @@ import {
   formatPriorityItemsToPlanNotes,
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Calendar as CalendarIcon, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Calendar as CalendarIcon,
   CheckCircle2,
   Circle,
-  Sliders, 
+  Sliders,
   Clock,
   Sparkles,
   Target,
   ArrowRight,
   Plus,
-  ArrowDownToLine
+  ArrowDownToLine,
+  ListChecks
 } from 'lucide-react';
+import { ChecklistItem } from '../../types/schema';
+import {
+  getChecklistDueStatus,
+  getChecklistScheduleLabel,
+  isChecklistItemDoneForPeriod
+} from '../../lib/checklistSchedule';
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 
@@ -43,6 +52,8 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     weeklyPlans,
     selectedWeekId,
     saveWeeklyPlan,
+    checklistItems,
+    setActiveTab,
     setPlanningSubTab,
     systemLevel,
     templates,
@@ -50,6 +61,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   } = useStorage();
 
   const [quickWeekGoalInput, setQuickWeekGoalInput] = useState('');
+  const [showChecklistPuller, setShowChecklistPuller] = useState(false);
 
   // Resolve the exact calendar week for selectedDate so Daily & Weekly are always synchronized
   const currentWeekRange = getCurrentWeekRange(selectedDate);
@@ -190,23 +202,31 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     return items.some(p => p.text.toLowerCase().trim() === norm);
   };
 
-  // Pull a weekly goal or sub-goal into the next available numbered priority slot with persistent ID linkage
+  // Pull a weekly goal, sub-goal, or checklist item into the next available numbered priority slot with persistent ID linkage
   const handlePullGoalToDay = (
     goalText: string,
     isCompleted = false,
     weeklyTaskId?: string,
-    subTaskId?: string
+    subTaskId?: string,
+    checklistItemId?: string
   ) => {
     const cleanGoal = goalText.trim();
-    if (!cleanGoal || isGoalInTodayPlan(cleanGoal, weeklyTaskId, subTaskId)) return;
-
+    if (!cleanGoal) return;
     const existingItems = getPriorityItemsForEntry(currentEntry);
+    if (
+      (checklistItemId && existingItems.some(p => p.checklistItemId === checklistItemId)) ||
+      isGoalInTodayPlan(cleanGoal, weeklyTaskId, subTaskId)
+    ) {
+      return;
+    }
+
     const newItem = {
       id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       text: cleanGoal,
       completed: isCompleted,
-      weeklyTaskId,
-      subTaskId
+      ...(weeklyTaskId ? { weeklyTaskId } : {}),
+      ...(subTaskId ? { subTaskId } : {}),
+      ...(checklistItemId ? { checklistItemId } : {})
     };
     const updatedItems = [...existingItems, newItem];
     const formatted = formatPriorityItemsToPlanNotes(updatedItems);
@@ -220,6 +240,51 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       mainTasksTotal: totalCount
     });
   };
+
+  // Checklist pull helpers (Weekly, Monthly & One-Off + scheduled Due Today / Overdue auto-strip)
+  const isChecklistItemInTodayPlan = (item: ChecklistItem): boolean => {
+    const existingItems = getPriorityItemsForEntry(currentEntry);
+    const norm = item.text.trim().toLowerCase();
+    return existingItems.some(
+      p => p.checklistItemId === item.id || (!!norm && p.text.trim().toLowerCase() === norm)
+    );
+  };
+
+  const pullableChecklistItems = checklistItems.filter(
+    item => item.recurrence === 'weekly' || item.recurrence === 'monthly' || item.recurrence === 'none'
+  );
+
+  const scheduledDueForDay = pullableChecklistItems.filter(item => {
+    if (item.recurrence !== 'weekly' && item.recurrence !== 'monthly') return false;
+    if (isChecklistItemInTodayPlan(item)) return false;
+    const status = getChecklistDueStatus(item, selectedDate, activeWeeklyPlan.id);
+    return status === 'due_today' || status === 'overdue';
+  });
+
+  const handlePullAllScheduledDue = () => {
+    if (scheduledDueForDay.length === 0) return;
+    const existingItems = getPriorityItemsForEntry(currentEntry);
+    const additions = scheduledDueForDay
+      .filter(item => !isChecklistItemInTodayPlan(item))
+      .map(item => ({
+        id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: item.text.trim(),
+        completed: false,
+        checklistItemId: item.id
+      }));
+    if (additions.length === 0) return;
+    const updatedItems = [...existingItems, ...additions];
+    saveDailyEntry(selectedDate, {
+      planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+      priorityItems: updatedItems,
+      mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+      mainTasksTotal: Math.max(3, updatedItems.length)
+    });
+  };
+
+  const selectedDayShortName = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('en-US', {
+    weekday: 'short'
+  });
 
   // Toggle a weekly goal directly from the Daily view and sync with today's priorities
   const handleToggleWeeklyGoalDirect = (taskId: string) => {
@@ -550,6 +615,52 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       )}
 
+      {/* Scheduled Weekly / Monthly Checklist Tasks Due Today or Overdue */}
+      {scheduledDueForDay.length > 0 && (
+        <div className="bg-slate-900/75 border border-purple-500/30 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span className="inline-flex items-center space-x-1 font-extrabold uppercase tracking-wider text-[10px] text-purple-300 mr-1 shrink-0">
+              <Clock className="w-3 h-3 text-purple-400" />
+              <span>Scheduled ({selectedDayShortName}):</span>
+            </span>
+            {scheduledDueForDay.map((item) => {
+              const due = getChecklistDueStatus(item, selectedDate, activeWeeklyPlan.id);
+              const schedLabel = getChecklistScheduleLabel(item);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handlePullGoalToDay(item.text, false, undefined, undefined, item.id)}
+                  className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-medium transition-colors ${
+                    due === 'overdue'
+                      ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 border-rose-500/35'
+                      : 'bg-slate-950 hover:bg-purple-500/15 text-slate-200 hover:text-purple-200 border-slate-800 hover:border-purple-500/40'
+                  }`}
+                  title={`Pull scheduled ${item.recurrence} task "${item.text}" into ${selectedDate}`}
+                >
+                  <span className="font-bold text-amber-400">+</span>
+                  <span>{item.text}</span>
+                  {schedLabel && (
+                    <span className="text-[9px] font-mono font-bold uppercase opacity-75">
+                      {due === 'overdue' ? `Late · ${schedLabel}` : schedLabel}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {scheduledDueForDay.length > 1 && (
+            <button
+              type="button"
+              onClick={handlePullAllScheduledDue}
+              className="px-2.5 py-1 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/35 text-[11px] font-bold shrink-0 transition-colors"
+            >
+              Pull All Due ({scheduledDueForDay.length})
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
       {dailyTemplate && (
         <ModularCardGrid
@@ -717,6 +828,145 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
               className="w-full bg-slate-950/70 border border-slate-800/80 focus:border-amber-500/50 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
             />
           </div>
+        </div>
+      )}
+
+      {/* 2.5 Pull from Checklist (Weekly, Monthly & One-Off Tasks) */}
+      {pullableChecklistItems.length > 0 && (
+        <div className="bg-slate-900/75 border border-slate-800 rounded-3xl overflow-hidden shadow-lg">
+          <div className="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center space-x-2 text-xs">
+              <ListChecks className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="font-extrabold text-slate-200">
+                Checklist Tasks (Weekly · Monthly · One-Off)
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-slate-950 border border-slate-800 font-mono text-[10px] font-bold text-slate-400">
+                {
+                  pullableChecklistItems.filter(
+                    i => !isChecklistItemDoneForPeriod(i, selectedDate, activeWeeklyPlan.id)
+                  ).length
+                }{' '}
+                open
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('checklist')}
+                className="text-[11px] font-bold text-slate-400 hover:text-amber-300 transition-colors"
+              >
+                Open Checklist →
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowChecklistPuller(prev => !prev)}
+                className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors ${
+                  showChecklistPuller
+                    ? 'bg-amber-500 text-slate-950 border-amber-400'
+                    : 'bg-slate-950 hover:bg-slate-800 text-amber-300 border-amber-500/30'
+                }`}
+              >
+                <ArrowDownToLine className="w-3 h-3" />
+                <span>{showChecklistPuller ? 'Hide' : 'Pull to Day'}</span>
+                {showChecklistPuller ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {showChecklistPuller && (
+            <div className="px-4 sm:px-5 pb-4 pt-2 border-t border-slate-800/80 grid grid-cols-1 md:grid-cols-3 gap-3">
+              {(
+                [
+                  { rec: 'weekly', label: 'Weekly Recurring', accent: 'text-amber-400' },
+                  { rec: 'monthly', label: 'Monthly Recurring', accent: 'text-purple-400' },
+                  { rec: 'none', label: 'One-Off Tasks', accent: 'text-slate-300' }
+                ] as const
+              ).map(group => {
+                const groupItems = pullableChecklistItems.filter(i => i.recurrence === group.rec);
+                return (
+                  <div
+                    key={group.rec}
+                    className="rounded-2xl bg-slate-950/80 border border-slate-800 p-3 space-y-2"
+                  >
+                    <div className={`text-[10px] font-extrabold uppercase tracking-wider ${group.accent}`}>
+                      {group.label} ({groupItems.length})
+                    </div>
+                    {groupItems.length === 0 ? (
+                      <p className="text-[11px] text-slate-600 italic">None yet</p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {groupItems.map(item => {
+                          const done = isChecklistItemDoneForPeriod(item, selectedDate, activeWeeklyPlan.id);
+                          const inDay = isChecklistItemInTodayPlan(item);
+                          const schedLabel = getChecklistScheduleLabel(item);
+                          const dueStatus =
+                            item.recurrence === 'weekly' || item.recurrence === 'monthly'
+                              ? getChecklistDueStatus(item, selectedDate, activeWeeklyPlan.id)
+                              : 'anytime';
+
+                          return (
+                            <div
+                              key={item.id}
+                              className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span
+                                  className={`block truncate ${
+                                    done ? 'line-through text-slate-500' : 'text-slate-200'
+                                  }`}
+                                >
+                                  {item.text}
+                                </span>
+                                {schedLabel && (
+                                  <span
+                                    className={`text-[9px] font-mono font-bold ${
+                                      dueStatus === 'due_today'
+                                        ? 'text-amber-400'
+                                        : dueStatus === 'overdue'
+                                        ? 'text-rose-400'
+                                        : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {schedLabel}
+                                    {dueStatus === 'due_today'
+                                      ? ' · Due Today'
+                                      : dueStatus === 'overdue'
+                                      ? ' · Overdue'
+                                      : ''}
+                                  </span>
+                                )}
+                              </div>
+                              {inDay ? (
+                                <span className="text-[10px] font-bold text-emerald-400 shrink-0">
+                                  ✓ In Day
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handlePullGoalToDay(item.text, done, undefined, undefined, item.id)
+                                  }
+                                  className="inline-flex items-center space-x-0.5 px-2 py-0.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-[10px] font-bold shrink-0"
+                                >
+                                  <ArrowDownToLine className="w-2.5 h-2.5" />
+                                  <span>Pull</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

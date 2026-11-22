@@ -258,7 +258,8 @@ export const parsePlanNotesToPriorityItems = (
         text: cleaned,
         completed,
         ...(matched?.weeklyTaskId ? { weeklyTaskId: matched.weeklyTaskId } : {}),
-        ...(matched?.subTaskId ? { subTaskId: matched.subTaskId } : {})
+        ...(matched?.subTaskId ? { subTaskId: matched.subTaskId } : {}),
+        ...(matched?.checklistItemId ? { checklistItemId: matched.checklistItemId } : {})
       } as DailyPriorityItem;
     })
     .filter((item): item is DailyPriorityItem => item !== null);
@@ -2048,6 +2049,46 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             propagateWeeklyTaskCompletionUpward(targetPlan, savedW);
           }
         }
+
+        // Two-way sync: if any toggled priority came from Checklist (Weekly / Monthly / One-Off / Daily), sync its completion!
+        const checklistToggles = toggledItems.filter(i => i.checklistItemId);
+        if (checklistToggles.length > 0) {
+          const targetWeek = findBestWeeklyPlanForDate(date, weeklyPlansRef.current, selectedWeekIdRef.current);
+          const weekIdForDate = targetWeek?.id || selectedWeekIdRef.current;
+          const monthKeyForDate = date.slice(0, 7);
+          let chkChanged = false;
+          const nextChecklist = checklistItemsRef.current.map(chk => {
+            const hit = checklistToggles.find(t => t.checklistItemId === chk.id);
+            if (!hit) return chk;
+            if (chk.recurrence === 'none') {
+              if (chk.completed === hit.completed) return chk;
+              chkChanged = true;
+              return { ...chk, completed: hit.completed };
+            }
+            if (chk.recurrence === 'daily' || chk.recurrence === 'weekly' || chk.recurrence === 'monthly') {
+              const pKey =
+                chk.recurrence === 'daily'
+                  ? date
+                  : chk.recurrence === 'weekly'
+                  ? weekIdForDate
+                  : monthKeyForDate;
+              const existing = chk.completedPeriods || [];
+              const hasKey = existing.includes(pKey);
+              if (hit.completed && !hasKey) {
+                chkChanged = true;
+                return { ...chk, completedPeriods: [...existing, pKey] };
+              }
+              if (!hit.completed && hasKey) {
+                chkChanged = true;
+                return { ...chk, completedPeriods: existing.filter(p => p !== pKey) };
+              }
+            }
+            return chk;
+          });
+          if (chkChanged) {
+            commitChecklistItems(nextChecklist);
+          }
+        }
       }
     }
 
@@ -2671,6 +2712,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitChecklistItems(items);
 
     const curDate = selectedDateRef.current;
+    const curWeekId = selectedWeekIdRef.current;
+    const curMonthKey = curDate.slice(0, 7);
     const realToday = getTodayDateString();
     const activeDailyForDate = getActiveDailyChecklistItemsForDate(
       curDate,
@@ -2678,12 +2721,47 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       dailyEntriesRef.current,
       realToday
     );
+    const existingDay = dailyEntriesRef.current[curDate];
+    const dayPatch: Partial<DailyEntry> = {};
+
     if (activeDailyForDate.length > 0) {
       const allDailyDone = activeDailyForDate.every(i => (i.completedPeriods || []).includes(curDate));
-      const existing = dailyEntriesRef.current[curDate];
-      if (!existing || existing.automaticTasksCompleted !== allDailyDone) {
-        applyDailyEntryUpdate(curDate, { automaticTasksCompleted: allDailyDone });
+      if (!existingDay || existingDay.automaticTasksCompleted !== allDailyDone) {
+        dayPatch.automaticTasksCompleted = allDailyDone;
       }
+    }
+
+    // Two-way sync: propagate Weekly / Monthly / One-Off checklist toggles to any linked priority on selectedDate
+    if (existingDay) {
+      const dayItems = getPriorityItemsForEntry(existingDay);
+      let priosChanged = false;
+      const nextDayItems = dayItems.map(pItem => {
+        if (!pItem.checklistItemId) return pItem;
+        const chk = items.find(i => i.id === pItem.checklistItemId);
+        if (!chk || chk.recurrence === 'tally') return pItem;
+        const isDoneNow =
+          chk.recurrence === 'none'
+            ? chk.completed
+            : (chk.completedPeriods || []).includes(
+                chk.recurrence === 'daily'
+                  ? curDate
+                  : chk.recurrence === 'weekly'
+                  ? curWeekId
+                  : curMonthKey
+              );
+        if (pItem.completed !== isDoneNow) {
+          priosChanged = true;
+          return { ...pItem, completed: isDoneNow };
+        }
+        return pItem;
+      });
+      if (priosChanged) {
+        dayPatch.priorityItems = nextDayItems;
+      }
+    }
+
+    if (Object.keys(dayPatch).length > 0) {
+      applyDailyEntryUpdate(curDate, dayPatch);
     }
 
     markLocalMutation();
