@@ -93,6 +93,7 @@ export const StrategyRoadmapsView: React.FC = () => {
     strategyPlans,
     saveStrategyPlan,
     deleteStrategyPlan,
+    todayDate,
     selectedDate,
     weeklyPlans,
     selectedWeekId,
@@ -1124,7 +1125,12 @@ export const StrategyRoadmapsView: React.FC = () => {
                               <button
                                 type="button"
                                 disabled={isLocked && !stage.gatePassed}
-                                onClick={() => updateStage(stage.id, { gatePassed: !stage.gatePassed })}
+                                onClick={() =>
+                                  updateStage(stage.id, {
+                                    gatePassed: !stage.gatePassed,
+                                    gatePassedAt: !stage.gatePassed ? todayDate : undefined
+                                  })
+                                }
                                 title={
                                   isLocked && !stage.gatePassed
                                     ? `Pass Stage ${idx - 1}'s gate first`
