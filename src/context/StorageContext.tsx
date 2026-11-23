@@ -19,6 +19,7 @@ import {
   SystemLevel,
   ChecklistCategory,
   ChecklistItem,
+  AllowanceItem,
   StrategyPlan,
   ProblemEntry,
   ProblemCategory,
@@ -26,6 +27,7 @@ import {
   ProblemSettings,
   ProblemScale,
   ProblemImpact,
+  ProblemSeverity,
   ProblemStatus,
   ProblemFixType,
   ProblemFixAttempt,
@@ -38,7 +40,8 @@ import {
   defaultScaleForSource,
   getDescendantProblems,
   guessProblemCategory,
-  normalizeTag
+  normalizeTag,
+  severityToImpact
 } from '../lib/problems';
 import {
   DEFAULT_TEMPLATES,
@@ -54,6 +57,7 @@ import {
   DEFAULT_PROBLEM_SETTINGS,
   INITIAL_CHECKLIST_CATEGORIES,
   INITIAL_CHECKLIST_ITEMS,
+  INITIAL_ALLOWANCE_ITEMS,
   INITIAL_STRATEGY_PLANS
 } from '../types/defaults';
 import {
@@ -503,6 +507,7 @@ interface StorageContextType {
   reviews: ReviewEntry[];
   checklistCategories: ChecklistCategory[];
   checklistItems: ChecklistItem[];
+  allowanceItems: AllowanceItem[];
   todayDate: string;
   selectedDate: string;
   selectedWeekId: string;
@@ -607,6 +612,7 @@ interface StorageContextType {
     category: ProblemCategory;
     scale?: ProblemScale;
     impact?: ProblemImpact;
+    severity?: ProblemSeverity;
     isTopConstraint?: boolean;
     trigger?: string;
     rootCause?: string;
@@ -646,9 +652,10 @@ interface StorageContextType {
   saveReview: (review: ReviewEntry) => void;
   deleteReview: (id: string) => void;
 
-  // Checklist operations
+  // Checklist & Allowances operations
   saveChecklistCategories: (cats: ChecklistCategory[]) => void;
   saveChecklistItems: (items: ChecklistItem[]) => void;
+  saveAllowanceItems: (items: AllowanceItem[]) => void;
 
   // Data portability & local recovery safety net
   localSnapshots: LocalRecoverySnapshot[];
@@ -676,6 +683,7 @@ const STORAGE_KEYS = {
   REVIEWS: 'legio_reviews_v1',
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
+  ALLOWANCES: 'legio_allowances_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
   SYSTEM_LEVEL: 'legio_system_level_v3',
   ACTIVE_GWS_TIMER: 'legio_active_gws_timer_v1'
@@ -948,6 +956,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     readStorageSafe(STORAGE_KEYS.CHECKLIST_ITEMS, INITIAL_CHECKLIST_ITEMS)
   );
 
+  const [allowanceItems, setAllowanceItems] = useState<AllowanceItem[]>(() => {
+    const raw = readStorageSafe<AllowanceItem[]>(STORAGE_KEYS.ALLOWANCES, INITIAL_ALLOWANCE_ITEMS);
+    return Array.isArray(raw) ? raw : INITIAL_ALLOWANCE_ITEMS;
+  });
+
   const [todayDate, setTodayDate] = useState<string>(() => getTodayDateString());
 
   // Preserve selectedDate across same-day reloads; jump to real today when a new day starts
@@ -1013,6 +1026,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const reviewsRef = useRef(reviews);
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
+  const allowanceItemsRef = useRef(allowanceItems);
   const systemLevelRef = useRef(systemLevel);
   const todayDateRef = useRef(todayDate);
   const selectedDateRef = useRef(selectedDate);
@@ -1228,6 +1242,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setChecklistItems(next);
   };
 
+  const commitAllowanceItems = (next: AllowanceItem[]) => {
+    allowanceItemsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.ALLOWANCES, next);
+    setAllowanceItems(next);
+  };
+
   const commitSystemLevel = (lvl: SystemLevel) => {
     systemLevelRef.current = lvl;
     try {
@@ -1270,6 +1290,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
+      allowanceItems: allowanceItemsRef.current,
       deletedIds: deletedIdsRef.current,
       systemLevel: systemLevelRef.current,
       clientUpdatedAt
@@ -1309,7 +1330,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             s: st.strategyPlans,
             p: st.problems,
             r: st.reviews,
-            c: st.checklistItems
+            c: st.checklistItems,
+            al: st.allowanceItems
           });
         if (makeSig(latest.state) === makeSig(payload)) return;
       }
@@ -1704,6 +1726,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (Array.isArray(parsed)) {
             checklistItemsRef.current = parsed;
             setChecklistItems(parsed);
+          }
+        } else if (e.key === STORAGE_KEYS.ALLOWANCES) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            allowanceItemsRef.current = parsed;
+            setAllowanceItems(parsed);
           }
         } else if (e.key === STORAGE_KEYS.CHECKLIST_CATEGORIES) {
           const parsed = JSON.parse(e.newValue);
@@ -2819,10 +2847,21 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const cleanedTags = Array.from(
       new Set((input.tags || []).map(normalizeTag).filter(Boolean))
     );
-    const resolvedScale: ProblemScale = input.scale || defaultScaleForSource(input.sourceType);
-    const resolvedImpact: ProblemImpact =
-      input.impact ||
-      (resolvedScale === 'blocker' ? 'critical' : resolvedScale === 'bottleneck' ? 'high' : 'low');
+    const resolvedScale: ProblemScale =
+      input.scale ||
+      (input.severity && input.severity >= 5
+        ? 'blocker'
+        : input.severity && input.severity >= 4
+        ? 'bottleneck'
+        : defaultScaleForSource(input.sourceType));
+    const resolvedSeverity: ProblemSeverity =
+      input.severity ||
+      (input.impact === 'critical' || resolvedScale === 'blocker'
+        ? 5
+        : input.impact === 'high' || resolvedScale === 'bottleneck'
+        ? 3
+        : 2);
+    const resolvedImpact: ProblemImpact = input.impact || severityToImpact(resolvedSeverity);
     const resolvedStatus: ProblemStatus = input.status || 'open';
     const entry: ProblemEntry = {
       id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -2830,6 +2869,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       category: input.category,
       scale: resolvedScale,
       impact: resolvedImpact,
+      severity: resolvedSeverity,
       ...(input.isTopConstraint ? { isTopConstraint: true } : {}),
       ...(input.trigger?.trim() ? { trigger: input.trigger.trim() } : {}),
       ...(input.rootCause?.trim() ? { rootCause: input.rootCause.trim() } : {}),
@@ -3211,6 +3251,23 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
+  const saveAllowanceItems = (items: AllowanceItem[]) => {
+    const nextIds = new Set(items.map(i => i.id));
+    const removed = allowanceItemsRef.current
+      .filter(i => !nextIds.has(i.id))
+      .map(i => i.id);
+    if (removed.length > 0) recordDeletedIds(removed);
+    const nowIso = new Date().toISOString();
+    const prevMap = new Map(allowanceItemsRef.current.map(i => [i.id, i]));
+    const stamped = items.map(item => {
+      const prev = prevMap.get(item.id);
+      const changed = !prev || JSON.stringify(prev) !== JSON.stringify(item);
+      return changed ? { ...item, updatedAt: nowIso } : item;
+    });
+    commitAllowanceItems(stamped);
+    markLocalMutation();
+  };
+
   const saveChecklistItems = (items: ChecklistItem[]) => {
     const nextIds = new Set(items.map(i => i.id));
     const removed = checklistItemsRef.current
@@ -3304,6 +3361,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviews: reviewsRef.current,
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
+      allowanceItems: allowanceItemsRef.current,
       deletedIds: deletedIdsRef.current
     };
     return JSON.stringify(data, null, 2);
@@ -3339,7 +3397,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         Array.isArray(src.strategyPlans) ||
         Array.isArray(src.problems) ||
         Array.isArray(src.reviews) ||
-        Array.isArray(src.checklistItems);
+        Array.isArray(src.checklistItems) ||
+        Array.isArray(src.allowanceItems);
 
       if (!hasRecognizedField) return false;
       saveAutoLocalSnapshot('Before JSON import');
@@ -3402,6 +3461,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (Array.isArray(src.reviews)) commitReviews(src.reviews);
       if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
       if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
+      if (Array.isArray(src.allowanceItems)) commitAllowanceItems(src.allowanceItems);
       if (src.deletedIds && typeof src.deletedIds === 'object') {
         commitDeletedIds(src.deletedIds);
       }
@@ -3445,6 +3505,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitReviews([]);
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
+    commitAllowanceItems(INITIAL_ALLOWANCE_ITEMS);
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
     markLocalMutation();
@@ -3492,6 +3553,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviews: [] as ReviewEntry[],
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
+      allowanceItems: [] as AllowanceItem[],
       systemLevel: 5 as SystemLevel
     };
   };
@@ -3517,6 +3579,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitReviews(fresh.reviews);
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
+    commitAllowanceItems(fresh.allowanceItems);
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
     selectedWeekIdRef.current = freshWeekId;
@@ -3680,6 +3743,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (Array.isArray(state.reviews)) commitReviews(state.reviews);
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
+    if (Array.isArray(state.allowanceItems)) commitAllowanceItems(state.allowanceItems);
     if (state.deletedIds && typeof state.deletedIds === 'object') {
       commitDeletedIds(state.deletedIds);
     }
@@ -4324,6 +4388,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         mergedAttempts.sort((a, b) => (a.endedAt || a.startedAt).localeCompare(b.endedAt || b.startedAt));
         return {
           ...primary,
+          severity: primary.severity ?? secondary.severity,
           trigger: primary.trigger?.trim() ? primary.trigger : secondary.trigger,
           rootCause: primary.rootCause?.trim() ? primary.rootCause : secondary.rootCause,
           fixNote: primary.fixNote?.trim() ? primary.fixNote : secondary.fixNote,
@@ -4420,6 +4485,38 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     );
 
+    const currentWeekKeyForMerge = selectedWeekIdRef.current;
+    const currentMonthKeyForMerge = realToday.slice(0, 7);
+    const mergedAllowanceItems = mergeCollectionById<AllowanceItem>(
+      local.allowanceItems,
+      cloudState?.allowanceItems,
+      a => Date.parse(a.updatedAt || a.createdAt || '') || 0,
+      (l, c) => {
+        const lT = Date.parse(l.updatedAt || l.createdAt || '') || 0;
+        const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        const primary = lT >= cT ? l : c;
+        const secondary = lT >= cT ? c : l;
+        const activePeriodKey =
+          primary.period === 'daily'
+            ? realToday
+            : primary.period === 'weekly'
+            ? currentWeekKeyForMerge
+            : currentMonthKeyForMerge;
+        const mergedUsage: Record<string, number> = { ...(secondary.usageByPeriod || {}) };
+        Object.entries(primary.usageByPeriod || {}).forEach(([pk, val]) => {
+          if (pk === activePeriodKey) {
+            mergedUsage[pk] = val;
+          } else {
+            mergedUsage[pk] = Math.max(mergedUsage[pk] || 0, val || 0);
+          }
+        });
+        return {
+          ...primary,
+          usageByPeriod: mergedUsage
+        };
+      }
+    );
+
     const mergedLifePillars = mergeCollectionById<LifePillar>(
       local.lifePillars,
       cloudState?.lifePillars,
@@ -4487,6 +4584,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviews: mergedReviews,
       checklistCategories: mergedChecklistCategories,
       checklistItems: mergedChecklistItems,
+      allowanceItems: mergedAllowanceItems,
       deletedIds: mergedDeletedIds,
       systemLevel: localIsNewer || !cloudState?.systemLevel ? local.systemLevel : cloudState.systemLevel,
       clientUpdatedAt: new Date(Math.max(localMs, cloudMs, Date.now())).toISOString()
@@ -4854,6 +4952,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             reviews: raw.reviews,
             checklistCategories: raw.checklistCategories,
             checklistItems: raw.checklistItems,
+            allowanceItems: raw.allowanceItems,
             deletedIds: raw.deletedIds,
             schemaVersion: raw.schemaVersion || 2,
             systemLevel: raw.systemLevel
@@ -4922,6 +5021,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         reviews,
         checklistCategories,
         checklistItems,
+        allowanceItems,
         todayDate,
         selectedDate,
         selectedWeekId,
@@ -4990,6 +5090,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         deleteReview,
         saveChecklistCategories,
         saveChecklistItems,
+        saveAllowanceItems,
         localSnapshots,
         restoreLocalSnapshot,
         exportData,

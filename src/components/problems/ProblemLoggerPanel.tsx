@@ -2,9 +2,11 @@ import React, { useMemo, useState } from 'react';
 import {
   ProblemCategory,
   ProblemEntry,
+  ProblemSeverity,
   ProblemSourceType
 } from '../../types/schema';
 import {
+  PROBLEM_SEVERITIES,
   clusterHasSourceType,
   clusterHasTag,
   clusterOccurredInRange,
@@ -19,6 +21,7 @@ import {
   hasExistingParent,
   isProblemGuardrail,
   normalizeTag,
+  severityToImpact,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
@@ -93,6 +96,9 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     (sourceType === 'monthly' || sourceType === 'quarterly' || sourceType === 'yearly');
 
   const [internalText, setInternalText] = useState('');
+  const [internalSeverity, setInternalSeverity] = useState<ProblemSeverity>(
+    defaultScale === 'blocker' ? 5 : defaultScale === 'bottleneck' ? 3 : 2
+  );
   const [internalCategory] = useState<ProblemCategory>(problemCategories[0]?.id || 'mindset');
   const [internalTags, setInternalTags] = useState<string[]>(
     filterTag ? [normalizeTag(filterTag)] : []
@@ -215,7 +221,14 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       addProblem({
         title: trimmed,
         category: categoryValue || problemCategories[0]?.id || 'mindset',
-        scale: defaultScale,
+        scale:
+          internalSeverity >= 5
+            ? 'blocker'
+            : internalSeverity >= 4
+            ? 'bottleneck'
+            : defaultScale,
+        severity: internalSeverity,
+        impact: severityToImpact(internalSeverity),
         tags: finalTags,
         sourceType,
         date,
@@ -268,6 +281,18 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             placeholder="1-line friction or blocker & press Enter (triage later in Problem Log)..."
             className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
           />
+          <select
+            value={internalSeverity}
+            onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
+            title="Severity grade (1 Minor to 5 Critical)"
+            className="bg-slate-900 border border-slate-800 rounded-xl px-2 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
+          >
+            {PROBLEM_SEVERITIES.map(sv => (
+              <option key={sv.grade} value={sv.grade}>
+                {sv.code} · {sv.shortLabel}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={handleLogProblem}
@@ -384,6 +409,18 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
               }
               className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
             />
+            <select
+              value={internalSeverity}
+              onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
+              title="Severity grade (1 Minor to 5 Critical)"
+              className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
+            >
+              {PROBLEM_SEVERITIES.map(sv => (
+                <option key={sv.grade} value={sv.grade}>
+                  {sv.code} · {sv.shortLabel}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               onClick={handleLogProblem}

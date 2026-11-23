@@ -3,24 +3,25 @@ import {
   ProblemCategory,
   ProblemDispatchTarget,
   ProblemEntry,
-  ProblemImpact,
+  ProblemSeverity,
   ProblemSourceType
 } from '../../types/schema';
 import {
   DISPATCH_TARGET_LABELS,
-  IMPACT_META,
-  PROBLEM_IMPACTS,
+  PROBLEM_SEVERITIES,
+  SEVERITY_META,
+  getAbsorbableProblems,
   getClusterTotalHits,
   getDescendantProblems,
   getDirectChildren,
-  getEligibleRootTargets,
+  getEligibleClusterTargets,
   getFixVerificationProgress,
   getLastOccurrenceDate,
-  getProblemImpact,
+  getProblemSeverity,
   isProblemGuardrail,
-  isRootProblem,
   normalizeTag,
   resolveCategoryMeta,
+  severityToImpact,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
@@ -110,6 +111,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const [justLoggedPlusOne, setJustLoggedPlusOne] = useState(false);
   const [dispatchFeedback, setDispatchFeedback] = useState<string | null>(null);
   const [showAttempts, setShowAttempts] = useState(false);
+  const [severityPickerOpen, setSeverityPickerOpen] = useState(false);
 
   useEffect(() => {
     setTitleDraft(problem.title);
@@ -127,8 +129,8 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     setFixNoteDraft(problem.fixNote || '');
   }, [problem.fixNote]);
 
-  const impact = getProblemImpact(problem);
-  const impactMeta = IMPACT_META[impact];
+  const severity = getProblemSeverity(problem);
+  const severityMeta = SEVERITY_META[severity];
   const catMeta = resolveCategoryMeta(problem.category, problemCategories);
   const isGuardrail = isProblemGuardrail(problem);
   const lastDate = getLastOccurrenceDate(problem);
@@ -157,21 +159,51 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => (problem.parentProblemId ? problems.find(p => p.id === problem.parentProblemId) : undefined),
     [problems, problem.parentProblemId]
   );
-  const eligibleRoots = useMemo(
-    () => getEligibleRootTargets(problems, problem.id),
+  const clusterTargets = useMemo(
+    () => getEligibleClusterTargets(problems, problem.id),
     [problems, problem.id]
   );
-  const ungroupedSlips = useMemo(
-    () =>
-      problems.filter(
-        p =>
-          p.id !== problem.id &&
-          p.status === 'open' &&
-          !p.parentProblemId &&
-          !isRootProblem(problems, p)
-      ),
+  const totalClusterTargets = clusterTargets.roots.length + clusterTargets.frictions.length;
+  const absorbable = useMemo(
+    () => getAbsorbableProblems(problems, problem.id),
     [problems, problem.id]
   );
+  const totalAbsorbable = absorbable.frictions.length + absorbable.others.length;
+
+  const handleSetSeverity = (grade: ProblemSeverity) => {
+    updateProblem(problem.id, {
+      severity: grade,
+      impact: severityToImpact(grade),
+      scale:
+        grade >= 5
+          ? 'blocker'
+          : grade >= 4
+          ? 'bottleneck'
+          : problem.scale || 'friction'
+    });
+    setSeverityPickerOpen(false);
+  };
+
+  const handleMergeUnderTarget = (targetId: string) => {
+    if (!targetId) {
+      updateProblem(problem.id, { parentProblemId: undefined });
+      return;
+    }
+    const target = problems.find(p => p.id === targetId);
+    if (target && (!target.scale || target.scale === 'friction')) {
+      updateProblem(target.id, { scale: 'bottleneck' });
+    }
+    updateProblem(problem.id, { parentProblemId: targetId });
+  };
+
+  const handleAbsorbOther = (childId: string) => {
+    if (!childId) return;
+    updateProblem(childId, { parentProblemId: problem.id });
+    if (!problem.scale || problem.scale === 'friction') {
+      updateProblem(problem.id, { scale: 'bottleneck' });
+    }
+    setChildrenOpen(true);
+  };
   const activeDescendantCount = allDescendants.filter(d => d.status !== 'solved').length;
   const currentTopCount = useMemo(
     () => problems.filter(p => p.isTopConstraint && p.status !== 'solved').length,
@@ -284,9 +316,11 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
 
   const handlePromoteToRoot = (e: React.MouseEvent) => {
     e.stopPropagation();
+    const nextSev: ProblemSeverity = severity < 3 ? 3 : severity;
     updateProblem(problem.id, {
-      scale: 'bottleneck',
-      impact: impact === 'low' ? 'high' : impact
+      scale: nextSev >= 5 ? 'blocker' : 'bottleneck',
+      severity: nextSev,
+      impact: severityToImpact(nextSev)
     });
   };
 
@@ -318,14 +352,23 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
       <div className={`${compact || nested ? 'p-3' : 'p-4'} space-y-1.5`}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0 space-y-1">
-            {/* Title Line (Impact Dot + Clean Title + Optional Top Pin) */}
+            {/* Title Line (Clickable Severity Badge + Clean Title) */}
             <div className="flex items-start space-x-2.5">
-              <span
-                className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 ${
-                  problem.status === 'solved' ? 'bg-emerald-400' : impactMeta.dotClass
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  setSeverityPickerOpen(v => !v);
+                }}
+                className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded-md border font-mono text-[10px] font-extrabold transition-all hover:scale-105 ${
+                  problem.status === 'solved'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                    : severityMeta.badgeClass
                 }`}
-                title={`${impactMeta.label}: ${impactMeta.hint}`}
-              />
+                title={`Severity ${severityMeta.label}: ${severityMeta.hint} — click to grade (1–5)`}
+              >
+                {severityMeta.code}
+              </button>
               <div className="min-w-0 flex-1">
                 {showParentBreadcrumb && parentProblem && (
                   <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/80 mb-0.5">
@@ -341,19 +384,50 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 >
                   {problem.title}
                 </p>
+
+                {/* Inline 1-Click Severity Grade Strip */}
+                {severityPickerOpen && (
+                  <div
+                    className="mt-1.5 flex flex-wrap items-center gap-1"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-0.5">
+                      Grade:
+                    </span>
+                    {PROBLEM_SEVERITIES.map(sv => (
+                      <button
+                        key={sv.grade}
+                        type="button"
+                        onClick={() => handleSetSeverity(sv.grade)}
+                        title={sv.hint}
+                        className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold transition-all ${
+                          severity === sv.grade
+                            ? sv.activeChipClass
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {sv.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Single Quiet Metadata Line */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-[11px] text-slate-400">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-8 text-[11px] text-slate-400">
               <span className="inline-flex items-center space-x-1 font-semibold text-slate-300">
                 <span className={`w-1.5 h-1.5 rounded-full ${catMeta.dotClass}`} />
                 <span>{catMeta.shortLabel}</span>
               </span>
 
-              {impact === 'critical' && problem.status !== 'solved' && (
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
-                  · Critical
+              {severity >= 4 && problem.status !== 'solved' && (
+                <span
+                  className={`text-[10px] font-extrabold uppercase tracking-wider ${
+                    severity === 5 ? 'text-rose-400' : 'text-orange-400'
+                  }`}
+                >
+                  · {severityMeta.shortLabel}
                 </span>
               )}
 
@@ -456,23 +530,36 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
           <div className="flex items-center gap-1.5 shrink-0">
             {inboxMode ? (
               <>
-                {eligibleRoots.length > 0 && (
+                {totalClusterTargets > 0 && (
                   <select
                     value=""
                     onChange={e => {
                       if (e.target.value) {
-                        updateProblem(problem.id, { parentProblemId: e.target.value });
+                        handleMergeUnderTarget(e.target.value);
                       }
                     }}
-                    className="bg-slate-900 border border-slate-700 hover:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] font-bold text-amber-300 focus:outline-none max-w-[140px]"
-                    title="Merge this slip into an existing Root Problem"
+                    className="bg-slate-900 border border-slate-700 hover:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] font-bold text-amber-300 focus:outline-none max-w-[165px]"
+                    title="Cluster this slip under any existing Root Constraint or other Friction"
                   >
-                    <option value="">Merge into...</option>
-                    {eligibleRoots.map(r => (
-                      <option key={r.id} value={r.id}>
-                        ↳ {r.title}
-                      </option>
-                    ))}
+                    <option value="">Cluster with...</option>
+                    {clusterTargets.roots.length > 0 && (
+                      <optgroup label="Root Constraints">
+                        {clusterTargets.roots.map(r => (
+                          <option key={r.id} value={r.id}>
+                            [{SEVERITY_META[getProblemSeverity(r)].code}] {r.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {clusterTargets.frictions.length > 0 && (
+                      <optgroup label="Other Frictions / Slips">
+                        {clusterTargets.frictions.map(f => (
+                          <option key={f.id} value={f.id}>
+                            [{SEVERITY_META[getProblemSeverity(f)].code}] {f.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 )}
 
@@ -654,30 +741,25 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               placeholder="Problem statement..."
             />
 
-            {/* Impact + Custom Categories */}
+            {/* Severity Grade (1-5) + Custom Categories */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-                  Cost / Impact:
+                  Severity (1–5):
                 </span>
-                {PROBLEM_IMPACTS.map(im => (
+                {PROBLEM_SEVERITIES.map(sv => (
                   <button
-                    key={im.id}
+                    key={sv.grade}
                     type="button"
-                    onClick={() =>
-                      updateProblem(problem.id, {
-                        impact: im.id as ProblemImpact,
-                        scale: im.id === 'critical' ? 'blocker' : im.id === 'high' ? 'bottleneck' : problem.scale || 'friction'
-                      })
-                    }
-                    title={im.hint}
+                    onClick={() => handleSetSeverity(sv.grade)}
+                    title={sv.hint}
                     className={`px-2 py-0.5 rounded-lg border text-[10px] font-extrabold transition-all ${
-                      impact === im.id
-                        ? im.activeChipClass
+                      severity === sv.grade
+                        ? sv.activeChipClass
                         : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
                     }`}
                   >
-                    {im.shortLabel}
+                    {sv.label}
                   </button>
                 ))}
               </div>
@@ -814,73 +896,101 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               </div>
             </div>
 
-            {/* Clean Clustering: Absorb a Slip OR Merge under a Root Problem */}
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              {ungroupedSlips.length > 0 && !nested && (
-                <select
-                  value=""
-                  onChange={e => {
-                    if (e.target.value) {
-                      updateProblem(e.target.value, { parentProblemId: problem.id });
-                      if (!problem.scale || problem.scale === 'friction') {
-                        updateProblem(problem.id, { scale: 'bottleneck' });
-                      }
-                    }
-                  }}
-                  className="bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-300 focus:outline-none"
-                >
-                  <option value="">+ Absorb a slip under this problem ({ungroupedSlips.length})</option>
-                  {ungroupedSlips.map(s => (
-                    <option key={s.id} value={s.id}>
-                      ↳ {s.title}
-                    </option>
-                  ))}
-                </select>
-              )}
+            {/* Clean Dropdown Clustering: See ALL other Frictions & Root Constraints directly */}
+            <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 space-y-2">
+              <div className="flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+                <Layers className="w-3 h-3" />
+                <span>Cluster Frictions &amp; Related Issues</span>
+              </div>
 
-              {eligibleRoots.length > 0 && (
-                <select
-                  value={problem.parentProblemId || ''}
-                  onChange={e =>
-                    updateProblem(problem.id, { parentProblemId: e.target.value || undefined })
-                  }
-                  className="bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-300 focus:outline-none"
-                >
-                  <option value="">Standalone Root Problem</option>
-                  {eligibleRoots.map(r => (
-                    <option key={r.id} value={r.id}>
-                      Merge under: {r.title}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              {!parentProblem && directChildren.length === 0 && (
-                <div className="inline-flex items-center gap-1">
-                  <input
-                    type="text"
-                    value={newParentTitle}
-                    onChange={e => setNewParentTitle(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleCreateAndCluster();
-                      }
+              <div className="flex flex-wrap items-center gap-2">
+                {totalAbsorbable > 0 && !nested && (
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (e.target.value) handleAbsorbOther(e.target.value);
                     }}
-                    placeholder="Or group into new Root Problem..."
-                    className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none w-48"
-                  />
-                  {newParentTitle.trim() && (
-                    <button
-                      type="button"
-                      onClick={handleCreateAndCluster}
-                      className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/35 text-[10px] font-bold"
-                    >
-                      Group
-                    </button>
-                  )}
-                </div>
-              )}
+                    className="bg-slate-900 border border-slate-700 hover:border-amber-500/40 focus:border-amber-500/50 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-amber-200 focus:outline-none max-w-xs"
+                  >
+                    <option value="">
+                      + Pull another friction into this one ({totalAbsorbable})
+                    </option>
+                    {absorbable.frictions.length > 0 && (
+                      <optgroup label="Other Frictions / Slips">
+                        {absorbable.frictions.map(f => (
+                          <option key={f.id} value={f.id}>
+                            ↳ [{SEVERITY_META[getProblemSeverity(f)].code}] {f.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {absorbable.others.length > 0 && (
+                      <optgroup label="Other Active Problems">
+                        {absorbable.others.map(o => (
+                          <option key={o.id} value={o.id}>
+                            ↳ [{SEVERITY_META[getProblemSeverity(o)].code}] {o.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                )}
+
+                {totalClusterTargets > 0 && (
+                  <select
+                    value={problem.parentProblemId || ''}
+                    onChange={e => handleMergeUnderTarget(e.target.value)}
+                    className="bg-slate-900 border border-slate-700 hover:border-amber-500/40 focus:border-amber-500/50 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 focus:outline-none max-w-xs"
+                  >
+                    <option value="">Merge this under another issue ({totalClusterTargets})...</option>
+                    {clusterTargets.roots.length > 0 && (
+                      <optgroup label="Root Constraints">
+                        {clusterTargets.roots.map(r => (
+                          <option key={r.id} value={r.id}>
+                            ↑ [{SEVERITY_META[getProblemSeverity(r)].code}] {r.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {clusterTargets.frictions.length > 0 && (
+                      <optgroup label="Other Frictions / Slips">
+                        {clusterTargets.frictions.map(f => (
+                          <option key={f.id} value={f.id}>
+                            ↑ [{SEVERITY_META[getProblemSeverity(f)].code}] {f.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                )}
+
+                {!parentProblem && directChildren.length === 0 && (
+                  <div className="inline-flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={newParentTitle}
+                      onChange={e => setNewParentTitle(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleCreateAndCluster();
+                        }
+                      }}
+                      placeholder="Or create new parent constraint..."
+                      className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/40 w-52"
+                    />
+                    {newParentTitle.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleCreateAndCluster}
+                        className="px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/35 text-[10px] font-bold"
+                      >
+                        + Cluster
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

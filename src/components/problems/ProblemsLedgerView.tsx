@@ -4,24 +4,25 @@ import {
   ProblemCategory,
   ProblemColorKey,
   ProblemEntry,
-  ProblemImpact
+  ProblemSeverity
 } from '../../types/schema';
 import { INITIAL_PROBLEM_CATEGORIES } from '../../types/defaults';
 import {
-  IMPACT_META,
   PROBLEM_COLOR_STYLES,
-  PROBLEM_IMPACTS,
+  PROBLEM_SEVERITIES,
+  SEVERITY_META,
   clusterHasTag,
   computeProblemPriorityScore,
   getClusterTotalHits,
   getFixVerificationProgress,
   getLastOccurrenceDate,
-  getProblemImpact,
+  getProblemSeverity,
   hasExistingParent,
   isProblemGuardrail,
   isRootProblem,
   normalizeTag,
   resolveCategoryMeta,
+  severityToImpact,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
@@ -83,6 +84,7 @@ export const ProblemsLedgerView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MainTabMode>('constraints');
   const [subStatus, setSubStatus] = useState<SubStatusFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<LedgerSort>('priority');
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,7 +94,7 @@ export const ProblemsLedgerView: React.FC = () => {
   // Clean 1-line quick capture
   const [quickTitle, setQuickTitle] = useState('');
   const [quickKind, setQuickKind] = useState<'constraint' | 'slip'>('constraint');
-  const [quickImpact, setQuickImpact] = useState<ProblemImpact>('high');
+  const [quickSeverity, setQuickSeverity] = useState<ProblemSeverity>(3);
   const [quickCategory, setQuickCategory] = useState<ProblemCategory>(
     problemCategories[0]?.id || 'mindset'
   );
@@ -211,6 +213,13 @@ export const ProblemsLedgerView: React.FC = () => {
         if (subStatus === 'guardrails' && !isProblemGuardrail(p)) return false;
       }
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
+      if (severityFilter !== 'all') {
+        const sev = getProblemSeverity(p);
+        if (severityFilter === '4+' && sev < 4) return false;
+        if (severityFilter === '5' && sev !== 5) return false;
+        if (severityFilter === '3' && sev !== 3) return false;
+        if (severityFilter === '1-2' && sev > 2) return false;
+      }
       if (tagFilter !== 'all' && !clusterHasTag(problems, p, tagFilter)) return false;
       if (q) {
         const hitTitle = p.title.toLowerCase().includes(q);
@@ -242,6 +251,7 @@ export const ProblemsLedgerView: React.FC = () => {
     effectiveTab,
     subStatus,
     categoryFilter,
+    severityFilter,
     tagFilter,
     searchQuery,
     sortBy
@@ -261,16 +271,18 @@ export const ProblemsLedgerView: React.FC = () => {
         sourceRef: selectedDate
       });
     } else {
+      const sev: ProblemSeverity = quickSeverity;
       addProblem({
         title: trimmed,
         category: quickCategory || problemCategories[0]?.id || 'mindset',
         scale:
-          quickKind === 'slip'
+          quickKind === 'slip' && sev < 4
             ? 'friction'
-            : quickImpact === 'critical'
+            : sev >= 5
             ? 'blocker'
             : 'bottleneck',
-        impact: quickKind === 'slip' ? 'low' : quickImpact,
+        severity: sev,
+        impact: severityToImpact(sev),
         sourceType: quickKind === 'constraint' ? 'weekly' : 'daily',
         date: selectedDate,
         sourceRef: selectedDate
@@ -308,6 +320,7 @@ export const ProblemsLedgerView: React.FC = () => {
 
   const activeFilterCount =
     (categoryFilter !== 'all' ? 1 : 0) +
+    (severityFilter !== 'all' ? 1 : 0) +
     (tagFilter !== 'all' ? 1 : 0) +
     (searchQuery.trim() ? 1 : 0);
 
@@ -378,7 +391,7 @@ export const ProblemsLedgerView: React.FC = () => {
                       <option value="">+ Pin a constraint here...</option>
                       {pinnableCandidates.map(c => (
                         <option key={c.id} value={c.id}>
-                          [{IMPACT_META[getProblemImpact(c)].shortLabel}] {c.title}
+                          [{SEVERITY_META[getProblemSeverity(c)].code}] {c.title}
                         </option>
                       ))}
                     </select>
@@ -391,7 +404,7 @@ export const ProblemsLedgerView: React.FC = () => {
               );
             }
 
-            const imp = IMPACT_META[getProblemImpact(prob)];
+            const sev = SEVERITY_META[getProblemSeverity(prob)];
             const cat = resolveCategoryMeta(prob.category, problemCategories);
             const hits = getClusterTotalHits(problems, prob);
             const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
@@ -414,7 +427,12 @@ export const ProblemsLedgerView: React.FC = () => {
                       <span className="w-6 h-6 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 flex items-center justify-center font-mono text-xs font-extrabold shrink-0">
                         #{slotIdx + 1}
                       </span>
-                      <span className={`w-2 h-2 rounded-full ${imp.dotClass}`} title={imp.label} />
+                      <span
+                        className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-extrabold ${sev.badgeClass}`}
+                        title={`Severity ${sev.label}: ${sev.hint}`}
+                      >
+                        {sev.code}
+                      </span>
                       <span className="text-[11px] font-bold text-slate-400">{cat.shortLabel}</span>
                       {hits > 1 && (
                         <span className="font-mono text-[10px] font-bold text-orange-300">×{hits}</span>
@@ -565,24 +583,26 @@ export const ProblemsLedgerView: React.FC = () => {
                   </button>
                 </div>
 
-                {quickKind === 'constraint' && (
-                  <div className="flex items-center gap-1">
-                    {PROBLEM_IMPACTS.map(im => (
-                      <button
-                        key={im.id}
-                        type="button"
-                        onClick={() => setQuickImpact(im.id)}
-                        className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-all ${
-                          quickImpact === im.id
-                            ? im.activeChipClass
-                            : 'bg-slate-950 text-slate-400 border-slate-800'
-                        }`}
-                      >
-                        {im.shortLabel}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-0.5">
+                    Severity:
+                  </span>
+                  {PROBLEM_SEVERITIES.map(sv => (
+                    <button
+                      key={sv.grade}
+                      type="button"
+                      onClick={() => setQuickSeverity(sv.grade)}
+                      title={`${sv.label}: ${sv.hint}`}
+                      className={`px-2 py-0.5 rounded-lg border font-mono text-[10px] font-extrabold transition-all ${
+                        quickSeverity === sv.grade
+                          ? sv.activeChipClass
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {sv.code}
+                    </button>
+                  ))}
+                </div>
 
                 <select
                   value={quickCategory}
@@ -786,11 +806,23 @@ export const ProblemsLedgerView: React.FC = () => {
               </div>
 
               <select
+                value={severityFilter}
+                onChange={e => setSeverityFilter(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none"
+              >
+                <option value="all">Severity: All (S1–S5)</option>
+                <option value="4+">Severe &amp; Critical (S4–S5)</option>
+                <option value="5">Critical Only (S5)</option>
+                <option value="3">Moderate (S3)</option>
+                <option value="1-2">Minor &amp; Low (S1–S2)</option>
+              </select>
+
+              <select
                 value={sortBy}
                 onChange={e => setSortBy(e.target.value as LedgerSort)}
                 className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none"
               >
-                <option value="priority">Sort: Impact &amp; Priority</option>
+                <option value="priority">Sort: Severity &amp; Priority</option>
                 <option value="frequency">Sort: Most Frequent (×N)</option>
                 <option value="recent">Sort: Most Recent</option>
               </select>
@@ -800,6 +832,7 @@ export const ProblemsLedgerView: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setCategoryFilter('all');
+                    setSeverityFilter('all');
                     setTagFilter('all');
                     setSearchQuery('');
                   }}

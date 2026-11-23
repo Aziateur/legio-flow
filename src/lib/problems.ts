@@ -7,6 +7,7 @@ import {
   ProblemFixType,
   ProblemImpact,
   ProblemScale,
+  ProblemSeverity,
   ProblemSourceType,
   ProblemStatus
 } from '../types/schema';
@@ -432,7 +433,7 @@ export const formatProblemsForReviewText = (
   return topLevel
     .map(p => {
       const cat = resolveCategoryMeta(p.category, customCategories).shortLabel;
-      const impact = IMPACT_META[getProblemImpact(p)].shortLabel;
+      const sevMeta = SEVERITY_META[getProblemSeverity(p)];
       const children = getDescendantProblems(sourcePool, p.id);
       const hits = getClusterTotalHits(sourcePool, p);
       const count = hits > 1 ? ` (×${hits})` : '';
@@ -442,7 +443,7 @@ export const formatProblemsForReviewText = (
       const fixStr = p.fixNote?.trim() ? ` → Fix: ${p.fixNote.trim()}` : '';
       const statusStr = p.status === 'solved' ? ' ✓Solved' : p.status === 'testing' ? ' ⟳Testing' : '';
       const pinStr = p.isTopConstraint ? ' ★TOP ' : ' ';
-      return `•${pinStr}[${impact} · ${cat}]${statusStr} ${p.title}${count}${childSummary}${tagStr}${triggerStr}${fixStr}`;
+      return `•${pinStr}[${sevMeta.code} ${sevMeta.shortLabel} · ${cat}]${statusStr} ${p.title}${count}${childSummary}${tagStr}${triggerStr}${fixStr}`;
     })
     .join('\n');
 };
@@ -592,10 +593,98 @@ export const IMPACT_RANK: Record<ProblemImpact, number> = {
 
 export const getProblemImpact = (problem: ProblemEntry): ProblemImpact => {
   if (problem.impact) return problem.impact;
+  if (problem.severity) return severityToImpact(problem.severity);
   const sc = getProblemScale(problem);
   if (sc === 'blocker') return 'critical';
   if (sc === 'bottleneck') return 'high';
   return 'low';
+};
+
+export interface ProblemSeverityMeta {
+  grade: ProblemSeverity;
+  code: string;
+  label: string;
+  shortLabel: string;
+  hint: string;
+  dotClass: string;
+  badgeClass: string;
+  activeChipClass: string;
+}
+
+export const PROBLEM_SEVERITIES: ProblemSeverityMeta[] = [
+  {
+    grade: 1,
+    code: 'S1',
+    label: '1 · Minor',
+    shortLabel: 'Minor',
+    hint: 'Tiny annoyance — barely affects daily execution.',
+    dotClass: 'bg-slate-500',
+    badgeClass: 'bg-slate-800/90 text-slate-400 border-slate-700',
+    activeChipClass: 'bg-slate-200 text-slate-950 border-slate-100'
+  },
+  {
+    grade: 2,
+    code: 'S2',
+    label: '2 · Low',
+    shortLabel: 'Low',
+    hint: 'Small friction — watch if it keeps repeating.',
+    dotClass: 'bg-sky-400',
+    badgeClass: 'bg-sky-500/15 text-sky-300 border-sky-500/35',
+    activeChipClass: 'bg-sky-400 text-slate-950 border-sky-300'
+  },
+  {
+    grade: 3,
+    code: 'S3',
+    label: '3 · Moderate',
+    shortLabel: 'Moderate',
+    hint: 'Noticeable drag on focus, habits, or momentum.',
+    dotClass: 'bg-amber-400',
+    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeChipClass: 'bg-amber-400 text-slate-950 border-amber-300'
+  },
+  {
+    grade: 4,
+    code: 'S4',
+    label: '4 · Severe',
+    shortLabel: 'Severe',
+    hint: 'Major recurring bottleneck derailing weekly outcomes.',
+    dotClass: 'bg-orange-500',
+    badgeClass: 'bg-orange-500/15 text-orange-300 border-orange-500/40',
+    activeChipClass: 'bg-orange-500 text-slate-950 border-orange-400'
+  },
+  {
+    grade: 5,
+    code: 'S5',
+    label: '5 · Critical',
+    shortLabel: 'Critical',
+    hint: 'System-breaking damage or directly blocks a major goal / Roadmap Gate.',
+    dotClass: 'bg-rose-500',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/45',
+    activeChipClass: 'bg-rose-500 text-slate-950 border-rose-400'
+  }
+];
+
+export const SEVERITY_META: Record<ProblemSeverity, ProblemSeverityMeta> = {
+  1: PROBLEM_SEVERITIES[0],
+  2: PROBLEM_SEVERITIES[1],
+  3: PROBLEM_SEVERITIES[2],
+  4: PROBLEM_SEVERITIES[3],
+  5: PROBLEM_SEVERITIES[4]
+};
+
+export const severityToImpact = (severity: ProblemSeverity): ProblemImpact => {
+  if (severity >= 5) return 'critical';
+  if (severity >= 3) return 'high';
+  return 'low';
+};
+
+export const getProblemSeverity = (problem: ProblemEntry): ProblemSeverity => {
+  if (typeof problem.severity === 'number' && problem.severity >= 1 && problem.severity <= 5) {
+    return Math.round(problem.severity) as ProblemSeverity;
+  }
+  if (problem.impact === 'critical' || problem.scale === 'blocker') return 5;
+  if (problem.impact === 'high' || problem.scale === 'bottleneck') return 3;
+  return 2;
 };
 
 export const isProblemGuardrail = (problem: ProblemEntry): boolean =>
@@ -606,6 +695,7 @@ export const isRootProblem = (allProblems: ProblemEntry[], problem: ProblemEntry
   if (hasExistingParent(allProblems, problem)) return false;
   if (problem.isTopConstraint) return true;
   if (getProblemScale(problem) !== 'friction') return true;
+  if (problem.severity !== undefined && problem.severity >= 4) return true;
   if (problem.status === 'testing' || problem.status === 'solved') return true;
   if (problem.fixNote?.trim() || problem.rootCause?.trim() || problem.trigger?.trim()) return true;
   if (isProblemGuardrail(problem)) return true;
@@ -630,10 +720,74 @@ export const getEligibleRootTargets = (
       if (Boolean(b.isTopConstraint) !== Boolean(a.isTopConstraint)) {
         return b.isTopConstraint ? 1 : -1;
       }
-      const impDiff = IMPACT_RANK[getProblemImpact(b)] - IMPACT_RANK[getProblemImpact(a)];
-      if (impDiff !== 0) return impDiff;
+      const sevDiff = getProblemSeverity(b) - getProblemSeverity(a);
+      if (sevDiff !== 0) return sevDiff;
       return getClusterTotalHits(allProblems, b) - getClusterTotalHits(allProblems, a);
     });
+};
+
+// Returns ALL other active top-level problems split into Root Constraints & Other Frictions/Slips
+// so users can cluster ANY friction under ANY other problem/friction directly from a dropdown
+export const getEligibleClusterTargets = (
+  allProblems: ProblemEntry[],
+  excludeId?: string
+): { roots: ProblemEntry[]; frictions: ProblemEntry[] } => {
+  const descendants = excludeId
+    ? new Set(getDescendantProblems(allProblems, excludeId).map(d => d.id))
+    : new Set<string>();
+
+  const candidates = allProblems.filter(p => {
+    if (excludeId && (p.id === excludeId || descendants.has(p.id))) return false;
+    if (p.status === 'solved') return false;
+    if (hasExistingParent(allProblems, p)) return false;
+    return true;
+  });
+
+  const sorter = (a: ProblemEntry, b: ProblemEntry) => {
+    if (Boolean(b.isTopConstraint) !== Boolean(a.isTopConstraint)) {
+      return b.isTopConstraint ? 1 : -1;
+    }
+    const sevDiff = getProblemSeverity(b) - getProblemSeverity(a);
+    if (sevDiff !== 0) return sevDiff;
+    return getClusterTotalHits(allProblems, b) - getClusterTotalHits(allProblems, a);
+  };
+
+  const roots = candidates.filter(p => isRootProblem(allProblems, p)).sort(sorter);
+  const frictions = candidates.filter(p => !isRootProblem(allProblems, p)).sort(sorter);
+  return { roots, frictions };
+};
+
+// Returns ALL other active top-level problems/frictions that can be absorbed under `hostId`
+export const getAbsorbableProblems = (
+  allProblems: ProblemEntry[],
+  hostId: string
+): { frictions: ProblemEntry[]; others: ProblemEntry[] } => {
+  // Exclude host itself, its existing children, and its ancestor chain to prevent cycles
+  const blocked = new Set<string>([hostId]);
+  let cursor = allProblems.find(p => p.id === hostId);
+  let guard = 0;
+  while (cursor?.parentProblemId && guard < 20) {
+    blocked.add(cursor.parentProblemId);
+    cursor = allProblems.find(p => p.id === cursor!.parentProblemId);
+    guard += 1;
+  }
+
+  const candidates = allProblems.filter(p => {
+    if (blocked.has(p.id)) return false;
+    if (p.status === 'solved') return false;
+    if (hasExistingParent(allProblems, p)) return false;
+    return true;
+  });
+
+  const sorter = (a: ProblemEntry, b: ProblemEntry) => {
+    const sevDiff = getProblemSeverity(b) - getProblemSeverity(a);
+    if (sevDiff !== 0) return sevDiff;
+    return getClusterTotalHits(allProblems, b) - getClusterTotalHits(allProblems, a);
+  };
+
+  const frictions = candidates.filter(p => !isRootProblem(allProblems, p)).sort(sorter);
+  const others = candidates.filter(p => isRootProblem(allProblems, p)).sort(sorter);
+  return { frictions, others };
 };
 
 export const daysBetweenDates = (startDate: string, endDate: string): number => {
@@ -684,9 +838,9 @@ export const computeProblemPriorityScore = (
   allProblems: ProblemEntry[],
   problem: ProblemEntry
 ): number => {
-  const impactWeight = IMPACT_RANK[getProblemImpact(problem)] * 100;
+  const severityWeight = getProblemSeverity(problem) * 100;
   const topBonus = problem.isTopConstraint ? 1000 : 0;
-  const failedBonus = problem.lastFixFailedAt && problem.status === 'open' ? 50 : 0;
+  const failedBonus = problem.lastFixFailedAt && problem.status === 'open' ? 60 : 0;
   const hits = Math.min(40, getClusterTotalHits(allProblems, problem));
-  return topBonus + impactWeight + failedBonus + hits;
+  return topBonus + severityWeight + failedBonus + hits;
 };

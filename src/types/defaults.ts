@@ -13,6 +13,7 @@ import {
   ProblemSettings,
   ChecklistCategory,
   ChecklistItem,
+  AllowanceItem,
   StrategyPlan
 } from './schema';
 
@@ -556,4 +557,6 @@ export const INITIAL_STRATEGY_PLANS: StrategyPlan[] = [
     ]
   }
 ];
+
+export const INITIAL_ALLOWANCE_ITEMS: AllowanceItem[] = [];
 

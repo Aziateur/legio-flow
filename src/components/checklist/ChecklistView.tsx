@@ -11,6 +11,7 @@ import {
   MONTHLY_DAY_OPTIONS,
   getChecklistDueStatus
 } from '../../lib/checklistSchedule';
+import { AllowancesBoard } from './AllowancesBoard';
 import {
   Activity,
   ArrowDownToLine,
@@ -29,7 +30,7 @@ import {
   Trash2
 } from 'lucide-react';
 
-type ViewFilter = 'all' | 'recurring' | 'none' | 'tally';
+type ViewFilter = 'all' | 'recurring' | 'none' | 'tally' | 'allowances';
 type StreakUnit = 'd' | 'w' | 'm' | '';
 
 interface SectionConfig {
@@ -940,7 +941,8 @@ export const ChecklistView: React.FC = () => {
                 { id: 'all', label: 'All' },
                 { id: 'recurring', label: 'Recurring' },
                 { id: 'none', label: 'One-Off' },
-                { id: 'tally', label: 'Reps Board' }
+                { id: 'tally', label: 'Reps Board' },
+                { id: 'allowances', label: 'Allowances' }
               ] as { id: ViewFilter; label: string }[]
             ).map((tab) => (
               <button
@@ -1462,6 +1464,16 @@ export const ChecklistView: React.FC = () => {
             </div>
           </div>
         </section>
+      )}
+
+      {/* 4. ALLOWANCES & QUOTAS BOARD — Daily / Weekly / Monthly Countdown Budgets (right below Reps Board) */}
+      {(viewFilter === 'all' || viewFilter === 'allowances') && (
+        <AllowancesBoard
+          selectedDate={selectedDate}
+          selectedWeekId={selectedWeekId}
+          weekLabel={weekLabel}
+          monthKey={monthKey}
+        />
       )}
     </div>
   );

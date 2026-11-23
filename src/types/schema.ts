@@ -300,6 +300,22 @@ export interface ChecklistItem {
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
 }
 
+export type AllowancePeriod = 'daily' | 'weekly' | 'monthly';
+
+export interface AllowanceItem {
+  id: string;
+  name: string;
+  period: AllowancePeriod; // Resets automatically every day / week / month
+  limit: number; // Total points allowed per period (e.g. 2 outings/week)
+  step?: number; // Points deducted per click (default 1)
+  unit?: string; // Optional unit label (e.g. "outings", "pts", "hrs", "€")
+  usageByPeriod: Record<string, number>; // 'YYYY-MM-DD' | 'week_N' | 'YYYY-MM' -> points spent
+  allowOverspend?: boolean; // Default true (negative = over budget); false caps spending at 0 remaining
+  color?: ProblemColorKey;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface StrategyProximalGoal {
   id: string;
   text: string;
@@ -353,6 +369,8 @@ export type ProblemStatus = 'open' | 'testing' | 'solved';
 export type ProblemScale = 'friction' | 'bottleneck' | 'blocker';
 
 export type ProblemImpact = 'low' | 'high' | 'critical';
+
+export type ProblemSeverity = 1 | 2 | 3 | 4 | 5;
 
 export type ProblemFixType =
   | 'task'
@@ -410,6 +428,7 @@ export interface ProblemEntry {
   category: ProblemCategory;
   scale?: ProblemScale; // 'friction' (Slip) | 'bottleneck' (Root Problem) | 'blocker' (Macro / Roadmap Blocker)
   impact?: ProblemImpact; // 'low' | 'high' | 'critical'
+  severity?: ProblemSeverity; // Graded 1-5 severity (1 Minor, 2 Low, 3 Moderate, 4 Severe, 5 Critical)
   isTopConstraint?: boolean; // Pinned in the Top 3 Constraints focus spotlight
   trigger?: string; // When / in what context does this fire?
   rootCause?: string; // Why is this actually happening below the surface symptom?
