@@ -1,5 +1,6 @@
 import {
   ChecklistItem,
+  DailyEntry,
   GWSSession,
   LifePillar,
   ProblemEntry,
@@ -128,18 +129,56 @@ const listMonthsInRange = (startMonth: string, endMonth: string): string[] => {
   return res;
 };
 
+const normalizeDatePrefix = (raw?: string): string | undefined => {
+  if (!raw || typeof raw !== 'string') return undefined;
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : undefined;
+};
+
 export const computeHabitDurabilityInRange = (
   checklistItems: ChecklistItem[],
   weeklyPlans: Record<string, WeeklyPlan>,
   startDate: string,
   endDate: string,
-  todayDate: string
+  todayDate: string,
+  dailyEntries?: Record<string, DailyEntry>
 ): HabitDurabilityRow[] => {
   const effectiveEnd = endDate > todayDate ? todayDate : endDate;
   if (effectiveEnd < startDate) return [];
 
+  // Determine the true earliest date the user actually tracked habits (never count pre-app or old seed-entry days!)
+  const checklistCandidates: string[] = [];
+  checklistItems.forEach(item => {
+    const c = normalizeDatePrefix(item.createdAt);
+    if (c && c <= effectiveEnd) checklistCandidates.push(c);
+    (item.completedPeriods || []).forEach(p => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(p) && p <= effectiveEnd) {
+        checklistCandidates.push(p);
+      }
+    });
+  });
+  const dailyCandidates: string[] = [];
+  if (checklistCandidates.length === 0 && dailyEntries) {
+    Object.values(dailyEntries).forEach(entry => {
+      if (!entry || !/^\d{4}-\d{2}-\d{2}$/.test(entry.date) || entry.date > effectiveEnd) return;
+      const hasActivity = Boolean(
+        entry.executionScore > 0 ||
+          entry.automaticTasksCompleted ||
+          entry.mainTasksCompleted > 0 ||
+          entry.planNotes?.trim() ||
+          entry.reviewNotes?.trim()
+      );
+      if (hasActivity) dailyCandidates.push(entry.date);
+    });
+  }
+  const trackingStartFloor =
+    checklistCandidates.length > 0
+      ? checklistCandidates.sort()[0]
+      : dailyCandidates.length > 0
+      ? dailyCandidates.sort()[0]
+      : effectiveEnd;
+
   const allWeeks = Object.values(weeklyPlans).filter(
-    w => w.startDate >= startDate && w.startDate <= effectiveEnd
+    w => w.startDate <= effectiveEnd && w.endDate >= startDate
   );
   const allMonths = listMonthsInRange(startDate.slice(0, 7), effectiveEnd.slice(0, 7));
 
@@ -149,11 +188,18 @@ export const computeHabitDurabilityInRange = (
     if (item.recurrence !== 'daily' && item.recurrence !== 'weekly' && item.recurrence !== 'monthly') {
       return;
     }
-    const created = item.createdAt && /^\d{4}-\d{2}-\d{2}$/.test(item.createdAt) ? item.createdAt : undefined;
+    const created = normalizeDatePrefix(item.createdAt);
     const periods = item.completedPeriods || [];
 
     if (item.recurrence === 'daily') {
-      const effStart = created && created > startDate ? created : startDate;
+      const itemDates: string[] = [];
+      if (created) itemDates.push(created);
+      periods.forEach(p => {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(p)) itemDates.push(p);
+      });
+      // For items with no createdAt, anchor to earliest completion or workspace tracking start — NEVER before the app existed!
+      const itemStart = itemDates.length > 0 ? itemDates.sort()[0] : trackingStartFloor;
+      const effStart = itemStart > startDate ? itemStart : startDate;
       if (effStart > effectiveEnd) return;
       const expected = daysBetweenInclusive(effStart, effectiveEnd);
       if (expected <= 0) return;
@@ -167,10 +213,19 @@ export const computeHabitDurabilityInRange = (
         pct: Math.min(100, Math.round((uniqueDone / expected) * 100))
       });
     } else if (item.recurrence === 'weekly') {
-      const eligibleWeeks = allWeeks.filter(w => !created || w.endDate >= created);
+      const periodSet = new Set(periods);
+      const completedWeekStarts = allWeeks
+        .filter(w => periodSet.has(w.id))
+        .map(w => w.startDate);
+      const itemStartCandidates = [
+        ...(created ? [created] : []),
+        ...completedWeekStarts
+      ];
+      const itemFloor =
+        itemStartCandidates.length > 0 ? itemStartCandidates.sort()[0] : trackingStartFloor;
+      const eligibleWeeks = allWeeks.filter(w => w.endDate >= itemFloor);
       const expected = eligibleWeeks.length;
       if (expected <= 0) return;
-      const periodSet = new Set(periods);
       const done = eligibleWeeks.filter(w => periodSet.has(w.id)).length;
       rows.push({
         id: item.id,
@@ -181,11 +236,19 @@ export const computeHabitDurabilityInRange = (
         pct: Math.min(100, Math.round((done / expected) * 100))
       });
     } else if (item.recurrence === 'monthly') {
-      const createdMonth = created ? created.slice(0, 7) : undefined;
-      const eligibleMonths = allMonths.filter(m => !createdMonth || m >= createdMonth);
+      const periodSet = new Set(periods);
+      const completedMonths = periods.filter(p => /^\d{4}-\d{2}$/.test(p));
+      const itemMonthCandidates = [
+        ...(created ? [created.slice(0, 7)] : []),
+        ...completedMonths
+      ];
+      const floorMonth =
+        itemMonthCandidates.length > 0
+          ? itemMonthCandidates.sort()[0]
+          : trackingStartFloor.slice(0, 7);
+      const eligibleMonths = allMonths.filter(m => m >= floorMonth);
       const expected = eligibleMonths.length;
       if (expected <= 0) return;
-      const periodSet = new Set(periods);
       const done = eligibleMonths.filter(m => periodSet.has(m)).length;
       rows.push({
         id: item.id,

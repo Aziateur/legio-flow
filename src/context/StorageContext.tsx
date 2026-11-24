@@ -389,6 +389,11 @@ const normalizeDailyEntryFields = (date: string, entry: DailyEntry): DailyEntry 
 
 export type DailyChecklistDayState = 'done' | 'missed' | 'pending_today' | 'untracked' | 'upcoming';
 
+const extractIsoDate = (raw?: string): string | undefined => {
+  if (!raw || typeof raw !== 'string') return undefined;
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : undefined;
+};
+
 export function getChecklistTrackingStartDate(
   checklistItems: ChecklistItem[],
   dailyEntries: Record<string, DailyEntry>,
@@ -398,9 +403,8 @@ export function getChecklistTrackingStartDate(
   checklistItems
     .filter(i => i.recurrence === 'daily')
     .forEach(item => {
-      if (item.createdAt && /^\d{4}-\d{2}-\d{2}$/.test(item.createdAt)) {
-        candidates.push(item.createdAt);
-      }
+      const created = extractIsoDate(item.createdAt);
+      if (created) candidates.push(created);
       (item.completedPeriods || []).forEach(p => {
         if (/^\d{4}-\d{2}-\d{2}$/.test(p)) candidates.push(p);
       });
@@ -419,9 +423,8 @@ export function getEffectiveDailyItemStartDate(
   fallbackStartDate: string
 ): string {
   const dates: string[] = [];
-  if (item.createdAt && /^\d{4}-\d{2}-\d{2}$/.test(item.createdAt)) {
-    dates.push(item.createdAt);
-  }
+  const created = extractIsoDate(item.createdAt);
+  if (created) dates.push(created);
   (item.completedPeriods || []).forEach(p => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(p)) dates.push(p);
   });

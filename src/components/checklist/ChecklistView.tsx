@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   useStorage,
   getActiveDailyChecklistItemsForDate,
+  getChecklistTrackingStartDate,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes
 } from '../../context/StorageContext';
@@ -126,7 +127,8 @@ function stepPeriodKey(recurrence: ChecklistRecurrence, periodKey: string, delta
 function computeConsistency(
   item: ChecklistItem,
   selectedDate: string,
-  selectedWeekId: string
+  selectedWeekId: string,
+  trackingStartFloor: string
 ): { pct: number; done: number; windowSize: number; unit: StreakUnit; completedCurrent: boolean } {
   const unit: StreakUnit =
     item.recurrence === 'daily'
@@ -154,10 +156,11 @@ function computeConsistency(
     cursor = stepPeriodKey(item.recurrence, cursor, -1);
   }
 
-  // Bound denominator by item's history/creation so brand-new habits don't start artificially punished
+  // Bound denominator by item's history/creation OR workspace start so pre-app days are NEVER counted as missed
   let effectiveWindow = windowKeys.length;
   if (item.recurrence === 'daily') {
-    const createdDate = item.createdAt ? item.createdAt.slice(0, 10) : '';
+    const createdDate =
+      item.createdAt && /^\d{4}-\d{2}-\d{2}/.test(item.createdAt) ? item.createdAt.slice(0, 10) : '';
     const earliestCompleted = Array.from(periods)
       .filter(p => /^\d{4}-\d{2}-\d{2}$/.test(p) && p <= selectedDate)
       .sort()[0];
@@ -166,7 +169,7 @@ function computeConsistency(
         ? createdDate < earliestCompleted
           ? createdDate
           : earliestCompleted
-        : earliestCompleted || createdDate;
+        : earliestCompleted || createdDate || trackingStartFloor;
     if (startBound && startBound <= selectedDate) {
       const idx = windowKeys.findIndex(k => k <= startBound);
       if (idx >= 0) {
@@ -192,8 +195,9 @@ function computeConsistency(
     const earliestMonth = Array.from(periods)
       .filter(p => /^\d{4}-\d{2}$/.test(p) && p <= currentKey)
       .sort()[0];
-    if (earliestMonth) {
-      const idx = windowKeys.findIndex(k => k <= earliestMonth);
+    const boundMonth = earliestMonth || trackingStartFloor.slice(0, 7);
+    if (boundMonth) {
+      const idx = windowKeys.findIndex(k => k <= boundMonth);
       if (idx >= 0) effectiveWindow = Math.max(1, idx + 1);
     } else if (periods.size === 0) {
       effectiveWindow = 1;
@@ -591,13 +595,18 @@ export const ChecklistView: React.FC = () => {
     saveChecklistItems(updated);
   };
 
+  const trackingStartFloor = useMemo(
+    () => getChecklistTrackingStartDate(checklistItems, dailyEntries, todayDate),
+    [checklistItems, dailyEntries, todayDate]
+  );
+
   const consistencyById = useMemo(() => {
     const map = new Map<string, ReturnType<typeof computeConsistency>>();
     for (const item of checklistItems) {
-      map.set(item.id, computeConsistency(item, selectedDate, selectedWeekId));
+      map.set(item.id, computeConsistency(item, selectedDate, selectedWeekId, trackingStartFloor));
     }
     return map;
-  }, [checklistItems, selectedDate, selectedWeekId]);
+  }, [checklistItems, selectedDate, selectedWeekId, trackingStartFloor]);
 
   const avgConsistencyPct = useMemo(() => {
     const scores: number[] = [];
@@ -670,6 +679,19 @@ export const ChecklistView: React.FC = () => {
   const renderSectionCard = (section: SectionConfig) => {
     const items = checklistItems.filter((i) => i.recurrence === section.recurrence);
     const sectionDone = items.filter(isItemDone).length;
+    const sectionConsistencyValues =
+      section.recurrence !== 'none'
+        ? items
+            .map(i => consistencyById.get(i.id))
+            .filter((c): c is NonNullable<typeof c> => Boolean(c && c.windowSize > 0))
+            .map(c => c.pct)
+        : [];
+    const sectionAvgPct =
+      sectionConsistencyValues.length > 0
+        ? Math.round(
+            sectionConsistencyValues.reduce((a, b) => a + b, 0) / sectionConsistencyValues.length
+          )
+        : null;
 
     return (
       <div
@@ -678,11 +700,25 @@ export const ChecklistView: React.FC = () => {
       >
         <div className="mb-3 flex items-start justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-100">{section.title}</h2>
               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${section.badgeClass}`}>
                 {sectionDone}/{items.length}
               </span>
+              {sectionAvgPct !== null && (
+                <span
+                  className={`rounded-full border px-2 py-0.5 font-mono text-[11px] font-bold ${
+                    sectionAvgPct >= 80
+                      ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                      : sectionAvgPct >= 60
+                      ? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+                      : 'border-rose-500/30 bg-rose-500/15 text-rose-300'
+                  }`}
+                  title={`Average rolling consistency across ${section.title}`}
+                >
+                  Avg {sectionAvgPct}%
+                </span>
+              )}
             </div>
             <p className="mt-0.5 text-xs text-slate-400">{section.subtitle}</p>
           </div>

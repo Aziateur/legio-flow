@@ -219,6 +219,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
 }) => {
   const {
     todayDate,
+    dailyEntries,
     weeklyPlans,
     selectedWeekId,
     quarterlyPlans,
@@ -354,7 +355,8 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     weeklyPlans,
     startDate,
     endDate,
-    todayDate
+    todayDate,
+    dailyEntries
   );
   const repsRows = computeRepsVolumeInRange(checklistItems, startDate, endDate);
   const systemicProblems = getSystemicProblemsInRange(problems, startDate, endDate, mode);
@@ -1816,8 +1818,16 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                   <span>Habit Durability ({habitRows.length})</span>
                 </span>
                 {habitRows.length > 0 && (
-                  <span className="font-mono text-[11px] font-bold text-slate-300">
-                    Avg {avgHabitDurability}%
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full border font-mono text-[11px] font-extrabold ${
+                      avgHabitDurability >= 80
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                        : avgHabitDurability >= 60
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                        : 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+                    }`}
+                  >
+                    Avg Consistency: {avgHabitDurability}%
                   </span>
                 )}
               </div>
