@@ -287,7 +287,9 @@ export const parsePlanNotesToPriorityItems = (
         completed,
         ...(matched?.weeklyTaskId ? { weeklyTaskId: matched.weeklyTaskId } : {}),
         ...(matched?.subTaskId ? { subTaskId: matched.subTaskId } : {}),
-        ...(matched?.checklistItemId ? { checklistItemId: matched.checklistItemId } : {})
+        ...(matched?.checklistItemId ? { checklistItemId: matched.checklistItemId } : {}),
+        ...(matched?.pushedToDate ? { pushedToDate: matched.pushedToDate } : {}),
+        ...(matched?.pushedFromDate ? { pushedFromDate: matched.pushedFromDate } : {})
       } as DailyPriorityItem;
     })
     .filter((item): item is DailyPriorityItem => item !== null);
@@ -4041,7 +4043,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               d.energyCheck.nervousSystemScore ||
               d.energyCheck.nervousSystemState ||
               d.energyCheck.nervousSystemNote?.trim())) ||
-          Boolean(d.alignmentVerdict || d.alignmentNote?.trim())
+          Boolean(d.alignmentVerdict || d.alignmentNote?.trim()) ||
+          Boolean(d.priorityAudits && Object.keys(d.priorityAudits).length > 0)
       );
 
     allDates.forEach(date => {
@@ -4085,7 +4088,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         // Deep-merge priorities by ID (respecting deletedIds) + preserve non-empty review/notes/score + union GWS IDs
         const primaryItems = chosen.priorityItems || [];
         const secondaryItems = other.priorityItems || [];
-        const mergedPrios: DailyPriorityItem[] = [...primaryItems];
+        const mergedPrios: DailyPriorityItem[] = primaryItems.map(pItem => {
+          const sMatch = secondaryItems.find(si => si.id === pItem.id);
+          if (!sMatch) return pItem;
+          return {
+            ...pItem,
+            pushedToDate: pItem.pushedToDate !== undefined ? pItem.pushedToDate : sMatch.pushedToDate,
+            pushedFromDate: pItem.pushedFromDate || sMatch.pushedFromDate
+          };
+        });
         const prioIds = new Set(primaryItems.map(i => i.id));
         const prioTexts = new Set(primaryItems.map(i => i.text.trim().toLowerCase()));
         secondaryItems.forEach(item => {
@@ -4099,6 +4110,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             needsCloudPush = true;
           }
         });
+
+        const mergedPriorityAudits =
+          chosen.priorityAudits || other.priorityAudits
+            ? { ...(other.priorityAudits || {}), ...(chosen.priorityAudits || {}) }
+            : undefined;
 
         const mergedReviewNotes = chosen.reviewNotes?.trim() ? chosen.reviewNotes : other.reviewNotes || '';
         const mergedProblems = chosen.problemsEncountered?.trim()
@@ -4132,7 +4148,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           mergedReviewNotes !== (c.reviewNotes || '') ||
           JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null) ||
           mergedAlignmentVerdict !== c.alignmentVerdict ||
-          (mergedAlignmentNote || '') !== (c.alignmentNote || '')
+          (mergedAlignmentNote || '') !== (c.alignmentNote || '') ||
+          JSON.stringify(mergedPriorityAudits || null) !== JSON.stringify(c.priorityAudits || null)
         ) {
           needsCloudPush = true;
         }
@@ -4147,7 +4164,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           executionScore: mergedScore,
           ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {}),
           ...(mergedAlignmentVerdict ? { alignmentVerdict: mergedAlignmentVerdict } : {}),
-          ...(mergedAlignmentNote?.trim() ? { alignmentNote: mergedAlignmentNote } : {})
+          ...(mergedAlignmentNote?.trim() ? { alignmentNote: mergedAlignmentNote } : {}),
+          ...(mergedPriorityAudits ? { priorityAudits: mergedPriorityAudits } : {})
         });
       }
     });
@@ -4190,6 +4208,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           strategyStageId: pt.strategyStageId || match.strategyStageId,
           strategyGoalId: pt.strategyGoalId || match.strategyGoalId,
           sourceLabel: pt.sourceLabel || match.sourceLabel,
+          pushedToPeriod: pt.pushedToPeriod !== undefined ? pt.pushedToPeriod : match.pushedToPeriod,
+          pushedFromPeriod: pt.pushedFromPeriod || match.pushedFromPeriod,
           ...(mergedSubs.length > 0 ? { subTasks: mergedSubs } : {})
         };
       });

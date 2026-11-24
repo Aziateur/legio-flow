@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import {
   useStorage,
-  computeWeeklyAchievedScore
+  computeWeeklyAchievedScore,
+  getPriorityItemsForEntry
 } from '../../context/StorageContext';
 import {
   ReviewEntry,
@@ -37,11 +38,14 @@ import {
 } from '../../lib/planHierarchy';
 import {
   ALIGNMENT_VERDICTS,
+  MISS_CAUSE_OPTIONS,
   PARK_REASON_META,
   alignmentVerdictToScore,
   collectLowScoreWarnings,
   computePeriodAlignmentSummary,
-  computePeriodEnergySummary
+  computePeriodEnergySummary,
+  getMissCauseMeta,
+  summarizeMissCauses
 } from '../../lib/energyAnalytics';
 import {
   AlignmentVerdictSelector,
@@ -185,12 +189,7 @@ const OUTCOME_VERDICTS: Array<{ id: OutcomeVerdict; label: string; activeCls: st
   { id: 'dropped', label: 'Dropped', activeCls: 'bg-slate-600 text-slate-100 border-slate-500' }
 ];
 
-const OUTCOME_CAUSES: Array<{ id: OutcomeRootCause; label: string }> = [
-  { id: 'execution', label: 'Execution' },
-  { id: 'strategy', label: 'Strategy' },
-  { id: 'scope', label: 'Scope' },
-  { id: 'shifted', label: 'Priority Shifted' }
-];
+const OUTCOME_CAUSES = MISS_CAUSE_OPTIONS;
 
 const ROADMAP_VERDICTS: Array<{ id: RoadmapVerdict; label: string; activeCls: string }> = [
   { id: 'push_gate', label: 'Push Gate', activeCls: 'bg-emerald-500 text-slate-950 border-emerald-400' },
@@ -479,7 +478,9 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
 
   const handleToggleOutcomeComplete = (taskId: string) => {
     const nextTasks = currentPlan.tasks.map(t =>
-      t.id === taskId ? { ...t, completed: !t.completed } : t
+      t.id === taskId
+        ? { ...t, completed: !t.completed, ...(!t.completed ? { pushedToPeriod: undefined } : {}) }
+        : t
     );
     const toggled = nextTasks.find(t => t.id === taskId);
     saveCurrentPlan({ tasks: nextTasks });
@@ -488,6 +489,42 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
         outcomeAudits: {
           ...outcomeAudits,
           [taskId]: { ...outcomeAudits[taskId], verdict: 'hit' }
+        }
+      });
+    }
+  };
+
+  const handlePushOutcomeToNextPeriod = (task: TaskItem) => {
+    const cleanText = task.text.trim();
+    if (!cleanText) return;
+    const alreadyInNext = nextPlan.tasks.some(
+      t => t.text.trim().toLowerCase() === cleanText.toLowerCase()
+    );
+    if (!alreadyInNext) {
+      const pushedCopy: TaskItem = {
+        id: `${isQuarterly ? 'qgoal' : 'ygoal'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text: cleanText,
+        completed: false,
+        pushedFromPeriod: periodKey,
+        ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
+        ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
+        ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+        ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+        ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+      };
+      saveNextPlan({ tasks: [...nextPlan.tasks, pushedCopy] });
+    }
+    saveCurrentPlan({
+      tasks: currentPlan.tasks.map(t =>
+        t.id === task.id ? { ...t, completed: false, pushedToPeriod: nextPeriodKey } : t
+      )
+    });
+    if (!outcomeAudits[task.id]?.verdict) {
+      onUpsertReview(periodKey, {
+        outcomeAudits: {
+          ...outcomeAudits,
+          [task.id]: { ...(outcomeAudits[task.id] || {}), verdict: 'missed' }
         }
       });
     }
@@ -510,7 +547,9 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
       const target = currentPlan.tasks.find(t => t.id === taskId);
       if (target && !target.completed) {
         saveCurrentPlan({
-          tasks: currentPlan.tasks.map(t => (t.id === taskId ? { ...t, completed: true } : t))
+          tasks: currentPlan.tasks.map(t =>
+            t.id === taskId ? { ...t, completed: true, pushedToPeriod: undefined } : t
+          )
         });
       }
     }
@@ -783,14 +822,16 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
       );
       currentPlan.tasks.forEach(t => {
         const a = outcomeAudits[t.id];
+        const causeLabel = getMissCauseMeta(a?.rootCause)?.label || a?.rootCause;
+        const pushedPart = !t.completed && t.pushedToPeriod ? ` · Pushed → ${t.pushedToPeriod}` : '';
         const tag =
           t.status === 'parked'
             ? '[PARKED]'
             : a?.verdict
-            ? `[${a.verdict.toUpperCase()}${a.rootCause ? ` · ${a.rootCause}` : ''}]`
+            ? `[${a.verdict.toUpperCase()}${pushedPart}${causeLabel ? ` · ${causeLabel}` : ''}]`
             : t.completed
             ? '[DONE]'
-            : '[OPEN]';
+            : `[NOT DONE${pushedPart}${causeLabel ? ` · ${causeLabel}` : ''}]`;
         const kpiSuffix =
           t.kpiTarget?.trim() || t.kpiActual?.trim()
             ? ` [KPI: ${t.kpiTarget?.trim() || '—'} → ${t.kpiActual?.trim() || '—'}]`
@@ -1368,8 +1409,12 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
               <div className="space-y-2.5">
                 {currentPlan.tasks.map(task => {
                   const audit = outcomeAudits[task.id] || {};
-                  const showNote = expandedOutcomeNotes[task.id] || Boolean(audit.note?.trim());
                   const isParked = task.status === 'parked';
+                  const isNotDone = !task.completed && !isParked;
+                  const showNote =
+                    expandedOutcomeNotes[task.id] ||
+                    Boolean(audit.note?.trim()) ||
+                    (isNotDone && Boolean(audit.rootCause));
                   const hasKpi = Boolean(task.kpiTarget?.trim() || task.kpiActual?.trim());
                   return (
                     <div
@@ -1379,7 +1424,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                           ? 'bg-slate-950/60 border-slate-800/70 opacity-75'
                           : audit.verdict === 'hit' || task.completed
                           ? 'bg-emerald-500/5 border-emerald-500/25'
-                          : audit.verdict === 'missed'
+                          : audit.verdict === 'missed' || Boolean(task.pushedToPeriod)
                           ? 'bg-rose-500/5 border-rose-500/25'
                           : 'bg-slate-950 border-slate-800'
                       }`}
@@ -1394,7 +1439,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                             {task.completed ? (
                               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                             ) : (
-                              <Circle className="w-4 h-4 text-slate-500 hover:text-slate-300" />
+                              <Circle className="w-4 h-4 text-rose-400/80 hover:text-slate-300" />
                             )}
                           </button>
                           <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -1414,11 +1459,34 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                                 Parked{task.parkedReasonTag ? ` · ${PARK_REASON_META[task.parkedReasonTag].shortLabel}` : ''}
                               </span>
                             )}
+                            {isNotDone && (
+                              task.pushedToPeriod ? (
+                                <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                                  Not Done · Pushed → {task.pushedToPeriod}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/25 text-[10px] font-bold">
+                                  Not Done
+                                </span>
+                              )
+                            )}
                           </div>
                         </div>
 
-                        {/* Verdict Pills + Root Cause Selector */}
+                        {/* Verdict Pills + Push Forward + Root Cause Selector */}
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          {isNotDone && !task.pushedToPeriod && (
+                            <button
+                              type="button"
+                              onClick={() => handlePushOutcomeToNextPeriod(task)}
+                              className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[11px] font-bold transition-colors"
+                              title={`Push to ${nextPeriodKey} & keep marked Not Done in ${periodKey}`}
+                            >
+                              <span>{nextPeriodKey}</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          )}
+
                           {OUTCOME_VERDICTS.map(v => (
                             <button
                               key={v.id}
@@ -1434,7 +1502,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                             </button>
                           ))}
 
-                          {audit.verdict && audit.verdict !== 'hit' && (
+                          {(isNotDone || (audit.verdict && audit.verdict !== 'hit')) && (
                             <select
                               value={audit.rootCause || ''}
                               onChange={e =>
@@ -1442,9 +1510,14 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                                   rootCause: (e.target.value || undefined) as OutcomeRootCause | undefined
                                 })
                               }
-                              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
+                              className={`rounded-lg px-2 py-1 text-[11px] font-bold border focus:outline-none ${
+                                audit.rootCause
+                                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                                  : 'bg-slate-900 text-rose-300 border-rose-500/30'
+                              }`}
+                              title="Why didn't this happen? What did you lack?"
                             >
-                              <option value="">Why? (Cause)</option>
+                              <option value="">Why? (Lacked...)</option>
                               {OUTCOME_CAUSES.map(c => (
                                 <option key={c.id} value={c.id}>
                                   {c.label}
@@ -1461,7 +1534,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                               }
                               className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-400 border border-slate-800"
                             >
-                              + Note
+                              + Diagnose Note
                             </button>
                           )}
                         </div>
@@ -1508,7 +1581,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                           type="text"
                           value={audit.note || ''}
                           onChange={e => updateOutcomeAudit(task.id, { note: e.target.value })}
-                          placeholder="Why did this succeed, stall, or shift?"
+                          placeholder="Diagnose why it didn't happen — what did you lack (skill, time, energy, clarity...)?"
                           className="w-full bg-slate-900/70 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-600"
                         />
                       )}
@@ -1517,6 +1590,41 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                 })}
               </div>
             )}
+
+            {(() => {
+              const periodWeeks = isQuarterly ? quarterData?.weeks || [] : yearData?.weeks || [];
+              const macroMissRollup = summarizeMissCauses([
+                ...currentPlan.tasks
+                  .filter(t => !t.completed && t.status !== 'parked')
+                  .map(t => outcomeAudits[t.id]),
+                ...periodWeeks.flatMap(w =>
+                  w.tasks.filter(t => !t.completed).map(t => w.outcomeAudits?.[t.id])
+                ),
+                ...periodDays.flatMap(d =>
+                  getPriorityItemsForEntry(d)
+                    .filter(p => !p.completed)
+                    .map(p => d.priorityAudits?.[p.id])
+                )
+              ]);
+              if (macroMissRollup.length === 0) return null;
+              return (
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-rose-500/20 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-300 block">
+                    Why Plans Slipped Across {periodKey} (Outcome + Weekly + Daily Diagnoses)
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {macroMissRollup.map(item => (
+                      <span
+                        key={item.id}
+                        className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold ${item.badgeCls}`}
+                      >
+                        {item.count}× {item.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             <form
               onSubmit={handleAddOutcomeHere}

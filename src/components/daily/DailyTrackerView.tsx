@@ -24,6 +24,7 @@ import {
   ListChecks
 } from 'lucide-react';
 import { ChecklistItem } from '../../types/schema';
+import { shiftDateString } from '../../lib/energyAnalytics';
 import {
   getChecklistDueStatus,
   getChecklistScheduleLabel,
@@ -61,6 +62,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
 
   const [quickWeekGoalInput, setQuickWeekGoalInput] = useState('');
   const [showChecklistPuller, setShowChecklistPuller] = useState(false);
+  const [pushNotice, setPushNotice] = useState<{ message: string; targetDate: string } | null>(null);
 
   // Resolve the exact calendar week for selectedDate so Daily & Weekly are always synchronized
   const currentWeekRange = getCurrentWeekRange(selectedDate);
@@ -188,6 +190,62 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         mainTasksCompleted: payload.completedCount,
         mainTasksTotal: payload.totalCount
       });
+    } else if (actionName === 'push_daily_priority_next_day' && payload?.item) {
+      const row = payload.item;
+      const cleanText = String(row.text || '').trim();
+      if (!cleanText) return;
+      const nextDate = shiftDateString(selectedDate, 1);
+
+      // 1. Add clean unfinished copy to tomorrow (deduplicated)
+      const nextEntry = getEntryForDate(nextDate);
+      const nextExisting = getPriorityItemsForEntry(nextEntry);
+      const alreadyInNext = nextExisting.some(
+        p =>
+          (row.subTaskId && p.subTaskId === row.subTaskId) ||
+          (row.weeklyTaskId && !row.subTaskId && p.weeklyTaskId === row.weeklyTaskId && !p.subTaskId) ||
+          (row.checklistItemId && p.checklistItemId === row.checklistItemId) ||
+          p.text.trim().toLowerCase() === cleanText.toLowerCase()
+      );
+      if (!alreadyInNext) {
+        const nextItems = [
+          ...nextExisting,
+          {
+            id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            text: cleanText,
+            completed: false,
+            ...(row.weeklyTaskId ? { weeklyTaskId: row.weeklyTaskId } : {}),
+            ...(row.subTaskId ? { subTaskId: row.subTaskId } : {}),
+            ...(row.checklistItemId ? { checklistItemId: row.checklistItemId } : {}),
+            pushedFromDate: selectedDate
+          }
+        ];
+        saveDailyEntry(nextDate, {
+          planNotes: formatPriorityItemsToPlanNotes(nextItems),
+          priorityItems: nextItems,
+          mainTasksCompleted: nextItems.filter(i => i.completed).length,
+          mainTasksTotal: Math.max(3, nextItems.length)
+        });
+      }
+
+      // 2. Keep original item on selectedDate explicitly marked Not Done (completed: false) + stamped pushedToDate
+      const currentItems = getPriorityItemsForEntry(currentEntry);
+      const updatedToday = currentItems.map(item =>
+        item.id === row.id || item.text.trim().toLowerCase() === cleanText.toLowerCase()
+          ? { ...item, completed: false, pushedToDate: nextDate }
+          : item
+      );
+      saveDailyEntry(selectedDate, {
+        planNotes: formatPriorityItemsToPlanNotes(updatedToday),
+        priorityItems: updatedToday,
+        mainTasksCompleted: updatedToday.filter(i => i.completed).length,
+        mainTasksTotal: Math.max(3, updatedToday.length)
+      });
+
+      setPushNotice({
+        message: `Pushed "${cleanText.slice(0, 32)}${cleanText.length > 32 ? '…' : ''}" → ${nextDate} (kept Not Done on ${selectedDate} for Daily Review)`,
+        targetDate: nextDate
+      });
+      setTimeout(() => setPushNotice(null), 3800);
     }
   };
 
@@ -573,6 +631,31 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         onCarryAllPrevUnfinished={handleCarryAllPrevUnfinished}
         onPullAllScheduledDue={handlePullAllScheduledDue}
       />
+
+      {/* Push-to-Next-Day confirmation banner */}
+      {pushNotice && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/35 text-xs font-bold text-rose-200 shadow-lg">
+          <span>→ {pushNotice.message}</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('review');
+              }}
+              className="underline text-amber-300 hover:text-amber-200"
+            >
+              Diagnose in Review
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedDate(pushNotice.targetDate)}
+              className="underline text-rose-200 hover:text-white"
+            >
+              Open {pushNotice.targetDate.slice(5)} →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
       {dailyTemplate && (

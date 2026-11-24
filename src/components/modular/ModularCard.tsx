@@ -11,7 +11,8 @@ import {
   Award, 
   Clock,
   Plus,
-  Trash2
+  Trash2,
+  ArrowRight
 } from 'lucide-react';
 
 interface PriorityRow {
@@ -20,6 +21,9 @@ interface PriorityRow {
   completed: boolean;
   weeklyTaskId?: string;
   subTaskId?: string;
+  checklistItemId?: string;
+  pushedToDate?: string;
+  pushedFromDate?: string;
 }
 
 const parsePriorityValueToNonEmptyRows = (rawVal: any): PriorityRow[] => {
@@ -36,7 +40,10 @@ const parsePriorityValueToNonEmptyRows = (rawVal: any): PriorityRow[] => {
           text: item.text,
           completed: !!item.completed,
           weeklyTaskId: item.weeklyTaskId,
-          subTaskId: item.subTaskId
+          subTaskId: item.subTaskId,
+          checklistItemId: item.checklistItemId,
+          pushedToDate: item.pushedToDate,
+          pushedFromDate: item.pushedFromDate
         });
       }
     });
@@ -74,7 +81,10 @@ const padPriorityRows = (nonEmptyRows: PriorityRow[], minSlots = 3): PriorityRow
 const getPriorityCanonicalSig = (rows: PriorityRow[]): string =>
   rows
     .filter(r => r.text.trim().length > 0)
-    .map(r => `${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}`)
+    .map(
+      r =>
+        `${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}|${r.checklistItemId || ''}|${r.pushedToDate || ''}|${r.pushedFromDate || ''}`
+    )
     .join('\n');
 
 interface ModularCardProps {
@@ -362,7 +372,12 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         const handleToggleItem = (index: number) => {
           const target = displayRows[index];
           if (!target || !target.text.trim()) return;
-          const updatedRow = { ...target, completed: !target.completed };
+          const nextDone = !target.completed;
+          const updatedRow: PriorityRow = {
+            ...target,
+            completed: nextDone,
+            ...(nextDone ? { pushedToDate: undefined } : {})
+          };
           const next = displayRows.map((r, i) => (i === index ? updatedRow : r));
           localPriorityRowsRef.current = next;
           setLocalPriorityRows(next);
@@ -449,6 +464,39 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                   >
                     🎯 Week Link
                   </span>
+                )}
+
+                {row.pushedFromDate && !row.completed && row.text.trim().length > 0 && (
+                  <span
+                    className="hidden md:inline-flex items-center px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 shrink-0"
+                    title={`Pushed forward from ${row.pushedFromDate}`}
+                  >
+                    From {row.pushedFromDate.slice(5)}
+                  </span>
+                )}
+
+                {/* Push to Next Day button / Not Done Pushed Badge */}
+                {row.text.trim().length > 0 && !row.completed && (
+                  row.pushedToDate ? (
+                    <span
+                      className="inline-flex items-center space-x-1 px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold shrink-0"
+                      title={`Marked Not Done today & pushed to ${row.pushedToDate}. Diagnose why in Daily Review.`}
+                    >
+                      <span>Not Done · → {row.pushedToDate.slice(5)}</span>
+                    </span>
+                  ) : (
+                    onAction && (
+                      <button
+                        type="button"
+                        onClick={() => onAction('push_daily_priority_next_day', { item: row, index: idx })}
+                        className="inline-flex items-center space-x-1 px-2 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[10px] sm:text-[11px] font-bold transition-colors shrink-0"
+                        title="Push to tomorrow & keep marked Not Done today so you can diagnose why in Daily Review"
+                      >
+                        <span>Next Day</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    )
+                  )
                 )}
 
                 {/* Quick check button on right side when filled */}

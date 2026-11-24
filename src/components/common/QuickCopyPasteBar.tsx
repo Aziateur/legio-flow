@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Copy, Check, ArrowDownToLine, Sparkles, Send } from 'lucide-react';
 import { DailyEntry, GWSSession } from '../../types/schema';
-import { useStorage } from '../../context/StorageContext';
+import { useStorage, getPriorityItemsForEntry } from '../../context/StorageContext';
+import { getMissCauseMeta } from '../../lib/energyAnalytics';
 import { formatProblemsForReviewText, problemOccurredOnDate } from '../../lib/problems';
 
 interface QuickCopyPasteBarProps {
@@ -46,6 +47,25 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
     text += `Main Tasks Completed: ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
     text += `Execution Score: ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
     text += `Automatic Habits: ${currentEntry.automaticTasksCompleted ? 'Yes' : 'No'}\n`;
+
+    const dayPrios = getPriorityItemsForEntry(currentEntry);
+    if (dayPrios.length > 0) {
+      text += `\nPlanned Priorities:\n`;
+      dayPrios.forEach((p, idx) => {
+        const audit = currentEntry.priorityAudits?.[p.id];
+        const causeMeta = getMissCauseMeta(audit?.rootCause);
+        const statusTag = p.completed
+          ? '[DONE]'
+          : p.pushedToDate
+          ? `[NOT DONE · Pushed → ${p.pushedToDate}]`
+          : '[NOT DONE]';
+        const diagSuffix =
+          !p.completed && (causeMeta || audit?.note?.trim())
+            ? ` — Why: ${causeMeta ? causeMeta.label : ''}${causeMeta && audit?.note?.trim() ? ': ' : ''}${audit?.note?.trim() || ''}`
+            : '';
+        text += `${idx + 1}. ${statusTag} ${p.text}${diagSuffix}\n`;
+      });
+    }
 
     if (todaySessions.length > 0) {
       text += `\nGWS Deep Work (${todaySessions.length}):\n`;

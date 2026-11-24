@@ -270,6 +270,42 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     });
   };
 
+  const nextMonthKey = shiftMonthKey(selectedMonthKey, 1);
+
+  const handlePushMonthlyGoalToNextMonth = (task: TaskItem) => {
+    const nextMonth = getMonthlyPlan(nextMonthKey);
+    const alreadyInNext = nextMonth.tasks.some(
+      t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
+    );
+    if (!alreadyInNext) {
+      const pushedCopy: TaskItem = {
+        id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: task.text.trim(),
+        completed: false,
+        pushedFromPeriod: selectedMonthKey,
+        ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
+        ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
+        ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
+        ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+        ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+        ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+      };
+      saveMonthlyPlan({
+        ...nextMonth,
+        tasks: [...nextMonth.tasks, pushedCopy]
+      });
+    }
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: activeMonthPlan.tasks.map(t =>
+        t.id === task.id ? { ...t, completed: false, pushedToPeriod: nextMonthKey } : t
+      )
+    });
+    setHierarchyNotice(`Pushed to ${nextMonthKey} (kept Not Done in ${selectedMonthKey} for review)`);
+    setTimeout(() => setHierarchyNotice(null), 2800);
+  };
+
   const handleSpawnWeeklyStepFromMonth = (
     parentTask: TaskItem,
     weekId: string,
@@ -343,6 +379,36 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       ...activeYearPlan,
       tasks: activeYearPlan.tasks.filter(t => t.id !== id)
     });
+  };
+
+  const nextYearKey = String((parseInt(selectedYearKey, 10) || 2026) + 1);
+
+  const handlePushYearlyGoalToNextYear = (task: TaskItem) => {
+    const nextYear = getYearlyPlan(nextYearKey);
+    const alreadyInNext = nextYear.tasks.some(
+      t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
+    );
+    if (!alreadyInNext) {
+      const pushedCopy: TaskItem = {
+        id: `ygoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: task.text.trim(),
+        completed: false,
+        pushedFromPeriod: selectedYearKey,
+        ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {})
+      };
+      saveYearlyPlan({
+        ...nextYear,
+        tasks: [...nextYear.tasks, pushedCopy]
+      });
+    }
+    saveYearlyPlan({
+      ...activeYearPlan,
+      tasks: activeYearPlan.tasks.map(t =>
+        t.id === task.id ? { ...t, completed: false, pushedToPeriod: nextYearKey } : t
+      )
+    });
+    setHierarchyNotice(`Pushed to ${nextYearKey} (kept Not Done in ${selectedYearKey} for review)`);
+    setTimeout(() => setHierarchyNotice(null), 2800);
   };
 
   const handleSpawnQuarterlyStepFromYear = (
@@ -988,11 +1054,16 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                           setPlanningSubTab('weekly');
                         }}
                         onToggleComplete={() =>
-                          handleUpdateMonthlyGoal(task.id, { completed: !task.completed })
+                          handleUpdateMonthlyGoal(task.id, {
+                            completed: !task.completed,
+                            ...(!task.completed ? { pushedToPeriod: undefined } : {})
+                          })
                         }
                         onEditText={text => handleUpdateMonthlyGoal(task.id, { text })}
                         onUpdateFields={patch => handleUpdateMonthlyGoal(task.id, patch)}
                         onDelete={() => handleDeleteMonthlyGoal(task.id)}
+                        nextPeriodLabel={nextMonthKey}
+                        onPushToNextPeriod={() => handlePushMonthlyGoalToNextMonth(task)}
                       />
                     );
                   })}
@@ -1294,11 +1365,16 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                           setPlanningSubTab('quarterly');
                         }}
                         onToggleComplete={() =>
-                          handleUpdateYearlyGoal(task.id, { completed: !task.completed })
+                          handleUpdateYearlyGoal(task.id, {
+                            completed: !task.completed,
+                            ...(!task.completed ? { pushedToPeriod: undefined } : {})
+                          })
                         }
                         onEditText={text => handleUpdateYearlyGoal(task.id, { text })}
                         onUpdateFields={patch => handleUpdateYearlyGoal(task.id, patch)}
                         onDelete={() => handleDeleteYearlyGoal(task.id)}
+                        nextPeriodLabel={nextYearKey}
+                        onPushToNextPeriod={() => handlePushYearlyGoalToNextYear(task)}
                       />
                     );
                   })}

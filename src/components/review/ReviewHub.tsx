@@ -3,6 +3,7 @@ import {
   useStorage,
   ReviewSubTab,
   getCurrentWeekRange,
+  getEffectiveEpochMonday,
   getWeekRangeForWeekNumber,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
@@ -14,8 +15,10 @@ import {
   WeeklyPlan,
   ReviewEntry,
   ProblemCategory,
+  OutcomeAuditEntry,
   OutcomeRootCause,
-  PromiseVerdict
+  PromiseVerdict,
+  TaskItem
 } from '../../types/schema';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { GwsAllocationCard } from '../common/GwsAllocationCard';
@@ -35,10 +38,14 @@ import {
 import { computeGwsAllocationInRange } from '../../lib/macroAnalytics';
 import {
   ALIGNMENT_VERDICTS,
+  MISS_CAUSE_OPTIONS,
   alignmentVerdictToScore,
   collectLowScoreWarnings,
   computePeriodAlignmentSummary,
-  computePeriodEnergySummary
+  computePeriodEnergySummary,
+  getMissCauseMeta,
+  shiftDateString,
+  summarizeMissCauses
 } from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
@@ -74,7 +81,8 @@ import {
   Plus, 
   X, 
   FilePlus,
-  Compass
+  Compass,
+  ArrowRight
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -2321,56 +2329,212 @@ export const ReviewHub: React.FC = () => {
                 );
               })()}
 
-              {/* Interactive Day Plan Recap */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                    What Was Planned for {selectedDate}
-                  </span>
-                  <span className="text-xs font-mono font-bold text-slate-300">
-                    {currentDailyEntry.mainTasksCompleted} / {currentDailyEntry.mainTasksTotal} Done
-                  </span>
-                </div>
+              {/* Interactive Day Plan Recap + Not-Done Push & Miss Diagnosis */}
+              {(() => {
+                const dayPrios = getPriorityItemsForEntry(currentDailyEntry);
+                const notDoneCount = dayPrios.filter(p => !p.completed).length;
+                const nextDateStr = shiftDateString(selectedDate, 1);
 
-                {getPriorityItemsForEntry(currentDailyEntry).length > 0 ? (
-                  <div className="space-y-2">
-                    {getPriorityItemsForEntry(currentDailyEntry).map((prio, idx) => (
-                      <button
-                        key={prio.id || idx}
-                        type="button"
-                        onClick={() => {
-                          const updatedItems = getPriorityItemsForEntry(currentDailyEntry).map((item, i) =>
-                            i === idx ? { ...item, completed: !item.completed } : item
-                          );
-                          saveDailyEntry(selectedDate, {
-                            planNotes: formatPriorityItemsToPlanNotes(updatedItems),
-                            priorityItems: updatedItems,
-                            mainTasksCompleted: updatedItems.filter(i => i.completed).length,
-                            mainTasksTotal: Math.max(3, updatedItems.length)
-                          });
-                        }}
-                        className={`w-full flex items-center space-x-2.5 p-2.5 rounded-xl border text-left text-xs transition-all ${
-                          prio.completed
-                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                            : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-slate-700'
-                        }`}
-                      >
-                        {prio.completed ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        ) : (
-                          <Circle className="w-4 h-4 text-slate-500 shrink-0" />
+                const handleUpdateDailyPrioAudit = (
+                  prioId: string,
+                  patch: Partial<OutcomeAuditEntry>
+                ) => {
+                  const prevAudits = currentDailyEntry.priorityAudits || {};
+                  saveDailyEntry(selectedDate, {
+                    priorityAudits: {
+                      ...prevAudits,
+                      [prioId]: { ...(prevAudits[prioId] || {}), ...patch }
+                    }
+                  });
+                };
+
+                const handlePushDailyPrioFromReview = (prio: typeof dayPrios[number]) => {
+                  const cleanText = prio.text.trim();
+                  if (!cleanText) return;
+                  const nextEntry = getEntryForDate(nextDateStr);
+                  const nextExisting = getPriorityItemsForEntry(nextEntry);
+                  const alreadyInNext = nextExisting.some(
+                    p =>
+                      (prio.subTaskId && p.subTaskId === prio.subTaskId) ||
+                      (prio.weeklyTaskId && !prio.subTaskId && p.weeklyTaskId === prio.weeklyTaskId && !p.subTaskId) ||
+                      (prio.checklistItemId && p.checklistItemId === prio.checklistItemId) ||
+                      p.text.trim().toLowerCase() === cleanText.toLowerCase()
+                  );
+                  if (!alreadyInNext) {
+                    const nextItems = [
+                      ...nextExisting,
+                      {
+                        id: `prio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                        text: cleanText,
+                        completed: false,
+                        ...(prio.weeklyTaskId ? { weeklyTaskId: prio.weeklyTaskId } : {}),
+                        ...(prio.subTaskId ? { subTaskId: prio.subTaskId } : {}),
+                        ...(prio.checklistItemId ? { checklistItemId: prio.checklistItemId } : {}),
+                        pushedFromDate: selectedDate
+                      }
+                    ];
+                    saveDailyEntry(nextDateStr, {
+                      planNotes: formatPriorityItemsToPlanNotes(nextItems),
+                      priorityItems: nextItems,
+                      mainTasksCompleted: nextItems.filter(i => i.completed).length,
+                      mainTasksTotal: Math.max(3, nextItems.length)
+                    });
+                  }
+                  const updatedToday = dayPrios.map(item =>
+                    item.id === prio.id
+                      ? { ...item, completed: false, pushedToDate: nextDateStr }
+                      : item
+                  );
+                  saveDailyEntry(selectedDate, {
+                    planNotes: formatPriorityItemsToPlanNotes(updatedToday),
+                    priorityItems: updatedToday,
+                    mainTasksCompleted: updatedToday.filter(i => i.completed).length,
+                    mainTasksTotal: Math.max(3, updatedToday.length)
+                  });
+                };
+
+                return (
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block">
+                          What Was Planned for {selectedDate}
+                        </span>
+                        {notDoneCount > 0 && (
+                          <span className="text-[11px] text-slate-400">
+                            Diagnose every Not Done or pushed item — what did you lack (time, skill, energy...)?
+                          </span>
                         )}
-                        <span className="font-mono font-bold text-amber-400 shrink-0">#{idx + 1}</span>
-                        <span className={prio.completed ? 'line-through text-slate-400' : ''}>{prio.text}</span>
-                      </button>
-                    ))}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {notDoneCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[11px] font-mono font-bold">
+                            {notDoneCount} Not Done
+                          </span>
+                        )}
+                        <span className="text-xs font-mono font-bold text-slate-300">
+                          {currentDailyEntry.mainTasksCompleted} / {currentDailyEntry.mainTasksTotal} Done
+                        </span>
+                      </div>
+                    </div>
+
+                    {dayPrios.length > 0 ? (
+                      <div className="space-y-2.5">
+                        {dayPrios.map((prio, idx) => {
+                          const audit = currentDailyEntry.priorityAudits?.[prio.id] || {};
+                          return (
+                            <div
+                              key={prio.id || idx}
+                              className={`p-3 rounded-2xl border space-y-2 transition-all ${
+                                prio.completed
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                                  : 'bg-slate-950 border-rose-500/25 text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updatedItems = dayPrios.map((item, i) =>
+                                      i === idx
+                                        ? {
+                                            ...item,
+                                            completed: !item.completed,
+                                            ...(!item.completed ? { pushedToDate: undefined } : {})
+                                          }
+                                        : item
+                                    );
+                                    saveDailyEntry(selectedDate, {
+                                      planNotes: formatPriorityItemsToPlanNotes(updatedItems),
+                                      priorityItems: updatedItems,
+                                      mainTasksCompleted: updatedItems.filter(i => i.completed).length,
+                                      mainTasksTotal: Math.max(3, updatedItems.length)
+                                    });
+                                  }}
+                                  className="flex items-center space-x-2.5 text-left text-xs min-w-0 flex-1"
+                                >
+                                  {prio.completed ? (
+                                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                                  ) : (
+                                    <Circle className="w-4 h-4 text-rose-400/80 shrink-0" />
+                                  )}
+                                  <span className="font-mono font-bold text-amber-400 shrink-0">#{idx + 1}</span>
+                                  <span className={prio.completed ? 'line-through text-slate-400' : 'font-medium'}>
+                                    {prio.text}
+                                  </span>
+                                </button>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {!prio.completed && (
+                                    prio.pushedToDate ? (
+                                      <span className="px-2 py-0.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                                        Not Done · → {prio.pushedToDate.slice(5)}
+                                      </span>
+                                    ) : (
+                                      <>
+                                        <span className="px-1.5 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/25 text-[10px] font-bold">
+                                          Not Done
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePushDailyPrioFromReview(prio)}
+                                          className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[10px] font-bold transition-colors"
+                                          title={`Push to ${nextDateStr} & keep marked Not Done today`}
+                                        >
+                                          <span>Next Day</span>
+                                          <ArrowRight className="w-2.5 h-2.5" />
+                                        </button>
+                                      </>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Miss Diagnosis Row for every Not Done task */}
+                              {!prio.completed && (
+                                <div className="pl-6 pt-1.5 border-t border-slate-800/70 flex flex-col sm:flex-row sm:items-center gap-2">
+                                  <select
+                                    value={audit.rootCause || ''}
+                                    onChange={e =>
+                                      handleUpdateDailyPrioAudit(prio.id, {
+                                        rootCause: (e.target.value || undefined) as OutcomeRootCause | undefined
+                                      })
+                                    }
+                                    className={`rounded-lg px-2 py-1 text-[11px] font-bold border focus:outline-none shrink-0 ${
+                                      audit.rootCause
+                                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                                        : 'bg-slate-900 text-rose-300 border-rose-500/30'
+                                    }`}
+                                    title="Why didn't this happen? What did you lack?"
+                                  >
+                                    <option value="">Why didn&apos;t it happen? (Lacked...)</option>
+                                    {MISS_CAUSE_OPTIONS.map(c => (
+                                      <option key={c.id} value={c.id}>
+                                        {c.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    type="text"
+                                    value={audit.note || ''}
+                                    onChange={e => handleUpdateDailyPrioAudit(prio.id, { note: e.target.value })}
+                                    placeholder="What did you lack (skill, time, energy...) or what broke?"
+                                    className="flex-1 min-w-0 bg-slate-900/80 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-mono text-slate-500">
+                        No specific mission priorities logged for this date.
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-mono text-slate-500">
-                    No specific mission priorities logged for this date.
-                  </div>
-                )}
-              </div>
+                );
+              })()}
 
               {/* GWS Sprints Logged Today (Data to Reflect On — LVL 2+) */}
               {caps.gwsStudio && (() => {
@@ -2917,9 +3081,15 @@ export const ReviewHub: React.FC = () => {
           {/* Goal Fulfillment & Unlocked Rewards Summary */}
           {(() => {
             const liveWeekAchieved = computeWeeklyAchievedScore(targetPlanForReview.tasks);
+            const nextWeekNumRev = targetPlanForReview.weekNumber + 1;
+            const nextWeekIdRev = `week_${nextWeekNumRev}`;
+            const notDoneWeekTasks = targetPlanForReview.tasks.filter(t => !t.completed);
+
             const handleToggleWeekGoalInReview = (taskId: string) => {
               const nextTasks = targetPlanForReview.tasks.map(t =>
-                t.id === taskId ? { ...t, completed: !t.completed } : t
+                t.id === taskId
+                  ? { ...t, completed: !t.completed, ...(!t.completed ? { pushedToPeriod: undefined } : {}) }
+                  : t
               );
               saveWeeklyPlan({
                 ...targetPlanForReview,
@@ -2927,23 +3097,116 @@ export const ReviewHub: React.FC = () => {
                 achievedScore: computeWeeklyAchievedScore(nextTasks)
               });
             };
-            const handleSetWeekGoalMissCause = (taskId: string, rootCause?: OutcomeRootCause) => {
+            const handleUpdateWeekGoalAudit = (
+              taskId: string,
+              patch: Partial<OutcomeAuditEntry>
+            ) => {
               const prevAudits = targetPlanForReview.outcomeAudits || {};
               saveWeeklyPlan({
                 ...targetPlanForReview,
                 outcomeAudits: {
                   ...prevAudits,
-                  [taskId]: { ...(prevAudits[taskId] || {}), rootCause }
+                  [taskId]: { ...(prevAudits[taskId] || {}), ...patch }
                 }
               });
             };
+            const handlePushWeekGoalFromReview = (task: TaskItem) => {
+              const cleanText = task.text.trim();
+              if (!cleanText) return;
+              const nextRangeRev = getWeekRangeForWeekNumber(
+                nextWeekNumRev,
+                getEffectiveEpochMonday(weeklyPlans)
+              );
+              const existingNextRev = weeklyPlans[nextWeekIdRev] || {
+                id: nextWeekIdRev,
+                weekNumber: nextWeekNumRev,
+                startDate: nextRangeRev.startDate,
+                endDate: nextRangeRev.endDate,
+                focusTheme: '',
+                notes: '',
+                tasks: [],
+                totalPossibleScore: 10,
+                achievedScore: 0,
+                rewards: targetPlanForReview.rewards.map(r => ({ ...r })),
+                updatedAt: new Date().toISOString()
+              };
+              const alreadyInNext = existingNextRev.tasks.some(
+                nt => nt.text.trim().toLowerCase() === cleanText.toLowerCase()
+              );
+              if (!alreadyInNext) {
+                const unfinishedSubs = (task.subTasks || [])
+                  .filter(s => !s.completed)
+                  .map(s => ({
+                    id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    text: s.text,
+                    completed: false
+                  }));
+                const nextWeekTasks: TaskItem[] = [
+                  ...existingNextRev.tasks,
+                  {
+                    id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    text: cleanText,
+                    score: task.score || 2,
+                    completed: false,
+                    pushedFromPeriod: `W${targetPlanForReview.weekNumber}`,
+                    ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
+                    ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
+                    ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
+                    ...(task.monthlyTaskId ? { monthlyTaskId: task.monthlyTaskId } : {}),
+                    ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
+                    ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+                    ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+                    ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+                    ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
+                    ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+                  }
+                ];
+                saveWeeklyPlan({
+                  ...existingNextRev,
+                  tasks: nextWeekTasks,
+                  achievedScore: computeWeeklyAchievedScore(nextWeekTasks)
+                });
+              }
+              const updatedCurrent = targetPlanForReview.tasks.map(t =>
+                t.id === task.id
+                  ? { ...t, completed: false, pushedToPeriod: `W${nextWeekNumRev}` }
+                  : t
+              );
+              saveWeeklyPlan({
+                ...targetPlanForReview,
+                tasks: updatedCurrent,
+                achievedScore: computeWeeklyAchievedScore(updatedCurrent)
+              });
+            };
+
+            const weekDaysEntries = Object.values(dailyEntries).filter(
+              d => d.date >= targetPlanForReview.startDate && d.date <= targetPlanForReview.endDate
+            );
+            const weekMissRollup = summarizeMissCauses([
+              ...notDoneWeekTasks.map(t => targetPlanForReview.outcomeAudits?.[t.id]),
+              ...weekDaysEntries.flatMap(d =>
+                getPriorityItemsForEntry(d)
+                  .filter(p => !p.completed)
+                  .map(p => d.priorityAudits?.[p.id])
+              )
+            ]);
+
             return (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
             {/* Points Scored */}
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Points Fulfilled</span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
+                    Points Fulfilled
+                  </span>
+                  {notDoneWeekTasks.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 font-mono text-[10px] font-bold">
+                      {notDoneWeekTasks.length} Not Done
+                    </span>
+                  )}
+                </div>
                 <span className="text-2xl font-extrabold text-amber-400 font-mono">
                   {liveWeekAchieved} <span className="text-slate-500 text-sm">/ {targetPlanForReview.totalPossibleScore} pts</span>
                 </span>
@@ -2958,14 +3221,21 @@ export const ReviewHub: React.FC = () => {
                 />
               </div>
 
-              <div className="space-y-2 pt-2">
+              <div className="space-y-2.5 pt-2">
                 {targetPlanForReview.tasks.length === 0 ? (
                   <p className="text-xs text-slate-500">No weekly deliverables logged for this week.</p>
                 ) : (
                   targetPlanForReview.tasks.map((t) => {
-                    const missCause = targetPlanForReview.outcomeAudits?.[t.id]?.rootCause || '';
+                    const audit = targetPlanForReview.outcomeAudits?.[t.id] || {};
                     return (
-                    <div key={t.id} className="space-y-1">
+                    <div
+                      key={t.id}
+                      className={`p-2.5 rounded-2xl border space-y-2 ${
+                        t.completed
+                          ? 'bg-emerald-500/5 border-emerald-500/20'
+                          : 'bg-slate-950/90 border-rose-500/25'
+                      }`}
+                    >
                       <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
                         <button
                           type="button"
@@ -2976,7 +3246,7 @@ export const ReviewHub: React.FC = () => {
                           {t.completed ? (
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           ) : (
-                            <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            <Circle className="w-3.5 h-3.5 text-rose-400/80 shrink-0" />
                           )}
                           <span className={t.completed ? 'line-through text-slate-500' : 'font-medium'}>
                             {t.text}
@@ -2984,27 +3254,64 @@ export const ReviewHub: React.FC = () => {
                         </button>
                         <div className="flex items-center space-x-1.5 shrink-0">
                           {!t.completed && (
-                            <select
-                              value={missCause}
-                              onChange={e =>
-                                handleSetWeekGoalMissCause(
-                                  t.id,
-                                  (e.target.value || undefined) as OutcomeRootCause | undefined
-                                )
-                              }
-                              className="bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 focus:outline-none"
-                              title="Why was this goal missed?"
-                            >
-                              <option value="">Why?</option>
-                              <option value="execution">Execution</option>
-                              <option value="strategy">Strategy</option>
-                              <option value="scope">Scope</option>
-                              <option value="shifted">Shifted</option>
-                            </select>
+                            t.pushedToPeriod ? (
+                              <span className="px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                                Not Done · → {t.pushedToPeriod}
+                              </span>
+                            ) : (
+                              <>
+                                <span className="px-1.5 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/25 text-[10px] font-bold">
+                                  Not Done
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handlePushWeekGoalFromReview(t)}
+                                  className="inline-flex items-center space-x-0.5 px-1.5 py-0.5 rounded-md bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[10px] font-bold transition-colors"
+                                  title={`Push to Week ${nextWeekNumRev} & keep marked Not Done here`}
+                                >
+                                  <span>W{nextWeekNumRev}</span>
+                                  <ArrowRight className="w-2.5 h-2.5" />
+                                </button>
+                              </>
+                            )
                           )}
                           <span className="font-mono text-amber-400">{t.score} pts</span>
                         </div>
                       </div>
+
+                      {!t.completed && (
+                        <div className="pl-5 pt-1.5 border-t border-slate-800/70 flex flex-col sm:flex-row sm:items-center gap-1.5">
+                          <select
+                            value={audit.rootCause || ''}
+                            onChange={e =>
+                              handleUpdateWeekGoalAudit(t.id, {
+                                rootCause: (e.target.value || undefined) as OutcomeRootCause | undefined
+                              })
+                            }
+                            className={`rounded-lg px-2 py-1 text-[10px] font-bold border focus:outline-none shrink-0 ${
+                              audit.rootCause
+                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                                : 'bg-slate-900 text-rose-300 border-rose-500/30'
+                            }`}
+                            title="Why wasn't this done? What did you lack?"
+                          >
+                            <option value="">Why? (Lacked...)</option>
+                            {MISS_CAUSE_OPTIONS.map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={audit.note || ''}
+                            onChange={e => handleUpdateWeekGoalAudit(t.id, { note: e.target.value })}
+                            placeholder="Diagnose what was missing (skill, time, energy...)..."
+                            className="flex-1 min-w-0 bg-slate-900/80 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                          />
+                        </div>
+                      )}
+
                       {t.subTasks && t.subTasks.length > 0 && (
                         <div className="pl-5 space-y-0.5">
                           {t.subTasks.map((sub) => (
@@ -3020,6 +3327,24 @@ export const ReviewHub: React.FC = () => {
                   })
                 )}
               </div>
+
+              {weekMissRollup.length > 0 && (
+                <div className="pt-2.5 border-t border-slate-800/80 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-300 block">
+                    Why Plans Slipped This Week (Weekly + Daily Diagnoses)
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {weekMissRollup.map(item => (
+                      <span
+                        key={item.id}
+                        className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold ${item.badgeCls}`}
+                      >
+                        {item.count}× {item.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Unlocked Reward Tiers */}
@@ -3189,7 +3514,10 @@ export const ReviewHub: React.FC = () => {
             {(() => {
               const nextWeekNum = targetPlanForReview.weekNumber + 1;
               const nextWeekId = `week_${nextWeekNum}`;
-              const nextRange = getWeekRangeForWeekNumber(nextWeekNum);
+              const nextRange = getWeekRangeForWeekNumber(
+                nextWeekNum,
+                getEffectiveEpochMonday(weeklyPlans)
+              );
               const existingNext = weeklyPlans[nextWeekId];
               const nextWeekPlan: WeeklyPlan = existingNext || {
                 id: nextWeekId,
@@ -3220,6 +3548,7 @@ export const ReviewHub: React.FC = () => {
                     text: task.text,
                     score: task.score || 2,
                     completed: false,
+                    pushedFromPeriod: `W${targetPlanForReview.weekNumber}`,
                     ...(task.monthlyTaskId ? { monthlyTaskId: task.monthlyTaskId } : {}),
                     ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
                     ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
@@ -3233,6 +3562,16 @@ export const ReviewHub: React.FC = () => {
                   ...nextWeekPlan,
                   tasks: nextTasks,
                   achievedScore: computeWeeklyAchievedScore(nextTasks)
+                });
+                const updatedOrigin = targetPlanForReview.tasks.map(t =>
+                  t.id === task.id
+                    ? { ...t, completed: false, pushedToPeriod: `W${nextWeekNum}` }
+                    : t
+                );
+                saveWeeklyPlan({
+                  ...targetPlanForReview,
+                  tasks: updatedOrigin,
+                  achievedScore: computeWeeklyAchievedScore(updatedOrigin)
                 });
               };
 
@@ -3349,12 +3688,76 @@ export const ReviewHub: React.FC = () => {
         const monthProblems = mData.saved?.blockers || '';
         const monthCorrections = mData.saved?.courseCorrections || '';
 
+        const monthOutcomeAudits = mData.saved?.outcomeAudits || {};
+        const nextMonthKeyRev = shiftMonthKey(selectedMonth, 1);
+
         const handleToggleMonthlyGoalInReview = (goalId: string) => {
           const updatedTasks = mData.monthGoals.map(g =>
-            g.id === goalId ? { ...g, completed: !g.completed } : g
+            g.id === goalId
+              ? { ...g, completed: !g.completed, ...(!g.completed ? { pushedToPeriod: undefined } : {}) }
+              : g
           );
           saveMonthlyPlan({ ...mData.monthPlan, tasks: updatedTasks });
         };
+
+        const handleUpdateMonthlyGoalAudit = (
+          goalId: string,
+          patch: Partial<OutcomeAuditEntry>
+        ) => {
+          upsertMonthlyReview(selectedMonth, {
+            outcomeAudits: {
+              ...monthOutcomeAudits,
+              [goalId]: { ...(monthOutcomeAudits[goalId] || {}), ...patch }
+            }
+          });
+        };
+
+        const handlePushMonthlyGoalFromReview = (goal: TaskItem) => {
+          const cleanText = goal.text.trim();
+          if (!cleanText) return;
+          const nextMonth = getMonthlyPlan(nextMonthKeyRev);
+          const alreadyInNext = nextMonth.tasks.some(
+            t => t.text.trim().toLowerCase() === cleanText.toLowerCase()
+          );
+          if (!alreadyInNext) {
+            const pushedCopy: TaskItem = {
+              id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              text: cleanText,
+              completed: false,
+              pushedFromPeriod: selectedMonth,
+              ...(goal.kpiTarget ? { kpiTarget: goal.kpiTarget } : {}),
+              ...(goal.parentLinkMode ? { parentLinkMode: goal.parentLinkMode } : {}),
+              ...(goal.quarterlyTaskId ? { quarterlyTaskId: goal.quarterlyTaskId } : {}),
+              ...(goal.yearlyTaskId ? { yearlyTaskId: goal.yearlyTaskId } : {}),
+              ...(goal.strategyPlanId ? { strategyPlanId: goal.strategyPlanId } : {}),
+              ...(goal.strategyStageId ? { strategyStageId: goal.strategyStageId } : {}),
+              ...(goal.sourceLabel ? { sourceLabel: goal.sourceLabel } : {})
+            };
+            saveMonthlyPlan({ ...nextMonth, tasks: [...nextMonth.tasks, pushedCopy] });
+          }
+          saveMonthlyPlan({
+            ...mData.monthPlan,
+            tasks: mData.monthGoals.map(g =>
+              g.id === goal.id
+                ? { ...g, completed: false, pushedToPeriod: nextMonthKeyRev }
+                : g
+            )
+          });
+        };
+
+        const monthMissRollup = summarizeMissCauses([
+          ...mData.monthGoals
+            .filter(g => !g.completed && g.status !== 'parked')
+            .map(g => monthOutcomeAudits[g.id]),
+          ...mData.weeks.flatMap(w =>
+            w.tasks.filter(t => !t.completed).map(t => w.outcomeAudits?.[t.id])
+          ),
+          ...mData.days.flatMap(d =>
+            getPriorityItemsForEntry(d)
+              .filter(p => !p.completed)
+              .map(p => d.priorityAudits?.[p.id])
+          )
+        ]);
 
         const handleUpdateMonthlyGoalKpiActual = (goalId: string, kpiActual: string) => {
           const updatedTasks = mData.monthGoals.map(g =>
@@ -3408,12 +3811,25 @@ export const ReviewHub: React.FC = () => {
           if (mData.monthGoals.length > 0) {
             text += `\nMonthly Deliverables:\n`;
             mData.monthGoals.forEach(g => {
-              const statusTag = g.status === 'parked' ? '[PARKED]' : g.completed ? '[DONE]' : '[OPEN]';
+              const audit = monthOutcomeAudits[g.id];
+              const causeMeta = getMissCauseMeta(audit?.rootCause);
+              const statusTag =
+                g.status === 'parked'
+                  ? '[PARKED]'
+                  : g.completed
+                  ? '[DONE]'
+                  : g.pushedToPeriod
+                  ? `[NOT DONE · Pushed → ${g.pushedToPeriod}]`
+                  : '[NOT DONE]';
               const kpiSuffix =
                 g.kpiTarget?.trim() || g.kpiActual?.trim()
                   ? ` [KPI: ${g.kpiTarget?.trim() || '—'} → ${g.kpiActual?.trim() || '—'}]`
                   : '';
-              text += `  • ${statusTag} ${g.text}${kpiSuffix}\n`;
+              const diagSuffix =
+                !g.completed && g.status !== 'parked' && (causeMeta || audit?.note?.trim())
+                  ? ` — Why: ${causeMeta ? causeMeta.label : ''}${causeMeta && audit?.note?.trim() ? ': ' : ''}${audit?.note?.trim() || ''}`
+                  : '';
+              text += `  • ${statusTag} ${g.text}${kpiSuffix}${diagSuffix}\n`;
             });
           }
 
@@ -3725,10 +4141,13 @@ export const ReviewHub: React.FC = () => {
                   No Monthly goals logged for {mData.info.label} yet. Add them in Planning Hub → Monthly Plan.
                 </div>
               ) : (
+                <div className="space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   {mData.monthGoals.map(goal => {
                     const isParked = goal.status === 'parked';
                     const hasKpi = Boolean(goal.kpiTarget?.trim() || goal.kpiActual?.trim());
+                    const audit = monthOutcomeAudits[goal.id] || {};
+                    const isNotDone = !goal.completed && !isParked;
                     return (
                       <div
                         key={goal.id}
@@ -3737,30 +4156,57 @@ export const ReviewHub: React.FC = () => {
                             ? 'bg-slate-950/60 border-slate-800/70 text-slate-400 opacity-75'
                             : goal.completed
                             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
-                            : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-purple-500/40'
+                            : 'bg-slate-950 border-rose-500/25 text-slate-200 hover:border-purple-500/40'
                         }`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleToggleMonthlyGoalInReview(goal.id)}
-                          className="w-full flex items-start space-x-2.5 text-left"
-                        >
-                          {goal.completed ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                          ) : (
-                            <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                          )}
-                          <span className="flex-1 flex flex-wrap items-center gap-1.5">
-                            <span className={goal.completed ? 'line-through text-slate-400' : ''}>
-                              {goal.text}
-                            </span>
-                            {isParked && (
-                              <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase tracking-wider">
-                                Parked
-                              </span>
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMonthlyGoalInReview(goal.id)}
+                            className="flex-1 min-w-0 flex items-start space-x-2.5 text-left"
+                          >
+                            {goal.completed ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                            ) : (
+                              <Circle className="w-4 h-4 text-rose-400/80 shrink-0 mt-0.5" />
                             )}
-                          </span>
-                        </button>
+                            <span className="flex-1 flex flex-wrap items-center gap-1.5">
+                              <span className={goal.completed ? 'line-through text-slate-400' : ''}>
+                                {goal.text}
+                              </span>
+                              {isParked && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                                  Parked
+                                </span>
+                              )}
+                            </span>
+                          </button>
+
+                          {isNotDone && (
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {goal.pushedToPeriod ? (
+                                <span className="px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold">
+                                  Not Done · → {goal.pushedToPeriod}
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="px-1.5 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/25 text-[10px] font-bold">
+                                    Not Done
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePushMonthlyGoalFromReview(goal)}
+                                    className="inline-flex items-center space-x-0.5 px-1.5 py-0.5 rounded-md bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[10px] font-bold transition-colors"
+                                    title={`Push to ${nextMonthKeyRev} & keep marked Not Done in ${selectedMonth}`}
+                                  >
+                                    <span>{nextMonthKeyRev}</span>
+                                    <ArrowRight className="w-2.5 h-2.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
 
                         {hasKpi && (
                           <div className="pl-6 flex flex-wrap items-center gap-2 text-[11px]">
@@ -3785,9 +4231,61 @@ export const ReviewHub: React.FC = () => {
                             </label>
                           </div>
                         )}
+
+                        {isNotDone && (
+                          <div className="pl-6 pt-1.5 border-t border-slate-800/70 flex flex-col sm:flex-row sm:items-center gap-1.5">
+                            <select
+                              value={audit.rootCause || ''}
+                              onChange={e =>
+                                handleUpdateMonthlyGoalAudit(goal.id, {
+                                  rootCause: (e.target.value || undefined) as OutcomeRootCause | undefined
+                                })
+                              }
+                              className={`rounded-lg px-2 py-1 text-[10px] font-bold border focus:outline-none shrink-0 ${
+                                audit.rootCause
+                                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                                  : 'bg-slate-900 text-rose-300 border-rose-500/30'
+                              }`}
+                              title="Why wasn't this monthly goal completed?"
+                            >
+                              <option value="">Why? (Lacked...)</option>
+                              {MISS_CAUSE_OPTIONS.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.label}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="text"
+                              value={audit.note || ''}
+                              onChange={e => handleUpdateMonthlyGoalAudit(goal.id, { note: e.target.value })}
+                              placeholder="What was missing (skill, time, energy...)?"
+                              className="flex-1 min-w-0 bg-slate-900/80 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                            />
+                          </div>
+                        )}
                       </div>
                     );
                   })}
+                </div>
+
+                {monthMissRollup.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-rose-500/20 space-y-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-300 block">
+                      Why Plans Didn&apos;t Happen in {mData.info.label} (Monthly + Weekly + Daily Diagnoses)
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {monthMissRollup.map(item => (
+                        <span
+                          key={item.id}
+                          className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold ${item.badgeCls}`}
+                        >
+                          {item.count}× {item.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 </div>
               )}
 
@@ -3890,14 +4388,28 @@ export const ReviewHub: React.FC = () => {
                               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
                                 Weekly Deliverables ({w.tasks.filter(t => t.completed).length}/{w.tasks.length} Done):
                               </span>
-                              {w.tasks.map(t => (
-                                <div key={t.id} className="text-[11px] flex items-center justify-between text-slate-300">
-                                  <span className={t.completed ? 'line-through text-slate-500' : ''}>
-                                    {t.completed ? '[x]' : '[ ]'} {t.text}
-                                  </span>
-                                  <span className="font-mono text-amber-400">{t.score}pts</span>
-                                </div>
-                              ))}
+                              {w.tasks.map(t => {
+                                const wAudit = w.outcomeAudits?.[t.id];
+                                const wCause = getMissCauseMeta(wAudit?.rootCause);
+                                return (
+                                  <div key={t.id} className="text-[11px] flex items-center justify-between gap-2 text-slate-300">
+                                    <span className={`min-w-0 truncate ${t.completed ? 'line-through text-slate-500' : ''}`}>
+                                      {t.completed ? '[x]' : '[ ]'} {t.text}
+                                      {!t.completed && t.pushedToPeriod && (
+                                        <span className="ml-1.5 text-[10px] font-bold text-rose-300">
+                                          (Not Done · → {t.pushedToPeriod})
+                                        </span>
+                                      )}
+                                      {!t.completed && wCause && (
+                                        <span className="ml-1.5 text-[10px] font-bold text-amber-300">
+                                          [{wCause.shortLabel}]
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span className="font-mono text-amber-400 shrink-0">{t.score}pts</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
 

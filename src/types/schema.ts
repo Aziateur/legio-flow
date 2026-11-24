@@ -76,6 +76,8 @@ export interface TaskItem {
   strategyStageId?: string;
   strategyGoalId?: string;
   sourceLabel?: string;
+  pushedToPeriod?: string; // e.g. 'week_4', '2026-12', '2027-Q1', '2027' (original stays Not Done for review)
+  pushedFromPeriod?: string; // Origin period when pushed forward
 }
 
 export interface ActiveGWSTimer {
@@ -127,6 +129,8 @@ export interface DailyPriorityItem {
   weeklyTaskId?: string;
   subTaskId?: string;
   checklistItemId?: string;
+  pushedToDate?: string; // YYYY-MM-DD when pushed forward (kept Not Done on origin day for honest review)
+  pushedFromDate?: string; // Origin YYYY-MM-DD when carried forward via Push
 }
 
 export type NervousSystemState = 'calm' | 'sharp' | 'wired' | 'foggy' | 'drained';
@@ -157,6 +161,7 @@ export interface DailyEntry {
   energyCheck?: DailyEnergyCheck;
   alignmentVerdict?: AlignmentVerdict;
   alignmentNote?: string;
+  priorityAudits?: Record<string, OutcomeAuditEntry>; // Per-priority miss diagnosis (keyed by DailyPriorityItem.id)
   customFieldValues: Record<string, any>;
   updatedAt: string;
 }
@@ -220,7 +225,16 @@ export interface MacroReviewSettings {
 }
 
 export type OutcomeVerdict = 'hit' | 'partial' | 'missed' | 'dropped';
-export type OutcomeRootCause = 'execution' | 'strategy' | 'scope' | 'shifted';
+export type OutcomeRootCause =
+  | 'time'
+  | 'skill'
+  | 'energy'
+  | 'execution'
+  | 'clarity'
+  | 'scope'
+  | 'strategy'
+  | 'external'
+  | 'shifted';
 export type RoadmapVerdict = 'push_gate' | 'redesign' | 'maintain' | 'pause';
 export type PromiseVerdict = 'executed' | 'partial' | 'repeated';
 

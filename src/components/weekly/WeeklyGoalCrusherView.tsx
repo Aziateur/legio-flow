@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   useStorage,
   getCurrentWeekRange,
+  getEffectiveEpochMonday,
   getWeekRangeForWeekNumber,
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
@@ -28,6 +29,7 @@ import {
   ChevronRight,
   ArrowDownToLine,
   ArrowUpRight,
+  ArrowRight,
   ChevronDown,
   ChevronUp,
   Layers,
@@ -287,7 +289,9 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     const nextCompleted = !targetGoal.completed;
 
     const nextTasks = plan.tasks.map(t =>
-      t.id === id ? { ...t, completed: nextCompleted } : t
+      t.id === id
+        ? { ...t, completed: nextCompleted, ...(nextCompleted ? { pushedToPeriod: undefined } : {}) }
+        : t
     );
     saveWeeklyPlan({
       ...plan,
@@ -459,6 +463,80 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       });
       setNewGoalInput('');
     }
+  };
+
+  const nextWeekNum = plan.weekNumber + 1;
+  const nextWeekId = `week_${nextWeekNum}`;
+
+  const handlePushGoalToNextWeek = (task: TaskItem) => {
+    const cleanText = task.text.trim();
+    if (!cleanText) return;
+    const epochMonday = getEffectiveEpochMonday(weeklyPlans);
+    const nextRange = getWeekRangeForWeekNumber(nextWeekNum, epochMonday);
+    const existingNext = weeklyPlans[nextWeekId] || {
+      id: nextWeekId,
+      weekNumber: nextWeekNum,
+      startDate: nextRange.startDate,
+      endDate: nextRange.endDate,
+      focusTheme: '',
+      notes: '',
+      tasks: [],
+      totalPossibleScore: 10,
+      achievedScore: 0,
+      rewards: [],
+      updatedAt: new Date().toISOString()
+    };
+
+    const alreadyInNext = existingNext.tasks.some(
+      t => t.text.trim().toLowerCase() === cleanText.toLowerCase()
+    );
+    if (!alreadyInNext) {
+      const unfinishedSubs = (task.subTasks || [])
+        .filter(s => !s.completed)
+        .map(s => ({
+          id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          text: s.text,
+          completed: false
+        }));
+      const pushedCopy: TaskItem = {
+        id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        text: cleanText,
+        score: task.score || 2,
+        completed: false,
+        pushedFromPeriod: `W${plan.weekNumber}`,
+        ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
+        ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
+        ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
+        ...(task.monthlyTaskId ? { monthlyTaskId: task.monthlyTaskId } : {}),
+        ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
+        ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+        ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+        ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
+        ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+      };
+      const nextWeekTasks = [...existingNext.tasks, pushedCopy];
+      saveWeeklyPlan({
+        ...existingNext,
+        tasks: nextWeekTasks,
+        achievedScore: computeWeeklyAchievedScore(nextWeekTasks)
+      });
+    }
+
+    // Keep original task in THIS week explicitly marked Not Done (completed: false) + stamped pushedToPeriod
+    const updatedCurrentTasks = plan.tasks.map(t =>
+      t.id === task.id ? { ...t, completed: false, pushedToPeriod: `W${nextWeekNum}` } : t
+    );
+    saveWeeklyPlan({
+      ...plan,
+      tasks: updatedCurrentTasks,
+      achievedScore: computeWeeklyAchievedScore(updatedCurrentTasks)
+    });
+
+    setPulledNotice(
+      `Pushed "${cleanText.slice(0, 30)}${cleanText.length > 30 ? '…' : ''}" → Week ${nextWeekNum} (kept Not Done in W${plan.weekNumber} for review)`
+    );
+    setTimeout(() => setPulledNotice(null), 3200);
   };
 
   // Bridge: "Pull this Goal / Sub-Goal into Selected Day's Plan" with persistent ID linkage
@@ -1448,6 +1526,11 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                         }`}
                       />
                       <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                        {task.pushedFromPeriod && !task.completed && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400">
+                            From {task.pushedFromPeriod}
+                          </span>
+                        )}
                         {weeklyParentOptions.length > 0 ? (
                           <select
                             value={encodeWeeklyParent(task)}
@@ -1479,7 +1562,31 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                   </div>
 
                   {/* Actions & Point Weight */}
-                  <div className="flex items-center space-x-2 shrink-0">
+                  <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+                    {/* Push to Next Week button / Not Done Pushed Badge */}
+                    {!task.completed && (
+                      task.pushedToPeriod ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedWeekId(nextWeekId)}
+                          className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-[10px] sm:text-[11px] font-bold border border-rose-500/35 transition-colors"
+                          title={`Marked Not Done in W${plan.weekNumber} & pushed to ${task.pushedToPeriod}. Click to view W${nextWeekNum}, or diagnose why in Weekly Review.`}
+                        >
+                          <span>Not Done · → {task.pushedToPeriod}</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handlePushGoalToNextWeek(task)}
+                          className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 text-[10px] sm:text-[11px] font-bold border border-slate-800 hover:border-rose-500/35 transition-colors"
+                          title={`Push to Week ${nextWeekNum} & keep marked Not Done in Week ${plan.weekNumber} for Weekly Review diagnosis`}
+                        >
+                          <span>W{nextWeekNum}</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      )
+                    )}
+
                     {/* Bridge button: "Pull to Selected Day" */}
                     {inSelectedDay ? (
                       <span className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-bold border border-emerald-500/30">

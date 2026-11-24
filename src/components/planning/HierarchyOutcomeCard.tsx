@@ -11,7 +11,8 @@ import {
   PlayCircle,
   Plus,
   Trash2,
-  ArrowUpRight
+  ArrowUpRight,
+  ArrowRight
 } from 'lucide-react';
 
 export interface ParentLinkOption {
@@ -41,6 +42,8 @@ interface HierarchyOutcomeCardProps {
   onEditText: (nextText: string) => void;
   onUpdateFields: (patch: Partial<TaskItem>) => void;
   onDelete: () => void;
+  nextPeriodLabel?: string;
+  onPushToNextPeriod?: () => void;
 }
 
 export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
@@ -58,7 +61,9 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
   onToggleComplete,
   onEditText,
   onUpdateFields,
-  onDelete
+  onDelete,
+  nextPeriodLabel,
+  onPushToNextPeriod
 }) => {
   const [showKpiEditor, setShowKpiEditor] = useState(Boolean(task.kpiTarget?.trim()));
   const [showDecompose, setShowDecompose] = useState(false);
@@ -157,9 +162,40 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
               Parked
             </span>
           )}
+          {task.pushedFromPeriod && !task.completed && (
+            <span
+              className="px-2 py-0.5 rounded-md bg-slate-900 text-slate-400 border border-slate-800 text-[10px] font-mono font-bold shrink-0"
+              title={`Pushed forward from ${task.pushedFromPeriod}`}
+            >
+              From {task.pushedFromPeriod}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
+          {!task.completed && !isParked && (
+            task.pushedToPeriod ? (
+              <span
+                className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 text-[10px] font-bold"
+                title={`Marked Not Done here & pushed to ${task.pushedToPeriod}. Diagnose why in Review.`}
+              >
+                <span>Not Done · → {task.pushedToPeriod}</span>
+              </span>
+            ) : (
+              onPushToNextPeriod && (
+                <button
+                  type="button"
+                  onClick={onPushToNextPeriod}
+                  className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/35 text-[11px] font-bold transition-colors"
+                  title={`Push to ${nextPeriodLabel || 'next period'} & keep marked Not Done here for Review diagnosis`}
+                >
+                  <span>{nextPeriodLabel || 'Next'}</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
+              )
+            )
+          )}
+
           <button
             type="button"
             onClick={() => setShowKpiEditor(v => !v)}

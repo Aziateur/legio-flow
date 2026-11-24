@@ -217,6 +217,41 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     });
   };
 
+  const nextQuarterKey = shiftQuarterKey(selectedQuarterKey, 1);
+
+  const handlePushOutcomeToNextQuarter = (task: TaskItem) => {
+    const nextQuarter = getQuarterlyPlan(nextQuarterKey);
+    const alreadyInNext = nextQuarter.tasks.some(
+      t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
+    );
+    if (!alreadyInNext) {
+      const pushedCopy: TaskItem = {
+        id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text: task.text.trim(),
+        completed: false,
+        pushedFromPeriod: selectedQuarterKey,
+        ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
+        ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
+        ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
+        ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
+        ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
+      };
+      saveQuarterlyPlan({
+        ...nextQuarter,
+        tasks: [...nextQuarter.tasks, pushedCopy]
+      });
+    }
+    saveQuarterlyPlan({
+      ...activeQuarterPlan,
+      tasks: activeQuarterPlan.tasks.map(t =>
+        t.id === task.id ? { ...t, completed: false, pushedToPeriod: nextQuarterKey } : t
+      )
+    });
+    setStepNotice(`Pushed to ${nextQuarterKey} (kept Not Done in ${selectedQuarterKey} for review)`);
+    setTimeout(() => setStepNotice(null), 2800);
+  };
+
   const handleSpawnMonthlyStep = (
     parentTask: TaskItem,
     monthKey: string,
@@ -545,11 +580,16 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                     }
                     onJumpToChildPeriod={jumpToMonth}
                     onToggleComplete={() =>
-                      handleUpdateOutcome(task.id, { completed: !task.completed })
+                      handleUpdateOutcome(task.id, {
+                        completed: !task.completed,
+                        ...(!task.completed ? { pushedToPeriod: undefined } : {})
+                      })
                     }
                     onEditText={text => handleUpdateOutcome(task.id, { text })}
                     onUpdateFields={patch => handleUpdateOutcome(task.id, patch)}
                     onDelete={() => handleDeleteOutcome(task.id)}
+                    nextPeriodLabel={nextQuarterKey}
+                    onPushToNextPeriod={() => handlePushOutcomeToNextQuarter(task)}
                   />
                 );
               })}

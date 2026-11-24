@@ -1,4 +1,128 @@
-import { AlignmentVerdict, DailyEntry, NervousSystemState, ParkReasonTag } from '../types/schema';
+import {
+  AlignmentVerdict,
+  DailyEntry,
+  NervousSystemState,
+  OutcomeAuditEntry,
+  OutcomeRootCause,
+  ParkReasonTag
+} from '../types/schema';
+
+export const shiftDateString = (dateStr: string, days: number): string => {
+  const base = new Date(`${dateStr}T12:00:00`);
+  base.setDate(base.getDate() + days);
+  const yyyy = base.getFullYear();
+  const mm = String(base.getMonth() + 1).padStart(2, '0');
+  const dd = String(base.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+export interface MissCauseOption {
+  id: OutcomeRootCause;
+  label: string;
+  shortLabel: string;
+  hint: string;
+  badgeCls: string;
+}
+
+export const MISS_CAUSE_OPTIONS: MissCauseOption[] = [
+  {
+    id: 'time',
+    label: 'Lacked Time',
+    shortLabel: 'Time',
+    hint: 'Not enough free hours or underestimated how long it takes',
+    badgeCls: 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+  },
+  {
+    id: 'skill',
+    label: 'Lacked Skill / Knowledge',
+    shortLabel: 'Skill',
+    hint: 'Hit a capability or knowledge gap — needed practice, info, or prep first',
+    badgeCls: 'bg-purple-500/15 text-purple-300 border-purple-500/35'
+  },
+  {
+    id: 'energy',
+    label: 'Lacked Energy / Recovery',
+    shortLabel: 'Energy',
+    hint: 'Exhausted, poor sleep, or dysregulated nervous system',
+    badgeCls: 'bg-orange-500/15 text-orange-300 border-orange-500/35'
+  },
+  {
+    id: 'execution',
+    label: 'Execution / Avoidance',
+    shortLabel: 'Avoidance',
+    hint: 'Procrastinated, distracted, or resisted starting',
+    badgeCls: 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+  },
+  {
+    id: 'clarity',
+    label: 'Unclear / Too Big',
+    shortLabel: 'Unclear',
+    hint: 'Task was too vague or big — needed a smaller concrete next action',
+    badgeCls: 'bg-sky-500/15 text-sky-300 border-sky-500/35'
+  },
+  {
+    id: 'scope',
+    label: 'Over-Scoped',
+    shortLabel: 'Over-Scoped',
+    hint: 'Crammed too many tasks into this time window',
+    badgeCls: 'bg-amber-500/15 text-amber-200 border-amber-500/30'
+  },
+  {
+    id: 'strategy',
+    label: 'Wrong Approach / Plan',
+    shortLabel: 'Strategy',
+    hint: 'The method, sequence, or assumption itself was flawed',
+    badgeCls: 'bg-violet-500/15 text-violet-300 border-violet-500/35'
+  },
+  {
+    id: 'external',
+    label: 'External Blocker',
+    shortLabel: 'External',
+    hint: 'Waiting on someone else, outage, or unavoidable disruption',
+    badgeCls: 'bg-slate-800 text-slate-300 border-slate-700'
+  },
+  {
+    id: 'shifted',
+    label: 'Priority Shifted',
+    shortLabel: 'Shifted',
+    hint: 'Consciously traded it for higher-leverage work',
+    badgeCls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35'
+  }
+];
+
+export const getMissCauseMeta = (cause?: OutcomeRootCause): MissCauseOption | undefined =>
+  MISS_CAUSE_OPTIONS.find(c => c.id === cause);
+
+export interface MissCauseRollupItem {
+  id: OutcomeRootCause;
+  label: string;
+  shortLabel: string;
+  count: number;
+  badgeCls: string;
+}
+
+export const summarizeMissCauses = (
+  audits: Array<OutcomeAuditEntry | undefined | null>
+): MissCauseRollupItem[] => {
+  const counts = new Map<OutcomeRootCause, number>();
+  audits.forEach(a => {
+    if (a?.rootCause) {
+      counts.set(a.rootCause, (counts.get(a.rootCause) || 0) + 1);
+    }
+  });
+  return Array.from(counts.entries())
+    .map(([id, count]) => {
+      const meta = getMissCauseMeta(id);
+      return {
+        id,
+        label: meta?.label || id,
+        shortLabel: meta?.shortLabel || id,
+        count,
+        badgeCls: meta?.badgeCls || 'bg-slate-800 text-slate-300 border-slate-700'
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+};
 
 export const ALIGNMENT_VERDICTS: Array<{
   id: AlignmentVerdict;
