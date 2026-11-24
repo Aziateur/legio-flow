@@ -7,7 +7,8 @@ import {
   getPriorityItemsForEntry,
   formatPriorityItemsToPlanNotes,
   computeWeeklyAchievedScore,
-  getActiveDailyChecklistItemsForDate
+  getActiveDailyChecklistItemsForDate,
+  getDailyChecklistStatusForDate
 } from '../../context/StorageContext';
 import {
   WeeklyPlan,
@@ -447,13 +448,43 @@ export const ReviewHub: React.FC = () => {
     saveReview(entry);
   };
 
+  const hasDailyEnergyData = (d: { energyCheck?: any }) =>
+    Boolean(
+      d.energyCheck &&
+        (d.energyCheck.wakeUp ||
+          d.energyCheck.midday ||
+          d.energyCheck.night ||
+          d.energyCheck.nervousSystemScore ||
+          d.energyCheck.nervousSystemState ||
+          d.energyCheck.nervousSystemNote?.trim())
+    );
+
+  const computeLiveHabitStatsForDays = (periodDays: Array<{ date: string }>) => {
+    let locked = 0;
+    let tracked = 0;
+    periodDays.forEach(d => {
+      const st = getDailyChecklistStatusForDate(d.date, checklistItems, dailyEntries, todayDate);
+      if (st.state === 'done') {
+        locked++;
+        tracked++;
+      } else if (st.state === 'missed') {
+        tracked++;
+      }
+    });
+    return {
+      habitDaysLocked: locked,
+      habitRatePct: tracked > 0 ? Math.round((locked / tracked) * 100) : 0
+    };
+  };
+
   const compileMonthData = (monthKey: string) => {
     const info = getMonthInfo(monthKey);
     const saved = getSavedMonthlyReview(monthKey);
     const monthPlan = getMonthlyPlan(monthKey);
     const monthGoals = monthPlan.tasks || [];
-    const completedMonthGoals = monthGoals.filter(g => g.completed).length;
-    const totalMonthGoals = monthGoals.length;
+    const activeMonthGoals = monthGoals.filter(g => g.status !== 'parked');
+    const completedMonthGoals = activeMonthGoals.filter(g => g.completed).length;
+    const totalMonthGoals = activeMonthGoals.length;
 
     // 1. Anchor each week strictly to the single Month containing its Monday startDate (prevents boundary double-counting)
     const weeks = Object.values(weeklyPlans)
@@ -470,15 +501,17 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
+    const scoredWeeks = weeks.filter(w => w.tasks.length > 0);
     const weeklyPointsAchieved = Math.round(
-      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+      scoredWeeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
     ) / 10;
-    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
-    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyPointsPossible = scoredWeeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore =
+      scoredWeeks.length > 0 ? (weeklyPointsAchieved / scoredWeeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
     const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
 
-    // 2. All Daily Entries & Reviews in this month
+    // 2. All Daily Entries & Reviews in this month (including recovery/energy-only check-in days)
     const days = Object.values(dailyEntries)
       .filter(
         d =>
@@ -488,7 +521,8 @@ export const ReviewHub: React.FC = () => {
             (d.planNotes && d.planNotes.trim().length > 0) ||
             (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
             (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
-            d.automaticTasksCompleted)
+            d.automaticTasksCompleted ||
+            hasDailyEnergyData(d))
       )
       .sort((a, b) => b.date.localeCompare(a.date));
 
@@ -499,8 +533,7 @@ export const ReviewHub: React.FC = () => {
         : '0.0';
     const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
     const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
-    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
-    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+    const { habitDaysLocked, habitRatePct } = computeLiveHabitStatsForDays(days);
 
     // 3. All GWS Sprints in this month
     const gws = gwsSessions
@@ -629,15 +662,17 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
+    const scoredWeeks = weeks.filter(w => w.tasks.length > 0);
     const weeklyPointsAchieved = Math.round(
-      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+      scoredWeeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
     ) / 10;
-    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
-    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyPointsPossible = scoredWeeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore =
+      scoredWeeks.length > 0 ? (weeklyPointsAchieved / scoredWeeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
     const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
 
-    // 3. All Daily Entries & Reviews in this Quarter
+    // 3. All Daily Entries & Reviews in this Quarter (including energy-only recovery days)
     const days = Object.values(dailyEntries)
       .filter(
         d =>
@@ -647,7 +682,8 @@ export const ReviewHub: React.FC = () => {
             (d.planNotes && d.planNotes.trim().length > 0) ||
             (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
             (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
-            d.automaticTasksCompleted)
+            d.automaticTasksCompleted ||
+            hasDailyEnergyData(d))
       )
       .sort((a, b) => b.date.localeCompare(a.date));
 
@@ -658,8 +694,7 @@ export const ReviewHub: React.FC = () => {
         : '0.0';
     const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
     const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
-    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
-    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+    const { habitDaysLocked, habitRatePct } = computeLiveHabitStatsForDays(days);
 
     // 4. All GWS Sprints in this Quarter
     const gws = gwsSessions
@@ -774,15 +809,17 @@ export const ReviewHub: React.FC = () => {
       )
       .sort((a, b) => a.weekNumber - b.weekNumber);
 
+    const scoredWeeks = weeks.filter(w => w.tasks.length > 0);
     const weeklyPointsAchieved = Math.round(
-      weeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
+      scoredWeeks.reduce((acc, w) => acc + computeWeeklyAchievedScore(w.tasks), 0) * 10
     ) / 10;
-    const weeklyPointsPossible = weeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
-    const avgWeeklyScore = weeks.length > 0 ? (weeklyPointsAchieved / weeks.length).toFixed(1) : '0.0';
+    const weeklyPointsPossible = scoredWeeks.reduce((acc, w) => acc + (w.totalPossibleScore || 10), 0);
+    const avgWeeklyScore =
+      scoredWeeks.length > 0 ? (weeklyPointsAchieved / scoredWeeks.length).toFixed(1) : '0.0';
     const weeklyTasksDone = weeks.reduce((acc, w) => acc + w.tasks.filter(t => t.completed).length, 0);
     const weeklyTasksTotal = weeks.reduce((acc, w) => acc + w.tasks.length, 0);
 
-    // 4. All Daily Entries & Reviews in this Year
+    // 4. All Daily Entries & Reviews in this Year (including energy-only recovery days)
     const days = Object.values(dailyEntries)
       .filter(
         d =>
@@ -792,7 +829,8 @@ export const ReviewHub: React.FC = () => {
             (d.planNotes && d.planNotes.trim().length > 0) ||
             (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
             (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
-            d.automaticTasksCompleted)
+            d.automaticTasksCompleted ||
+            hasDailyEnergyData(d))
       )
       .sort((a, b) => b.date.localeCompare(a.date));
 
@@ -803,8 +841,7 @@ export const ReviewHub: React.FC = () => {
         : '0.0';
     const dailyTasksDone = days.reduce((acc, d) => acc + (d.mainTasksCompleted || 0), 0);
     const dailyTasksTotal = days.reduce((acc, d) => acc + (d.mainTasksTotal || 0), 0);
-    const habitDaysLocked = days.filter(d => d.automaticTasksCompleted).length;
-    const habitRatePct = days.length > 0 ? Math.round((habitDaysLocked / days.length) * 100) : 0;
+    const { habitDaysLocked, habitRatePct } = computeLiveHabitStatsForDays(days);
 
     // 5. All GWS Sprints in this Year
     const gws = gwsSessions
@@ -816,11 +853,12 @@ export const ReviewHub: React.FC = () => {
     const avgGwsTotal =
       gws.length > 0 ? (gws.reduce((acc, s) => acc + s.ratings.total, 0) / gws.length).toFixed(1) : '0.0';
 
-    // 6. Yearly Plan goals & focus for this Year
+    // 6. Yearly Plan goals & focus for this Year (exclude parked goals consistently with PlanningHub & MacroReviewView)
     const yearPlan = getYearlyPlan(info.yearKey);
     const yearGoals = yearPlan.tasks || [];
-    const completedYearGoals = yearGoals.filter(g => g.completed).length;
-    const totalYearGoals = yearGoals.length;
+    const activeYearGoals = yearGoals.filter(g => g.status !== 'parked');
+    const completedYearGoals = activeYearGoals.filter(g => g.completed).length;
+    const totalYearGoals = activeYearGoals.length;
 
     // Hierarchical 1-level-below rollup: Yearly Plan Goals + Quarterly Reviews first, fallback to unreviewed lower scales
     const rolledUpWins = dedupeLines([
@@ -1277,16 +1315,17 @@ export const ReviewHub: React.FC = () => {
     setTimeout(() => setCopiedReviewId(null), 2000);
   };
 
-  // Create new week helper
+  // Create new week helper (uses exact week number calendar range, not selectedDate)
   const handleCreateNewWeekDirect = (e: React.FormEvent) => {
     e.preventDefault();
-    const newId = `week_${modalNewWeekNum}`;
-    const currentRange = getCurrentWeekRange(selectedDate);
+    const safeWeekNum = Math.max(1, modalNewWeekNum || 1);
+    const newId = `week_${safeWeekNum}`;
+    const targetRange = getWeekRangeForWeekNumber(safeWeekNum);
     const newPlan: WeeklyPlan = {
       id: newId,
-      weekNumber: modalNewWeekNum,
-      startDate: currentRange.startDate,
-      endDate: currentRange.endDate,
+      weekNumber: safeWeekNum,
+      startDate: targetRange.startDate,
+      endDate: targetRange.endDate,
       focusTheme: modalNewWeekFocus.trim(),
       notes: '',
       tasks: [],
@@ -2194,7 +2233,7 @@ export const ReviewHub: React.FC = () => {
                           </span>
                         </div>
                         <span className="text-[11px] text-slate-400 block mt-0.5">
-                          Synced live with Checklist streaks & Weeks Matrix dot
+                          Synced live with Checklist consistency &amp; Weeks Matrix dot
                         </span>
                       </div>
 
@@ -2806,11 +2845,13 @@ export const ReviewHub: React.FC = () => {
                 : null;
             const weekEnergySummary = computePeriodEnergySummary(weekDays);
             const liveWkScore = computeWeeklyAchievedScore(targetPlanForReview.tasks);
+            const isWeekFinished = targetPlanForReview.endDate < todayDate;
             const weekFlags = collectLowScoreWarnings([
               {
                 label: `Week ${targetPlanForReview.weekNumber} Points`,
-                value: targetPlanForReview.tasks.length > 0 && liveWkScore > 0 ? liveWkScore : null,
-                max: targetPlanForReview.totalPossibleScore || 10
+                value: isWeekFinished && targetPlanForReview.tasks.length > 0 ? liveWkScore : null,
+                max: targetPlanForReview.totalPossibleScore || 10,
+                allowZero: isWeekFinished
               },
               { label: 'Daily Discipline Avg', value: avgDaily },
               { label: 'Daily Energy Avg', value: weekEnergySummary.avgEnergy },

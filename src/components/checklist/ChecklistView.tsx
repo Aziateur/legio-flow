@@ -188,8 +188,23 @@ function computeConsistency(
     const curNum = curMatch ? parseInt(curMatch[1], 10) : 1;
     if (earliestWeekNum !== undefined && earliestWeekNum <= curNum) {
       effectiveWindow = Math.min(windowKeys.length, Math.max(1, curNum - earliestWeekNum + 1));
-    } else if (periods.size === 0) {
-      effectiveWindow = 1;
+    } else {
+      const createdDate =
+        item.createdAt && /^\d{4}-\d{2}-\d{2}/.test(item.createdAt) ? item.createdAt.slice(0, 10) : '';
+      const boundDate = createdDate || trackingStartFloor;
+      if (boundDate && boundDate <= selectedDate) {
+        const diffDays = Math.max(
+          0,
+          Math.round(
+            (new Date(`${selectedDate}T12:00:00`).getTime() -
+              new Date(`${boundDate}T12:00:00`).getTime()) /
+              86400000
+          )
+        );
+        effectiveWindow = Math.min(windowKeys.length, Math.max(1, Math.floor(diffDays / 7) + 1));
+      } else {
+        effectiveWindow = 1;
+      }
     }
   } else if (item.recurrence === 'monthly') {
     const earliestMonth = Array.from(periods)

@@ -196,10 +196,13 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
                 onUpdateFields({ status: 'active' });
                 setShowParkReasonEditor(false);
               } else {
-                const todayIso = new Date().toISOString().slice(0, 10);
+                const now = new Date();
+                const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+                  now.getDate()
+                ).padStart(2, '0')}`;
                 onUpdateFields({
                   status: 'parked',
-                  parkedAt: task.parkedAt || todayIso
+                  parkedAt: task.parkedAt || localToday
                 });
                 setShowParkReasonEditor(true);
               }

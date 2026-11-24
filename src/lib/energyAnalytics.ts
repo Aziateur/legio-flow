@@ -244,11 +244,19 @@ export interface LowScoreFlag {
 }
 
 export const collectLowScoreWarnings = (
-  items: Array<{ label: string; value: number | null | undefined; max?: number; hint?: string }>
+  items: Array<{
+    label: string;
+    value: number | null | undefined;
+    max?: number;
+    hint?: string;
+    allowZero?: boolean;
+  }>
 ): LowScoreFlag[] => {
   const flags: LowScoreFlag[] = [];
   items.forEach(item => {
-    if (typeof item.value !== 'number' || Number.isNaN(item.value) || item.value <= 0) return;
+    if (typeof item.value !== 'number' || Number.isNaN(item.value)) return;
+    if (!item.allowZero && item.value <= 0) return;
+    if (item.value < 0) return;
     if (item.value < 6) {
       flags.push({
         label: item.label,

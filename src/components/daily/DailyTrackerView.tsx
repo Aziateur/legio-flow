@@ -64,7 +64,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
 
   // Resolve the exact calendar week for selectedDate so Daily & Weekly are always synchronized
   const currentWeekRange = getCurrentWeekRange(selectedDate);
-  const currentWeekNum = getWeekNumberForDate(selectedDate);
+  const currentWeekNum = getWeekNumberForDate(selectedDate, weeklyPlans['week_1']?.startDate);
   const activeWeeklyPlan =
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
     weeklyPlans[selectedWeekId] || {
