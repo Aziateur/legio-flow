@@ -2,7 +2,16 @@ import { SystemLevel } from '../types/schema';
 
 export type AppMainTab = 'planning' | 'checklist' | 'gws' | 'review' | 'templates' | 'matrix';
 export type AppPlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'roadmaps' | 'matrix';
-export type AppReviewSubTab = 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'problems' | 'vault';
+export type AppReviewSubTab =
+  | 'daily'
+  | 'gws'
+  | 'weekly'
+  | 'monthly'
+  | 'quarterly'
+  | 'yearly'
+  | 'problems'
+  | 'playbook'
+  | 'vault';
 
 export interface LevelCapabilities {
   level: SystemLevel;
@@ -16,6 +25,7 @@ export interface LevelCapabilities {
   gwsReview: boolean;
   repsBoard: boolean;
   problemsInboxLite: boolean;
+  whatWorksPlaybook: boolean;
   // LVL 3 — Weekly System & Root Constraints
   weeklyPlan: boolean;
   weeksMatrix: boolean;
@@ -50,6 +60,7 @@ export const getLevelCapabilities = (level: SystemLevel): LevelCapabilities => (
   gwsReview: level >= 2,
   repsBoard: level >= 2,
   problemsInboxLite: level >= 2,
+  whatWorksPlaybook: level >= 2,
   // LVL 3
   weeklyPlan: level >= 3,
   weeksMatrix: level >= 3,
@@ -82,12 +93,12 @@ export const LEVEL_META: Record<SystemLevel, LevelMeta> = {
   1: {
     name: 'Level 1: Daily Flow',
     shortName: 'Daily Flow',
-    desc: 'Daily mission plan, routine checklist, allowances & daily review'
+    desc: 'Daily mission, consistency habits, allowances & daily energy/nervous system review (also great as Re-Entry / Recovery Mode)'
   },
   2: {
-    name: 'Level 2: Focus & Limits',
-    shortName: 'Focus & Limits',
-    desc: 'Adds GWS deep work cockpit, Reps Board & simple Friction Inbox'
+    name: 'Level 2: Focus & Playbook',
+    shortName: 'Focus & Playbook',
+    desc: 'Adds GWS deep work cockpit, Reps Board, Friction Inbox (Lite) & What Works Playbook'
   },
   3: {
     name: 'Level 3: Weekly & Constraints',
@@ -97,7 +108,7 @@ export const LEVEL_META: Record<SystemLevel, LevelMeta> = {
   4: {
     name: 'Level 4: Macro, Roadmaps & KPIs',
     shortName: 'Macro & Roadmaps',
-    desc: 'Adds Monthly/Quarterly Plans & Reviews, Stage-Gate Roadmaps, Model A links & KPI proofs'
+    desc: 'Adds Monthly/Quarterly Plans & Reviews, Stage-Gate Roadmaps, Model A links, Pivot Memory & KPI proofs'
   },
   5: {
     name: 'Level 5: Yearly Strategy',
@@ -134,6 +145,7 @@ export const coerceReviewSubTabForLevel = (
   const caps = getLevelCapabilities(level);
   if (subTab === 'gws' && !caps.gwsReview) return 'daily';
   if (subTab === 'problems' && !caps.problemsInboxLite) return 'daily';
+  if (subTab === 'playbook' && !caps.whatWorksPlaybook) return 'daily';
   if (subTab === 'weekly' && !caps.weeklyReview) return 'daily';
   if (subTab === 'vault' && !caps.vault) return 'daily';
   if (subTab === 'monthly' && !caps.monthlyReview) return caps.weeklyReview ? 'weekly' : 'daily';

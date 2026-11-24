@@ -33,7 +33,10 @@ import {
   ProblemFixAttempt,
   ProblemSourceType,
   ProblemOccurrence,
-  ProblemDispatchTarget
+  ProblemDispatchTarget,
+  PlaybookEntry,
+  PlaybookKind,
+  DailyEnergyCheck
 } from '../types/schema';
 import {
   daysBetweenDates,
@@ -77,7 +80,7 @@ import {
 
 export type MainTab = 'planning' | 'checklist' | 'matrix' | 'gws' | 'review' | 'templates';
 export type PlanningSubTab = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'roadmaps' | 'matrix';
-export type ReviewSubTab = 'vault' | 'problems' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type ReviewSubTab = 'vault' | 'problems' | 'playbook' | 'daily' | 'gws' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export const getTodayDateString = (): string => {
   const now = new Date();
@@ -513,6 +516,7 @@ interface StorageContextType {
   checklistCategories: ChecklistCategory[];
   checklistItems: ChecklistItem[];
   allowanceItems: AllowanceItem[];
+  playbookItems: PlaybookEntry[];
   todayDate: string;
   selectedDate: string;
   selectedWeekId: string;
@@ -657,10 +661,13 @@ interface StorageContextType {
   saveReview: (review: ReviewEntry) => void;
   deleteReview: (id: string) => void;
 
-  // Checklist & Allowances operations
+  // Checklist, Allowances & What Works Playbook operations
   saveChecklistCategories: (cats: ChecklistCategory[]) => void;
   saveChecklistItems: (items: ChecklistItem[]) => void;
   saveAllowanceItems: (items: AllowanceItem[]) => void;
+  addPlaybookItem: (input: { kind: PlaybookKind; title: string; note?: string; pinned?: boolean; tags?: string[] }) => PlaybookEntry;
+  updatePlaybookItem: (id: string, patch: Partial<PlaybookEntry>) => void;
+  deletePlaybookItem: (id: string) => void;
 
   // Data portability & local recovery safety net
   localSnapshots: LocalRecoverySnapshot[];
@@ -689,6 +696,7 @@ const STORAGE_KEYS = {
   CHECKLIST_CATEGORIES: 'legio_checklist_cats_v1',
   CHECKLIST_ITEMS: 'legio_checklist_items_v1',
   ALLOWANCES: 'legio_allowances_v1',
+  PLAYBOOK: 'legio_playbook_v1',
   SELECTED_DATE: 'legio_selected_date_v1',
   SYSTEM_LEVEL: 'legio_system_level_v3',
   ACTIVE_GWS_TIMER: 'legio_active_gws_timer_v1'
@@ -967,6 +975,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return Array.isArray(raw) ? raw : INITIAL_ALLOWANCE_ITEMS;
   });
 
+  const [playbookItems, setPlaybookItems] = useState<PlaybookEntry[]>(() => {
+    const raw = readStorageSafe<PlaybookEntry[]>(STORAGE_KEYS.PLAYBOOK, []);
+    return Array.isArray(raw) ? raw : [];
+  });
+
   const [todayDate, setTodayDate] = useState<string>(() => getTodayDateString());
 
   // Preserve selectedDate across same-day reloads; jump to real today when a new day starts
@@ -1039,6 +1052,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const checklistCategoriesRef = useRef(checklistCategories);
   const checklistItemsRef = useRef(checklistItems);
   const allowanceItemsRef = useRef(allowanceItems);
+  const playbookItemsRef = useRef(playbookItems);
   const systemLevelRef = useRef(systemLevel);
   const todayDateRef = useRef(todayDate);
   const selectedDateRef = useRef(selectedDate);
@@ -1260,6 +1274,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAllowanceItems(next);
   };
 
+  const commitPlaybookItems = (next: PlaybookEntry[]) => {
+    playbookItemsRef.current = next;
+    writeStorageSafe(STORAGE_KEYS.PLAYBOOK, next);
+    setPlaybookItems(next);
+  };
+
   const commitSystemLevel = (lvl: SystemLevel) => {
     systemLevelRef.current = lvl;
     try {
@@ -1303,6 +1323,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
       allowanceItems: allowanceItemsRef.current,
+      playbookItems: playbookItemsRef.current,
       deletedIds: deletedIdsRef.current,
       systemLevel: systemLevelRef.current,
       clientUpdatedAt
@@ -1343,7 +1364,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             p: st.problems,
             r: st.reviews,
             c: st.checklistItems,
-            al: st.allowanceItems
+            al: st.allowanceItems,
+            pb: st.playbookItems
           });
         if (makeSig(latest.state) === makeSig(payload)) return;
       }
@@ -1745,6 +1767,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             allowanceItemsRef.current = parsed;
             setAllowanceItems(parsed);
           }
+        } else if (e.key === STORAGE_KEYS.PLAYBOOK) {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            playbookItemsRef.current = parsed;
+            setPlaybookItems(parsed);
+          }
         } else if (e.key === STORAGE_KEYS.CHECKLIST_CATEGORIES) {
           const parsed = JSON.parse(e.newValue);
           if (Array.isArray(parsed)) {
@@ -1961,6 +1989,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         p2 === 'quarterly' ||
         p2 === 'yearly' ||
         p2 === 'problems' ||
+        p2 === 'playbook' ||
         p2 === 'vault'
           ? (p2 as ReviewSubTab)
           : lvl >= 3
@@ -3333,6 +3362,44 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
+  const addPlaybookItem = (input: {
+    kind: PlaybookKind;
+    title: string;
+    note?: string;
+    pinned?: boolean;
+    tags?: string[];
+  }): PlaybookEntry => {
+    const nowIso = new Date().toISOString();
+    const item: PlaybookEntry = {
+      id: `pb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      kind: input.kind,
+      title: input.title.trim(),
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...(input.pinned ? { pinned: true } : {}),
+      ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    commitPlaybookItems([item, ...playbookItemsRef.current]);
+    markLocalMutation();
+    return item;
+  };
+
+  const updatePlaybookItem = (id: string, patch: Partial<PlaybookEntry>) => {
+    const nowIso = new Date().toISOString();
+    const next = playbookItemsRef.current.map(item =>
+      item.id === id ? { ...item, ...patch, updatedAt: nowIso } : item
+    );
+    commitPlaybookItems(next);
+    markLocalMutation();
+  };
+
+  const deletePlaybookItem = (id: string) => {
+    recordDeletedIds([id]);
+    commitPlaybookItems(playbookItemsRef.current.filter(item => item.id !== id));
+    markLocalMutation();
+  };
+
   const saveChecklistItems = (items: ChecklistItem[]) => {
     const nextIds = new Set(items.map(i => i.id));
     const removed = checklistItemsRef.current
@@ -3427,6 +3494,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       checklistCategories: checklistCategoriesRef.current,
       checklistItems: checklistItemsRef.current,
       allowanceItems: allowanceItemsRef.current,
+      playbookItems: playbookItemsRef.current,
       deletedIds: deletedIdsRef.current
     };
     return JSON.stringify(data, null, 2);
@@ -3463,7 +3531,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         Array.isArray(src.problems) ||
         Array.isArray(src.reviews) ||
         Array.isArray(src.checklistItems) ||
-        Array.isArray(src.allowanceItems);
+        Array.isArray(src.allowanceItems) ||
+        Array.isArray(src.playbookItems);
 
       if (!hasRecognizedField) return false;
       saveAutoLocalSnapshot('Before JSON import');
@@ -3527,6 +3596,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (Array.isArray(src.checklistCategories)) commitChecklistCategories(src.checklistCategories);
       if (Array.isArray(src.checklistItems)) commitChecklistItems(src.checklistItems);
       if (Array.isArray(src.allowanceItems)) commitAllowanceItems(src.allowanceItems);
+      if (Array.isArray(src.playbookItems)) commitPlaybookItems(src.playbookItems);
       if (src.deletedIds && typeof src.deletedIds === 'object') {
         commitDeletedIds(src.deletedIds);
       }
@@ -3571,6 +3641,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
     commitAllowanceItems(INITIAL_ALLOWANCE_ITEMS);
+    commitPlaybookItems([]);
     commitDeletedIds({});
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
@@ -3620,6 +3691,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
       allowanceItems: [] as AllowanceItem[],
+      playbookItems: [] as PlaybookEntry[],
       systemLevel: 1 as SystemLevel
     };
   };
@@ -3646,6 +3718,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
     commitAllowanceItems(fresh.allowanceItems);
+    commitPlaybookItems(fresh.playbookItems);
     commitSystemLevel(fresh.systemLevel);
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
@@ -3811,6 +3884,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
     if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
     if (Array.isArray(state.allowanceItems)) commitAllowanceItems(state.allowanceItems);
+    if (Array.isArray(state.playbookItems)) commitPlaybookItems(state.playbookItems);
     if (state.deletedIds && typeof state.deletedIds === 'object') {
       commitDeletedIds(state.deletedIds);
     }
@@ -3956,7 +4030,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
           d.executionScore > 0 ||
           d.automaticTasksCompleted ||
-          (d.gwsSessionIds && d.gwsSessionIds.length > 0)
+          (d.gwsSessionIds && d.gwsSessionIds.length > 0) ||
+          (d.energyCheck &&
+            (d.energyCheck.wakeUp ||
+              d.energyCheck.midday ||
+              d.energyCheck.night ||
+              d.energyCheck.nervousSystemScore ||
+              d.energyCheck.nervousSystemState ||
+              d.energyCheck.nervousSystemNote?.trim()))
       );
 
     allDates.forEach(date => {
@@ -4020,11 +4101,27 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ? chosen.problemsEncountered
           : other.problemsEncountered || '';
         const mergedScore = chosen.executionScore > 0 ? chosen.executionScore : other.executionScore || 0;
+        const mergedEnergyCheck: DailyEnergyCheck | undefined =
+          chosen.energyCheck || other.energyCheck
+            ? {
+                wakeUp: chosen.energyCheck?.wakeUp ?? other.energyCheck?.wakeUp,
+                midday: chosen.energyCheck?.midday ?? other.energyCheck?.midday,
+                night: chosen.energyCheck?.night ?? other.energyCheck?.night,
+                nervousSystemScore:
+                  chosen.energyCheck?.nervousSystemScore ?? other.energyCheck?.nervousSystemScore,
+                nervousSystemState:
+                  chosen.energyCheck?.nervousSystemState ?? other.energyCheck?.nervousSystemState,
+                nervousSystemNote: chosen.energyCheck?.nervousSystemNote?.trim()
+                  ? chosen.energyCheck.nervousSystemNote
+                  : other.energyCheck?.nervousSystemNote
+              }
+            : undefined;
 
         if (
           unionGwsIds.length > (c.gwsSessionIds || []).length ||
           mergedPrios.length !== (c.priorityItems || []).length ||
-          mergedReviewNotes !== (c.reviewNotes || '')
+          mergedReviewNotes !== (c.reviewNotes || '') ||
+          JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null)
         ) {
           needsCloudPush = true;
         }
@@ -4036,7 +4133,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           gwsSessionIds: unionGwsIds,
           reviewNotes: mergedReviewNotes,
           problemsEncountered: mergedProblems,
-          executionScore: mergedScore
+          executionScore: mergedScore,
+          ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {})
         });
       }
     });
@@ -4068,6 +4166,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           kpiTarget: pt.kpiTarget?.trim() ? pt.kpiTarget : match.kpiTarget,
           kpiActual: pt.kpiActual?.trim() ? pt.kpiActual : match.kpiActual,
           status: pt.status || match.status,
+          parkedReasonTag: pt.parkedReasonTag || match.parkedReasonTag,
+          parkedReasonNote: pt.parkedReasonNote?.trim() ? pt.parkedReasonNote : match.parkedReasonNote,
+          parkedAt: pt.parkedAt || match.parkedAt,
           parentLinkMode: pt.parentLinkMode || match.parentLinkMode,
           monthlyTaskId: pt.monthlyTaskId || match.monthlyTaskId,
           quarterlyTaskId: pt.quarterlyTaskId || match.quarterlyTaskId,
@@ -4417,7 +4518,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             needsCloudPush = true;
           }
         });
-        return { ...primary, stages: mergedStages };
+        const pivotMap = new Map<string, { id: string; date: string; tag: any; note: string }>();
+        [...(primary.pivotHistory || []), ...(secondary.pivotHistory || [])].forEach(ev => {
+          if (ev?.id && !pivotMap.has(ev.id)) pivotMap.set(ev.id, ev);
+        });
+        const mergedPivotHistory = Array.from(pivotMap.values()).sort((a, b) =>
+          (b.date || '').localeCompare(a.date || '')
+        );
+        return {
+          ...primary,
+          status: primary.status || secondary.status,
+          ...(mergedPivotHistory.length > 0 ? { pivotHistory: mergedPivotHistory } : {}),
+          stages: mergedStages
+        };
       }
     );
 
@@ -4584,6 +4697,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     );
 
+    const mergedPlaybookItems = mergeCollectionById<PlaybookEntry>(
+      local.playbookItems,
+      cloudState?.playbookItems,
+      p => Date.parse(p.updatedAt || p.createdAt || '') || 0
+    );
+
     const mergedLifePillars = mergeCollectionById<LifePillar>(
       local.lifePillars,
       cloudState?.lifePillars,
@@ -4652,6 +4771,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       checklistCategories: mergedChecklistCategories,
       checklistItems: mergedChecklistItems,
       allowanceItems: mergedAllowanceItems,
+      playbookItems: mergedPlaybookItems,
       deletedIds: mergedDeletedIds,
       systemLevel: localIsNewer || !cloudState?.systemLevel ? local.systemLevel : cloudState.systemLevel,
       clientUpdatedAt: new Date(Math.max(localMs, cloudMs, Date.now())).toISOString()
@@ -5020,6 +5140,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             checklistCategories: raw.checklistCategories,
             checklistItems: raw.checklistItems,
             allowanceItems: raw.allowanceItems,
+            playbookItems: raw.playbookItems,
             deletedIds: raw.deletedIds,
             schemaVersion: raw.schemaVersion || 2,
             systemLevel: raw.systemLevel
@@ -5089,6 +5210,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         checklistCategories,
         checklistItems,
         allowanceItems,
+        playbookItems,
         todayDate,
         selectedDate,
         selectedWeekId,
@@ -5158,6 +5280,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saveChecklistCategories,
         saveChecklistItems,
         saveAllowanceItems,
+        addPlaybookItem,
+        updatePlaybookItem,
+        deletePlaybookItem,
         localSnapshots,
         restoreLocalSnapshot,
         exportData,

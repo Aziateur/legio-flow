@@ -56,6 +56,7 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
     getQuarterlyPlan,
     problems,
     problemSettings,
+    playbookItems,
     recordProblemRecurrence,
     setActiveTab,
     setPlanningSubTab,
@@ -63,6 +64,10 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
+  const pinnedPlaybook = useMemo(
+    () => (caps.whatWorksPlaybook ? playbookItems.filter(p => p.pinned) : []),
+    [caps.whatWorksPlaybook, playbookItems]
+  );
 
   const [open, setOpen] = useState<boolean>(() => {
     try {
@@ -109,7 +114,12 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
   const effectiveGwsCommitment = caps.gwsStudio ? latestGwsCommitment : undefined;
   const hasCorrection = Boolean(latestPreviousReview || effectiveGwsCommitment);
   const pullCount = unfinishedFromPrevDay.length + scheduledDueForDay.length;
-  const hasAnyContent = hasCompass || activeGuardrails.length > 0 || hasCorrection || pullCount > 0;
+  const hasAnyContent =
+    hasCompass ||
+    activeGuardrails.length > 0 ||
+    pinnedPlaybook.length > 0 ||
+    hasCorrection ||
+    pullCount > 0;
 
   if (!hasAnyContent) return null;
 
@@ -184,6 +194,21 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
             >
               <Shield className="w-3 h-3" />
               <span>{activeGuardrails.length} Guardrail{activeGuardrails.length === 1 ? '' : 's'}</span>
+            </button>
+          )}
+
+          {pinnedPlaybook.length > 0 && (
+            <button
+              type="button"
+              onClick={() => openSection('compass')}
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                open && section === 'compass'
+                  ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+                  : 'bg-slate-950 text-emerald-300 border-emerald-500/25 hover:border-emerald-500/45'
+              }`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>{pinnedPlaybook.length} What Works</span>
             </button>
           )}
 
@@ -372,6 +397,38 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
                         Next Sprint Focus: &ldquo;{effectiveGwsCommitment.reflexions.improveNext.trim()}&rdquo;
                       </p>
                     )}
+                  </div>
+                )}
+
+                {pinnedPlaybook.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-emerald-500/25 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Pinned What Works ({pinnedPlaybook.length})</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('review');
+                          setReviewSubTab('playbook');
+                        }}
+                        className="text-[10px] font-bold text-emerald-300 hover:text-emerald-200"
+                      >
+                        Playbook →
+                      </button>
+                    </div>
+                    <div className="space-y-1.5">
+                      {pinnedPlaybook.slice(0, 4).map(pb => (
+                        <div key={pb.id} className="text-xs text-slate-200 leading-snug">
+                          <span className="text-emerald-400 font-bold mr-1">★</span>
+                          <span className="font-semibold">{pb.title}</span>
+                          {pb.note?.trim() && (
+                            <span className="text-[11px] text-slate-400"> — {pb.note.trim()}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

@@ -394,16 +394,28 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
 
         return (
           <div className="space-y-2.5">
-            {displayRows.map((row, idx) => (
+            {displayRows.map((row, idx) => {
+              const isMainLever = idx === 0;
+              return (
               <div key={idx} className="flex items-center space-x-2.5 group">
                 {/* Checkable Priority Number Badge */}
                 <button
                   type="button"
                   onClick={() => handleToggleItem(idx)}
-                  title={row.text.trim() ? (row.completed ? 'Mark incomplete' : 'Mark completed (syncs with Daily & Weekly score)') : `Priority ${idx + 1}`}
+                  title={
+                    row.text.trim()
+                      ? row.completed
+                        ? 'Mark incomplete'
+                        : isMainLever
+                        ? 'Priority #1 — Main Lever (finish this before maintenance tasks)'
+                        : 'Mark completed (syncs with Daily & Weekly score)'
+                      : `Priority ${idx + 1}`
+                  }
                   className={`w-8 h-8 rounded-xl font-extrabold font-mono text-xs flex items-center justify-center shrink-0 transition-all ${
                     row.completed
                       ? 'bg-emerald-500 text-slate-950 border border-emerald-400 shadow-sm shadow-emerald-500/20'
+                      : isMainLever
+                      ? 'bg-amber-500 text-slate-950 border border-amber-400 shadow-md shadow-amber-500/25'
                       : 'bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 shadow-sm shadow-amber-500/10'
                   }`}
                 >
@@ -415,10 +427,16 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                   type="text"
                   value={row.text}
                   onChange={(e) => handleItemChange(idx, e.target.value)}
-                  placeholder={`Priority ${idx + 1}...`}
+                  placeholder={
+                    isMainLever
+                      ? 'Priority 1 — Main Lever (the 1 uncomfortable / needle-moving thing)...'
+                      : `Priority ${idx + 1}...`
+                  }
                   className={`flex-1 bg-slate-950/90 border rounded-xl px-3.5 py-2.5 text-xs sm:text-sm placeholder-slate-600 focus:outline-none transition-colors ${
                     row.completed
                       ? 'border-emerald-500/30 text-slate-400 line-through'
+                      : isMainLever
+                      ? 'border-amber-500/45 focus:border-amber-400 text-slate-100 font-semibold'
                       : 'border-slate-800 focus:border-amber-500/60 text-slate-100'
                   }`}
                 />
@@ -460,7 +478,8 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                   </button>
                 )}
               </div>
-            ))}
+              );
+            })}
 
             <div className="pt-1 flex items-center justify-between text-[11px] text-slate-500">
               <span>Tip: Click a number badge or "Mark Done" to auto-update your Daily & Weekly score.</span>

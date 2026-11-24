@@ -22,8 +22,18 @@ import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
+import { WhatWorksPlaybookView } from '../problems/WhatWorksPlaybookView';
 import { MacroReviewView } from './MacroReviewView';
+import {
+  DailyEnergyReportCard,
+  LowScoreFlagsBanner,
+  PeriodEnergySummaryStrip
+} from './EnergyAndWarningsCard';
 import { computeGwsAllocationInRange } from '../../lib/macroAnalytics';
+import {
+  collectLowScoreWarnings,
+  computePeriodEnergySummary
+} from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
   formatProblemsForReviewText,
@@ -1441,7 +1451,8 @@ export const ReviewHub: React.FC = () => {
               </div>
               <div className="text-sm font-extrabold text-slate-100 whitespace-nowrap">
                 {reviewSubTab === 'vault' && 'Review Vault'}
-                {reviewSubTab === 'problems' && 'Problem Log'}
+                {reviewSubTab === 'problems' && (caps.problemsConstraintEngine ? 'Problem Log' : 'Friction Inbox')}
+                {reviewSubTab === 'playbook' && 'What Works Playbook'}
                 {reviewSubTab === 'gws' && 'GWS Review'}
                 {reviewSubTab === 'daily' && 'Daily Review'}
                 {reviewSubTab === 'weekly' && 'Weekly Review'}
@@ -1546,8 +1557,8 @@ export const ReviewHub: React.FC = () => {
               )}
             </div>
 
-            {/* Group 2: Cross-Cutting Ledgers (Problems Inbox LVL 2+ & Vault LVL 3+) */}
-            {(caps.problemsInboxLite || caps.vault) && (
+            {/* Group 2: Cross-Cutting Ledgers (Problems Inbox LVL 2+, What Works LVL 2+, Vault LVL 3+) */}
+            {(caps.problemsInboxLite || caps.whatWorksPlaybook || caps.vault) && (
               <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
                 {caps.problemsInboxLite && (
                   <button
@@ -1564,6 +1575,21 @@ export const ReviewHub: React.FC = () => {
                       {caps.problemsConstraintEngine ? 'Problems' : 'Friction Inbox'}
                       {activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}
                     </span>
+                  </button>
+                )}
+
+                {caps.whatWorksPlaybook && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('playbook')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      reviewSubTab === 'playbook'
+                        ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                        : 'text-slate-300 hover:text-emerald-300 hover:bg-slate-900'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>What Works</span>
                   </button>
                 )}
 
@@ -1625,6 +1651,15 @@ export const ReviewHub: React.FC = () => {
       {reviewSubTab === 'problems' && (
         <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
           <ProblemsLedgerView />
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SUB-TAB 0.6: WHAT WORKS PLAYBOOK (PRINCIPLES, ROUTINES & CATALYSTS)       */}
+      {/* ========================================================================= */}
+      {reviewSubTab === 'playbook' && caps.whatWorksPlaybook && (
+        <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
+          <WhatWorksPlaybookView />
         </div>
       )}
 
@@ -2052,6 +2087,21 @@ export const ReviewHub: React.FC = () => {
                   </div>
                 );
               })()}
+
+              {/* Daily Energy (Wake-Up / Midday / Night) & Nervous System Report */}
+              <DailyEnergyReportCard
+                selectedDate={selectedDate}
+                entry={currentDailyEntry}
+                dailyEntries={dailyEntries}
+                onChangeEnergyCheck={patch =>
+                  saveDailyEntry(selectedDate, {
+                    energyCheck: {
+                      ...(currentDailyEntry.energyCheck || {}),
+                      ...patch
+                    }
+                  })
+                }
+              />
 
               {/* Automatic Habits / Daily Checklist Card (Single Source of Truth) */}
               {(() => {
@@ -2744,6 +2794,42 @@ export const ReviewHub: React.FC = () => {
             );
           })()}
 
+          {/* Weekly Energy/NS Telemetry & Automatic < 6 Score Warning Flags */}
+          {(() => {
+            const weekDays = Object.values(dailyEntries).filter(
+              d => d.date >= targetPlanForReview.startDate && d.date <= targetPlanForReview.endDate
+            );
+            const scoredDays = weekDays.filter(d => d.executionScore > 0);
+            const avgDaily =
+              scoredDays.length > 0
+                ? Math.round((scoredDays.reduce((s, d) => s + d.executionScore, 0) / scoredDays.length) * 10) / 10
+                : null;
+            const weekEnergySummary = computePeriodEnergySummary(weekDays);
+            const liveWkScore = computeWeeklyAchievedScore(targetPlanForReview.tasks);
+            const weekFlags = collectLowScoreWarnings([
+              {
+                label: `Week ${targetPlanForReview.weekNumber} Points`,
+                value: targetPlanForReview.tasks.length > 0 && liveWkScore > 0 ? liveWkScore : null,
+                max: targetPlanForReview.totalPossibleScore || 10
+              },
+              { label: 'Daily Discipline Avg', value: avgDaily },
+              { label: 'Daily Energy Avg', value: weekEnergySummary.avgEnergy },
+              { label: 'Nervous System Avg', value: weekEnergySummary.avgNervousSystem }
+            ]);
+            return (
+              <>
+                <LowScoreFlagsBanner
+                  periodLabel={`Week ${targetPlanForReview.weekNumber}`}
+                  flags={weekFlags}
+                />
+                <PeriodEnergySummaryStrip
+                  summary={weekEnergySummary}
+                  periodLabel={`Week ${targetPlanForReview.weekNumber}`}
+                />
+              </>
+            );
+          })()}
+
           {/* Goal Fulfillment & Unlocked Rewards Summary */}
           {(() => {
             const liveWeekAchieved = computeWeeklyAchievedScore(targetPlanForReview.tasks);
@@ -3202,6 +3288,25 @@ export const ReviewHub: React.FC = () => {
           text += `Daily Execution: ${mData.days.length} days logged • Avg Discipline ${mData.avgDailyScore}/10 • Tasks ${mData.dailyTasksDone}/${mData.dailyTasksTotal} • Habits ${mData.habitRatePct}%\n`;
           text += `GWS Deep Work: ${mData.gwsHours}h across ${mData.gws.length} sprints (Avg ${mData.avgGwsTotal}/15)\n`;
 
+          const mEnergy = computePeriodEnergySummary(mData.days);
+          if (mEnergy.daysLogged > 0) {
+            text += `Energy & Nervous System (${mEnergy.daysLogged}d): Energy ${
+              mEnergy.avgEnergy ?? '—'
+            }/10 (Wake ${mEnergy.avgWakeUp ?? '—'} · Mid ${mEnergy.avgMidday ?? '—'} · Night ${
+              mEnergy.avgNight ?? '—'
+            }) • Nervous System ${mEnergy.avgNervousSystem ?? '—'}/10\n`;
+          }
+          const mFlags = collectLowScoreWarnings([
+            { label: 'Monthly Score', value: monthScore > 0 ? monthScore : null },
+            { label: 'Weekly Avg', value: mData.weeks.length > 0 ? parseFloat(String(mData.avgWeeklyScore)) || null : null },
+            { label: 'Daily Avg', value: mData.days.length > 0 ? parseFloat(String(mData.avgDailyScore)) || null : null },
+            { label: 'Energy Avg', value: mEnergy.avgEnergy },
+            { label: 'Nervous System Avg', value: mEnergy.avgNervousSystem }
+          ]);
+          if (mFlags.length > 0) {
+            text += `⚠ FLAGGED BELOW 6: ${mFlags.map(f => `${f.label} ${f.value}/${f.max}`).join(' · ')}\n`;
+          }
+
           if (mData.monthGoals.length > 0) {
             text += `\nMonthly Deliverables:\n`;
             mData.monthGoals.forEach(g => {
@@ -3342,6 +3447,26 @@ export const ReviewHub: React.FC = () => {
                 />
               </div>
             )}
+
+            {/* Monthly Energy/NS Telemetry & Automatic < 6 Score Warning Flags */}
+            {(() => {
+              const monthEnergySummary = computePeriodEnergySummary(mData.days);
+              const avgWkNum = parseFloat(String(mData.avgWeeklyScore)) || 0;
+              const avgDayNum = parseFloat(String(mData.avgDailyScore)) || 0;
+              const monthFlags = collectLowScoreWarnings([
+                { label: 'Monthly Score', value: monthScore > 0 ? monthScore : null },
+                { label: 'Weekly Avg', value: mData.weeks.length > 0 && avgWkNum > 0 ? avgWkNum : null },
+                { label: 'Daily Discipline Avg', value: mData.days.length > 0 && avgDayNum > 0 ? avgDayNum : null },
+                { label: 'Daily Energy Avg', value: monthEnergySummary.avgEnergy },
+                { label: 'Nervous System Avg', value: monthEnergySummary.avgNervousSystem }
+              ]);
+              return (
+                <>
+                  <LowScoreFlagsBanner periodLabel={mData.info.label} flags={monthFlags} />
+                  <PeriodEnergySummaryStrip summary={monthEnergySummary} periodLabel={mData.info.label} />
+                </>
+              );
+            })()}
 
             {/* Top 4 Aggregated Telemetry Cards from Smaller Scales */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

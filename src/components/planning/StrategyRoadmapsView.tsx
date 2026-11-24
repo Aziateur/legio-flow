@@ -4,9 +4,10 @@ import {
   findBestWeeklyPlanForDate,
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
-import { StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
+import { ParkReasonTag, StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
 import { getRoadmapStageBindings } from '../../lib/planHierarchy';
+import { PARK_REASON_META } from '../../lib/energyAnalytics';
 import { daysBetweenDates, normalizeTag } from '../../lib/problems';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
@@ -119,6 +120,10 @@ export const StrategyRoadmapsView: React.FC = () => {
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [pullTargetWeekId, setPullTargetWeekId] = useState<string>('');
   const [pullNotice, setPullNotice] = useState<string | null>(null);
+  const [showPivotDrawer, setShowPivotDrawer] = useState(false);
+  const [pivotTag, setPivotTag] = useState<ParkReasonTag>('reality_shift');
+  const [pivotNote, setPivotNote] = useState('');
+  const [pivotPauseStatus, setPivotPauseStatus] = useState(false);
 
   useEffect(() => {
     if (strategyPlans.length === 0) {
@@ -681,6 +686,23 @@ export const StrategyRoadmapsView: React.FC = () => {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        setPivotPauseStatus(activePlan.status === 'paused');
+                        setShowPivotDrawer(v => !v);
+                      }}
+                      className={`px-3 py-2 rounded-xl border text-xs font-bold transition-colors ${
+                        activePlan.status === 'paused'
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : showPivotDrawer
+                          ? 'bg-slate-800 text-amber-300 border-amber-500/40'
+                          : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                      }`}
+                      title="Log a strategy pivot or pause with a 1-line reason so you never forget why you changed direction"
+                    >
+                      {activePlan.status === 'paused' ? 'Paused · Pivot Log' : 'Log Pivot / Pause'}
+                    </button>
+                    <button
+                      type="button"
                       onClick={toggleCollapseAll}
                       className="px-3 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-bold transition-colors"
                     >
@@ -696,6 +718,101 @@ export const StrategyRoadmapsView: React.FC = () => {
                     </button>
                   </div>
                 </div>
+
+                {/* Pivot / Pause Memory Drawer + Recent Pivot History */}
+                {showPivotDrawer && (
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-2.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+                        Pivot / Pause Memory (Why did direction change?)
+                      </span>
+                      <label className="inline-flex items-center space-x-1.5 text-[11px] text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={pivotPauseStatus}
+                          onChange={e => setPivotPauseStatus(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-900 text-amber-500"
+                        />
+                        <span>Mark Roadmap Paused</span>
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(['reality_shift', 'disproved', 'deferred'] as ParkReasonTag[]).map(tag => {
+                        const meta = PARK_REASON_META[tag];
+                        return (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => setPivotTag(tag)}
+                            title={meta.hint}
+                            className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors ${
+                              pivotTag === tag
+                                ? meta.activeCls
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                            }`}
+                          >
+                            {meta.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        value={pivotNote}
+                        onChange={e => setPivotNote(e.target.value)}
+                        placeholder="1-line memory for future-you (e.g. 'Shifted from agency to SaaS after 3 client churns')..."
+                        className="flex-1 min-w-[220px] bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const entry = pivotNote.trim()
+                            ? {
+                                id: `piv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                                date: todayDate,
+                                tag: pivotTag,
+                                note: pivotNote.trim()
+                              }
+                            : null;
+                          saveStrategyPlan({
+                            ...activePlan,
+                            status: pivotPauseStatus ? 'paused' : 'active',
+                            pivotHistory: entry
+                              ? [entry, ...(activePlan.pivotHistory || [])]
+                              : activePlan.pivotHistory,
+                            updatedAt: new Date().toISOString()
+                          });
+                          setPivotNote('');
+                          setShowPivotDrawer(false);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {(activePlan.pivotHistory || []).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] pt-1">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                      Pivot Memory:
+                    </span>
+                    {(activePlan.pivotHistory || []).slice(0, 3).map(ev => (
+                      <span
+                        key={ev.id}
+                        className={`inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-xl border ${
+                          PARK_REASON_META[ev.tag]?.badgeCls || 'bg-slate-950 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        <span className="font-mono text-[10px] opacity-80">{ev.date}</span>
+                        <span className="font-bold">{PARK_REASON_META[ev.tag]?.shortLabel}:</span>
+                        <span className="truncate max-w-[260px]">{ev.note}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 {/* Linear Written Stage Jump Strip */}
                 {pullNotice && (

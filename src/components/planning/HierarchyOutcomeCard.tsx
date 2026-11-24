@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { TaskItem } from '../../types/schema';
+import { ParkReasonTag, TaskItem } from '../../types/schema';
 import { LinkedChildStep } from '../../lib/planHierarchy';
+import { PARK_REASON_META } from '../../lib/energyAnalytics';
 import {
   CheckCircle2,
   Circle,
@@ -61,6 +62,7 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
 }) => {
   const [showKpiEditor, setShowKpiEditor] = useState(Boolean(task.kpiTarget?.trim()));
   const [showDecompose, setShowDecompose] = useState(false);
+  const [showParkReasonEditor, setShowParkReasonEditor] = useState(false);
   const [targetChildKey, setTargetChildKey] = useState(defaultChildPeriodKey);
   const [stepDraft, setStepDraft] = useState('');
   const [stepKpiDraft, setStepKpiDraft] = useState('');
@@ -189,9 +191,19 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
 
           <button
             type="button"
-            onClick={() =>
-              onUpdateFields({ status: isParked ? 'active' : 'parked' })
-            }
+            onClick={() => {
+              if (isParked) {
+                onUpdateFields({ status: 'active' });
+                setShowParkReasonEditor(false);
+              } else {
+                const todayIso = new Date().toISOString().slice(0, 10);
+                onUpdateFields({
+                  status: 'parked',
+                  parkedAt: task.parkedAt || todayIso
+                });
+                setShowParkReasonEditor(true);
+              }
+            }}
             className={`p-1.5 rounded-lg border transition-colors ${
               isParked
                 ? 'bg-amber-500/15 text-amber-300 border-amber-500/35 hover:bg-amber-500/25'
@@ -200,7 +212,7 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
             title={
               isParked
                 ? 'Resume outcome'
-                : 'Park outcome (paused due to energy/money/priority shift — keeps history, stops gap warnings)'
+                : 'Park outcome (logs why for future-you — stops gap warnings without deleting history)'
             }
           >
             {isParked ? <PlayCircle className="w-3.5 h-3.5" /> : <PauseCircle className="w-3.5 h-3.5" />}
@@ -216,6 +228,82 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Pivot / Park Memory Strip (5-sec tag + 1-line why — kills disguised quitting & forgotten dead loops) */}
+      {isParked && (showParkReasonEditor ? (
+        <div className="pl-8 p-2.5 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-2 text-[11px]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+              Why parked? (5-sec memory for future-you)
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowParkReasonEditor(false)}
+              className="text-[10px] font-bold text-slate-400 hover:text-slate-200"
+            >
+              Done
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(['reality_shift', 'disproved', 'deferred'] as ParkReasonTag[]).map(tag => {
+              const meta = PARK_REASON_META[tag];
+              const active = task.parkedReasonTag === tag;
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => onUpdateFields({ parkedReasonTag: tag })}
+                  title={meta.hint}
+                  className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-colors ${
+                    active
+                      ? meta.activeCls
+                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+          <input
+            type="text"
+            value={task.parkedReasonNote || ''}
+            onChange={e => onUpdateFields({ parkedReasonNote: e.target.value })}
+            onKeyDown={e => {
+              if (e.key === 'Enter') setShowParkReasonEditor(false);
+            }}
+            placeholder="Optional 1-line reason (e.g. 'Cold outreach <1% reply rate, switching to referrals')..."
+            className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
+          />
+        </div>
+      ) : (
+        <div className="pl-8 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+          {task.parkedReasonTag && (
+            <span
+              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${
+                PARK_REASON_META[task.parkedReasonTag].badgeCls
+              }`}
+            >
+              {PARK_REASON_META[task.parkedReasonTag].label}
+            </span>
+          )}
+          {task.parkedAt && (
+            <span className="font-mono text-[10px] text-slate-500">{task.parkedAt}</span>
+          )}
+          {task.parkedReasonNote?.trim() ? (
+            <span className="italic text-slate-300">&ldquo;{task.parkedReasonNote.trim()}&rdquo;</span>
+          ) : (
+            <span className="text-slate-500">No park reason logged</span>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowParkReasonEditor(true)}
+            className="text-[10px] font-bold text-amber-400/80 hover:text-amber-300 underline"
+          >
+            {task.parkedReasonTag || task.parkedReasonNote?.trim() ? 'Edit reason' : '+ Why parked?'}
+          </button>
+        </div>
+      ))}
 
       {/* Parent Alignment Selector + KPI Proof Check */}
       {(parentOptions.length > 0 || showKpiEditor || task.kpiTarget?.trim()) && (

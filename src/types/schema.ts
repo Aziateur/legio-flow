@@ -53,6 +53,8 @@ export interface SubTaskItem {
   completed: boolean;
 }
 
+export type ParkReasonTag = 'reality_shift' | 'disproved' | 'deferred';
+
 export interface TaskItem {
   id: string;
   text: string;
@@ -63,6 +65,9 @@ export interface TaskItem {
   kpiTarget?: string; // Optional measurable proof check ("What proves this is done?")
   kpiActual?: string; // Optional actual result verified at review time (never tracked daily)
   status?: 'active' | 'parked'; // Lightweight fluid-reality pause (does not delete or fail)
+  parkedReasonTag?: ParkReasonTag; // Why it was parked (prevents disguised quitting & forgotten dead loops)
+  parkedReasonNote?: string; // Optional 1-line memory for future-you
+  parkedAt?: string; // YYYY-MM-DD when parked
   parentLinkMode?: 'step' | 'mirror'; // 'step' rolls up progress without auto-closing parent; 'mirror' syncs completion 1:1
   monthlyTaskId?: string;
   quarterlyTaskId?: string;
@@ -124,6 +129,17 @@ export interface DailyPriorityItem {
   checklistItemId?: string;
 }
 
+export type NervousSystemState = 'calm' | 'sharp' | 'wired' | 'foggy' | 'drained';
+
+export interface DailyEnergyCheck {
+  wakeUp?: number; // 1–10 energy at wake-up
+  midday?: number; // 1–10 energy during the day
+  night?: number;  // 1–10 energy at night
+  nervousSystemScore?: number; // 1–10 (10 = grounded/regulated, <6 = warning)
+  nervousSystemState?: NervousSystemState;
+  nervousSystemNote?: string; // Optional brief note on how body/nervous system feels
+}
+
 export interface DailyEntry {
   date: string; // YYYY-MM-DD
   templateId: string;
@@ -137,6 +153,7 @@ export interface DailyEntry {
   gwsSessionIds: string[];
   problemsEncountered?: string;
   reviewNotes?: string;
+  energyCheck?: DailyEnergyCheck;
   customFieldValues: Record<string, any>;
   updatedAt: string;
 }
@@ -341,10 +358,19 @@ export interface StrategyStage {
   startedAt?: string;        // YYYY-MM-DD when stage became active (for velocity tracking)
 }
 
+export interface StrategyPivotLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  tag: ParkReasonTag;
+  note: string;
+}
+
 export interface StrategyPlan {
   id: string;
   title: string;             // e.g. "Trading Strategy"
   description?: string;
+  status?: 'active' | 'paused' | 'pivoted';
+  pivotHistory?: StrategyPivotLog[];
   stages: StrategyStage[];
   createdAt: string;
   updatedAt: string;
@@ -452,4 +478,17 @@ export interface ProblemEntry {
   createdAt: string;
   updatedAt: string;
   solvedAt?: string;
+}
+
+export type PlaybookKind = 'principle' | 'routine' | 'catalyst';
+
+export interface PlaybookEntry {
+  id: string;
+  kind: PlaybookKind;
+  title: string;
+  note?: string; // Concrete rule, timing, or why it works
+  pinned?: boolean; // Pin key catalysts/principles to surface in Daily Brief
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
 }

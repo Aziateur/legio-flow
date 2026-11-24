@@ -30,6 +30,15 @@ import {
   computeGwsAllocationInRange
 } from '../../lib/macroAnalytics';
 import { formatProblemsForReviewText, problemOccurredInRange } from '../../lib/problems';
+import {
+  PARK_REASON_META,
+  collectLowScoreWarnings,
+  computePeriodEnergySummary
+} from '../../lib/energyAnalytics';
+import {
+  LowScoreFlagsBanner,
+  PeriodEnergySummaryStrip
+} from './EnergyAndWarningsCard';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import { GwsAllocationCard } from '../common/GwsAllocationCard';
@@ -358,6 +367,46 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     currentPlan.topFocuses
   );
 
+  // Energy, Nervous System & Automatic < 6 Warning Flags for Quarter / Year
+  const periodDays = isQuarterly ? quarterData?.days || [] : yearData?.days || [];
+  const periodEnergySummary = computePeriodEnergySummary(periodDays);
+  const periodAvgWeeklyNum =
+    parseFloat(String(isQuarterly ? quarterData?.avgWeeklyScore : yearData?.avgWeeklyScore)) || 0;
+  const periodAvgDailyNum =
+    parseFloat(String(isQuarterly ? quarterData?.avgDailyScore : yearData?.avgDailyScore)) || 0;
+  const periodMonthScores = isQuarterly
+    ? (quarterData?.monthsData || [])
+        .map(m => m.saved?.score || 0)
+        .filter(v => v > 0)
+    : (yearData?.quartersData || [])
+        .map(q => q.saved?.score || 0)
+        .filter(v => v > 0);
+  const periodSubReviewAvg =
+    periodMonthScores.length > 0
+      ? Math.round((periodMonthScores.reduce((a, b) => a + b, 0) / periodMonthScores.length) * 10) / 10
+      : null;
+
+  const macroLowScoreFlags = collectLowScoreWarnings([
+    { label: `${isQuarterly ? 'Quarterly' : 'Yearly'} Score`, value: score > 0 ? score : null },
+    {
+      label: isQuarterly ? 'Monthly Reviews Avg' : 'Quarterly Reviews Avg',
+      value: periodSubReviewAvg
+    },
+    { label: 'Weekly Avg', value: periodAvgWeeklyNum > 0 ? periodAvgWeeklyNum : null },
+    { label: 'Daily Discipline Avg', value: periodAvgDailyNum > 0 ? periodAvgDailyNum : null },
+    { label: 'Energy Avg', value: periodEnergySummary.avgEnergy },
+    { label: 'Nervous System Avg', value: periodEnergySummary.avgNervousSystem }
+  ]);
+
+  // Pivot & Parked Memory Audit (outcomes parked + roadmaps pivoted in this period)
+  const parkedOutcomesInPeriod = currentPlan.tasks.filter(t => t.status === 'parked');
+  const roadmapPivotsInPeriod = strategyPlans.flatMap(sp =>
+    (sp.pivotHistory || [])
+      .filter(ev => ev.date >= startDate && ev.date <= endDate)
+      .map(ev => ({ planTitle: sp.title, ...ev }))
+  );
+  const totalPivotsInPeriod = parkedOutcomesInPeriod.length + roadmapPivotsInPeriod.length;
+
   const visibleHabitRows = showAllHabits ? habitRows : habitRows.slice(0, 8);
   const avgHabitDurability =
     habitRows.length > 0
@@ -650,6 +699,27 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     lines.push(`${periodLabel} — ${isQuarterly ? 'Quarterly Strategic Review' : 'Yearly Executive Review'}`);
     if (headline.trim()) lines.push(`Verdict / Chapter: "${headline.trim()}"`);
     lines.push(`Overall Score: ${score > 0 ? `${score}/10` : 'Unscored'}`);
+    if (periodEnergySummary.daysLogged > 0) {
+      lines.push(
+        `Energy & Nervous System (${periodEnergySummary.daysLogged}d): Energy ${
+          periodEnergySummary.avgEnergy ?? '—'
+        }/10 (Wake ${periodEnergySummary.avgWakeUp ?? '—'} · Mid ${
+          periodEnergySummary.avgMidday ?? '—'
+        } · Night ${periodEnergySummary.avgNight ?? '—'}) · Nervous System ${
+          periodEnergySummary.avgNervousSystem ?? '—'
+        }/10`
+      );
+    }
+    if (macroLowScoreFlags.length > 0) {
+      lines.push(
+        `⚠ FLAGGED BELOW 6: ${macroLowScoreFlags.map(f => `${f.label} ${f.value}/${f.max}`).join(' · ')}`
+      );
+    }
+    if (totalPivotsInPeriod > 0) {
+      lines.push(
+        `Pivots & Parked Memory (${totalPivotsInPeriod}): ${parkedOutcomesInPeriod.length} parked outcome(s) · ${roadmapPivotsInPeriod.length} roadmap pivot(s)`
+      );
+    }
     lines.push('');
 
     if (prevSavedReview?.courseCorrections?.trim()) {
@@ -1136,6 +1206,10 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
         )}
       </div>
 
+      {/* Automatic < 6 Warning Flags + Energy & Nervous System Period Telemetry */}
+      <LowScoreFlagsBanner periodLabel={periodLabel} flags={macroLowScoreFlags} />
+      <PeriodEnergySummaryStrip summary={periodEnergySummary} periodLabel={periodLabel} />
+
       {/* ================================================================ */}
       {/* STAGE 1: PAST COMMITMENTS & REAL-WORLD REALITY                   */}
       {/* ================================================================ */}
@@ -1290,7 +1364,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                             </span>
                             {isParked && (
                               <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase tracking-wider">
-                                Parked
+                                Parked{task.parkedReasonTag ? ` · ${PARK_REASON_META[task.parkedReasonTag].shortLabel}` : ''}
                               </span>
                             )}
                           </div>
@@ -1345,6 +1419,12 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                           )}
                         </div>
                       </div>
+
+                      {isParked && task.parkedReasonNote?.trim() && (
+                        <div className="pl-6 text-[11px] text-slate-400 italic">
+                          Park reason ({task.parkedAt || 'dated'}): &ldquo;{task.parkedReasonNote.trim()}&rdquo;
+                        </div>
+                      )}
 
                       {hasKpi && (
                         <div className="pl-6 flex flex-wrap items-center gap-2 text-xs">
@@ -1411,6 +1491,62 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                 + Add
               </button>
             </form>
+
+            {/* Pivot & Parked Memory Pattern Check (Surfaces ONLY when pivots occurred — catches disguised quitting) */}
+            {totalPivotsInPeriod > 0 && (
+              <div
+                className={`p-4 rounded-2xl border space-y-2.5 text-xs ${
+                  totalPivotsInPeriod >= 4
+                    ? 'bg-amber-500/10 border-amber-500/35'
+                    : 'bg-slate-950 border-slate-800'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-300">
+                    Pivot &amp; Parked Memory ({totalPivotsInPeriod} in {periodKey})
+                  </span>
+                  {totalPivotsInPeriod >= 4 && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/40 text-[10px] font-bold">
+                      High pivot count — check adaptation vs. quitting before friction
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  {parkedOutcomesInPeriod.map(t => (
+                    <div key={t.id} className="flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
+                      <span
+                        className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                          t.parkedReasonTag
+                            ? PARK_REASON_META[t.parkedReasonTag].badgeCls
+                            : 'bg-slate-900 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        {t.parkedReasonTag ? PARK_REASON_META[t.parkedReasonTag].shortLabel : 'Parked'}
+                      </span>
+                      <span className="font-semibold text-slate-200">{t.text}</span>
+                      {t.parkedReasonNote?.trim() && (
+                        <span className="text-slate-400 italic">— &ldquo;{t.parkedReasonNote.trim()}&rdquo;</span>
+                      )}
+                    </div>
+                  ))}
+                  {roadmapPivotsInPeriod.map(ev => (
+                    <div key={ev.id} className="flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
+                      <span
+                        className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                          PARK_REASON_META[ev.tag]?.badgeCls || 'bg-slate-900 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        Roadmap · {PARK_REASON_META[ev.tag]?.shortLabel || ev.tag}
+                      </span>
+                      <span className="font-semibold text-cyan-200">{ev.planTitle}</span>
+                      <span className="font-mono text-[10px] text-slate-500">({ev.date})</span>
+                      <span className="text-slate-400 italic">— &ldquo;{ev.note}&rdquo;</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 1C. Real-World Scoreboard (Start -> Target -> Actual) */}

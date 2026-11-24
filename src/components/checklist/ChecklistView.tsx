@@ -123,11 +123,11 @@ function stepPeriodKey(recurrence: ChecklistRecurrence, periodKey: string, delta
   return null;
 }
 
-function computeStreak(
+function computeConsistency(
   item: ChecklistItem,
   selectedDate: string,
   selectedWeekId: string
-): { count: number; unit: StreakUnit; completedCurrent: boolean } {
+): { pct: number; done: number; windowSize: number; unit: StreakUnit; completedCurrent: boolean } {
   const unit: StreakUnit =
     item.recurrence === 'daily'
       ? 'd'
@@ -138,27 +138,73 @@ function computeStreak(
       : '';
 
   if (item.recurrence === 'none' || item.recurrence === 'tally') {
-    return { count: 0, unit: '', completedCurrent: item.completed };
+    return { pct: 0, done: 0, windowSize: 0, unit: '', completedCurrent: item.completed };
   }
 
+  const maxWindow = item.recurrence === 'daily' ? 14 : 6;
   const periods = new Set(item.completedPeriods || []);
   const currentKey = getPeriodKey(item.recurrence, selectedDate, selectedWeekId);
   const completedCurrent = periods.has(currentKey);
 
-  // Start at current period if checked, otherwise preserve unbroken streak ending at previous period.
-  let cursor: string | null = completedCurrent
-    ? currentKey
-    : stepPeriodKey(item.recurrence, currentKey, -1);
-
-  let count = 0;
-  let guard = 0;
-  while (cursor && periods.has(cursor) && guard < 3650) {
-    count += 1;
+  // Build rolling window of recent period keys ending at currentKey
+  const windowKeys: string[] = [];
+  let cursor: string | null = currentKey;
+  for (let i = 0; i < maxWindow && cursor; i++) {
+    windowKeys.push(cursor);
     cursor = stepPeriodKey(item.recurrence, cursor, -1);
-    guard += 1;
   }
 
-  return { count, unit, completedCurrent };
+  // Bound denominator by item's history/creation so brand-new habits don't start artificially punished
+  let effectiveWindow = windowKeys.length;
+  if (item.recurrence === 'daily') {
+    const createdDate = item.createdAt ? item.createdAt.slice(0, 10) : '';
+    const earliestCompleted = Array.from(periods)
+      .filter(p => /^\d{4}-\d{2}-\d{2}$/.test(p) && p <= selectedDate)
+      .sort()[0];
+    const startBound =
+      createdDate && earliestCompleted
+        ? createdDate < earliestCompleted
+          ? createdDate
+          : earliestCompleted
+        : earliestCompleted || createdDate;
+    if (startBound && startBound <= selectedDate) {
+      const idx = windowKeys.findIndex(k => k <= startBound);
+      if (idx >= 0) {
+        effectiveWindow = Math.max(1, idx + 1);
+      }
+    }
+  } else if (item.recurrence === 'weekly') {
+    const earliestWeekNum = Array.from(periods)
+      .map(p => {
+        const m = /^week_(\d+)$/.exec(p);
+        return m ? parseInt(m[1], 10) : null;
+      })
+      .filter((n): n is number => n !== null)
+      .sort((a, b) => a - b)[0];
+    const curMatch = /^week_(\d+)$/.exec(currentKey);
+    const curNum = curMatch ? parseInt(curMatch[1], 10) : 1;
+    if (earliestWeekNum !== undefined && earliestWeekNum <= curNum) {
+      effectiveWindow = Math.min(windowKeys.length, Math.max(1, curNum - earliestWeekNum + 1));
+    } else if (periods.size === 0) {
+      effectiveWindow = 1;
+    }
+  } else if (item.recurrence === 'monthly') {
+    const earliestMonth = Array.from(periods)
+      .filter(p => /^\d{4}-\d{2}$/.test(p) && p <= currentKey)
+      .sort()[0];
+    if (earliestMonth) {
+      const idx = windowKeys.findIndex(k => k <= earliestMonth);
+      if (idx >= 0) effectiveWindow = Math.max(1, idx + 1);
+    } else if (periods.size === 0) {
+      effectiveWindow = 1;
+    }
+  }
+
+  const scopedKeys = windowKeys.slice(0, Math.max(1, effectiveWindow));
+  const done = scopedKeys.filter(k => periods.has(k)).length;
+  const pct = scopedKeys.length > 0 ? Math.round((done / scopedKeys.length) * 100) : 0;
+
+  return { pct, done, windowSize: scopedKeys.length, unit, completedCurrent };
 }
 
 /** Auto-detects volume per rep from titles like "5 min guitar session", "500ml water", "20 pages" */
@@ -545,25 +591,24 @@ export const ChecklistView: React.FC = () => {
     saveChecklistItems(updated);
   };
 
-  const streaksById = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof computeStreak>>();
+  const consistencyById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof computeConsistency>>();
     for (const item of checklistItems) {
-      map.set(item.id, computeStreak(item, selectedDate, selectedWeekId));
+      map.set(item.id, computeConsistency(item, selectedDate, selectedWeekId));
     }
     return map;
   }, [checklistItems, selectedDate, selectedWeekId]);
 
-  const bestActiveStreak = useMemo(() => {
-    let best: { count: number; unit: StreakUnit } = { count: 0, unit: 'd' };
+  const avgConsistencyPct = useMemo(() => {
+    const scores: number[] = [];
     for (const item of checklistItems) {
       if (item.recurrence === 'none' || item.recurrence === 'tally') continue;
-      const streak = streaksById.get(item.id);
-      if (streak && streak.count > best.count) {
-        best = { count: streak.count, unit: streak.unit };
-      }
+      const c = consistencyById.get(item.id);
+      if (c && c.windowSize > 0) scores.push(c.pct);
     }
-    return best;
-  }, [checklistItems, streaksById]);
+    if (scores.length === 0) return 0;
+    return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+  }, [checklistItems, consistencyById]);
 
   const standardChecklistItems = checklistItems.filter((i) => i.recurrence !== 'tally');
   const tallyItems = checklistItems.filter((i) => i.recurrence === 'tally');
@@ -651,7 +696,7 @@ export const ChecklistView: React.FC = () => {
           ) : (
             items.map((item) => {
               const done = isItemDone(item);
-              const streak = streaksById.get(item.id);
+              const consistency = consistencyById.get(item.id);
               const isEditing = editingId === item.id;
               const canPullToDaily =
                 item.recurrence === 'weekly' ||
@@ -792,22 +837,21 @@ export const ChecklistView: React.FC = () => {
                     </button>
                   )}
 
-                  {item.recurrence !== 'none' && streak && (
+                  {item.recurrence !== 'none' && consistency && consistency.windowSize > 0 && (
                     <span
-                      title={
-                        streak.count > 0
-                          ? `${streak.count}${streak.unit} consecutive streak`
-                          : 'No active streak yet'
-                      }
-                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                        streak.count > 0
+                      title={`Rolling consistency: ${consistency.done}/${consistency.windowSize}${consistency.unit} (${consistency.pct}%) — missing 1 day dips % instead of resetting to 0`}
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] font-bold ${
+                        consistency.pct >= 80
+                          ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                          : consistency.pct >= 60
                           ? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
-                          : 'border-slate-800 bg-slate-900 text-slate-500'
+                          : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
                       }`}
                     >
-                      <Flame className={`h-3 w-3 ${streak.count > 0 ? 'fill-amber-400 text-amber-400' : ''}`} />
-                      {streak.count}
-                      {streak.unit}
+                      <span>{consistency.pct}%</span>
+                      <span className="text-[10px] opacity-75">
+                        ({consistency.done}/{consistency.windowSize}{consistency.unit})
+                      </span>
                     </span>
                   )}
 
@@ -927,9 +971,18 @@ export const ChecklistView: React.FC = () => {
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
               {doneCount} / {totalCount} Done
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-300">
-              <Flame className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-              Best Streak: {bestActiveStreak.count > 0 ? `${bestActiveStreak.count}${bestActiveStreak.unit}` : '0'}
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold font-mono ${
+                avgConsistencyPct >= 80
+                  ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                  : avgConsistencyPct >= 60
+                  ? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+                  : 'border-rose-500/30 bg-rose-500/15 text-rose-300'
+              }`}
+              title="Average rolling consistency across your recurring habits (replaces brittle reset-to-zero streaks)"
+            >
+              <Flame className="h-3.5 w-3.5" />
+              Consistency: {avgConsistencyPct}%
             </span>
             {caps.repsBoard && (
               <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
@@ -981,13 +1034,13 @@ export const ChecklistView: React.FC = () => {
         </div>
       </div>
 
-      {/* 1. Recurring Sections (Daily / Weekly / Monthly with Consecutive Streaks) */}
+      {/* 1. Recurring Sections (Daily / Weekly / Monthly with Rolling Consistency %) */}
       {(effectiveViewFilter === 'all' || effectiveViewFilter === 'recurring') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
             <Repeat className="h-4 w-4 text-amber-400" />
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Recurring • Streaks
+              Recurring • Rolling Consistency %
             </h2>
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
