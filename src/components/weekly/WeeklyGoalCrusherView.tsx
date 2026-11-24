@@ -8,7 +8,7 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
-import { getCommittedGatesForQuarter } from '../../lib/planHierarchy';
+import { getCommittedGatesForQuarter, isActiveStrategyPlan } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
@@ -75,6 +75,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const linkedMonthlyPlan = monthlyPlans[planMonthKey];
   const linkedQuarterlyPlan = quarterlyPlans[planQuarterKey];
   const linkedYearlyPlan = yearlyPlans[planYearKey];
+  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
   const committedQuarterGates = getCommittedGatesForQuarter(linkedQuarterlyPlan, strategyPlans);
 
   const weeklyParentOptions: Array<{ value: string; label: string; group: string }> = caps.modelAWeekToMonth
@@ -1002,7 +1003,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                     }`}
                   >
                     <MapIcon className="w-3.5 h-3.5" />
-                    <span>Written Plans ({strategyPlans.length})</span>
+                    <span>Written Plans ({activeStrategyPlans.length})</span>
                   </button>
                   <button
                     type="button"
@@ -1050,12 +1051,12 @@ export const WeeklyGoalCrusherView: React.FC = () => {
               {/* TAB 1: WRITTEN ROADMAPS (STRICTLY UNLOCKED ACTIVE STAGE ONLY) */}
               {pullSourceTab === 'roadmaps' && (
                 <div className="space-y-3">
-                  {strategyPlans.length === 0 ? (
+                  {activeStrategyPlans.length === 0 ? (
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
-                      No Written Plans yet. Create one in Planning Hub → Roadmaps.
+                      No active Written Plans yet. Create or promote one in Planning Hub → Roadmaps.
                     </div>
                   ) : (
-                    strategyPlans.map(sp => {
+                    activeStrategyPlans.map(sp => {
                       const activeStageIdx = sp.stages.findIndex(s => !s.gatePassed);
                       const activeStage = activeStageIdx >= 0 ? sp.stages[activeStageIdx] : null;
                       const lookLines = activeStage ? parseBulletLines(activeStage.whatItLooksLike) : [];

@@ -372,11 +372,14 @@ export interface StrategyPivotLog {
   note: string;
 }
 
+export type StrategyPlanStatus = 'active' | 'paused' | 'pivoted' | 'possible' | 'not_pursuing';
+
 export interface StrategyPlan {
   id: string;
   title: string;             // e.g. "Trading Strategy"
   description?: string;
-  status?: 'active' | 'paused' | 'pivoted';
+  activationCondition?: string; // Trigger/gate parameter required before activating a possible/shelved roadmap
+  status?: StrategyPlanStatus;
   pivotHistory?: StrategyPivotLog[];
   stages: StrategyStage[];
   createdAt: string;

@@ -94,6 +94,12 @@ export interface CommittedGateDetail {
   totalGoals: number;
 }
 
+export const isActiveStrategyPlan = (p: StrategyPlan): boolean =>
+  p.status !== 'possible' && p.status !== 'not_pursuing';
+
+export const isPossibleStrategyPlan = (p: StrategyPlan): boolean =>
+  p.status === 'possible' || p.status === 'not_pursuing';
+
 export const getCommittedGatesForQuarter = (
   quarterPlan: QuarterlyPlan | undefined,
   strategyPlans: StrategyPlan[]
@@ -102,7 +108,7 @@ export const getCommittedGatesForQuarter = (
   const results: CommittedGateDetail[] = [];
   quarterPlan.targetGateRefs.forEach(ref => {
     const plan = strategyPlans.find(sp => sp.id === ref.planId);
-    if (!plan) return;
+    if (!plan || !isActiveStrategyPlan(plan)) return;
     const stageIndex = plan.stages.findIndex(s => s.id === ref.stageId);
     if (stageIndex < 0) return;
     const stage = plan.stages[stageIndex];

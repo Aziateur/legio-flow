@@ -4544,6 +4544,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         );
         return {
           ...primary,
+          description: primary.description !== undefined ? primary.description : secondary.description || '',
+          activationCondition:
+            primary.activationCondition !== undefined
+              ? primary.activationCondition
+              : secondary.activationCondition || '',
           status: primary.status || secondary.status,
           ...(mergedPivotHistory.length > 0 ? { pivotHistory: mergedPivotHistory } : {}),
           stages: mergedStages

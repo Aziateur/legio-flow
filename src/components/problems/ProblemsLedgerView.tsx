@@ -27,6 +27,7 @@ import {
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
+import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import { ProblemItemRow } from './ProblemItemRow';
 import {
   AlertTriangle,
@@ -113,7 +114,7 @@ export const ProblemsLedgerView: React.FC = () => {
   const [newCatColor, setNewCatColor] = useState<ProblemColorKey>('cyan');
 
   const roadmapTitles = useMemo(
-    () => strategyPlans.map(p => p.title.trim()).filter(Boolean),
+    () => strategyPlans.filter(isActiveStrategyPlan).map(p => p.title.trim()).filter(Boolean),
     [strategyPlans]
   );
 

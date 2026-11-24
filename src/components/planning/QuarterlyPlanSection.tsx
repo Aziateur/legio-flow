@@ -5,7 +5,8 @@ import { getMonthInfo, getQuarterInfo, shiftQuarterKey } from '../../lib/macroAn
 import {
   getCommittedGatesForQuarter,
   getMonthlyChildrenOfQuarterlyTask,
-  getMonthsForQuarter
+  getMonthsForQuarter,
+  isActiveStrategyPlan
 } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
@@ -96,6 +97,10 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
   ).sort();
 
   const caps = getLevelCapabilities(systemLevel);
+  const activeStrategyPlans = useMemo(
+    () => strategyPlans.filter(isActiveStrategyPlan),
+    [strategyPlans]
+  );
   const activeOutcomes = activeQuarterPlan.tasks.filter(t => t.status !== 'parked');
   const doneCount = activeOutcomes.filter(t => t.completed).length;
   const targetGateRefs = activeQuarterPlan.targetGateRefs || [];
@@ -619,13 +624,13 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
             </button>
           </div>
 
-          {strategyPlans.length === 0 ? (
+          {activeStrategyPlans.length === 0 ? (
             <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-500">
-              No Written Roadmaps created yet. Create one in Planning Hub → Roadmaps to link gates here.
+              No active Written Roadmaps yet. Create or promote one in Planning Hub → Roadmaps to link gates here.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {strategyPlans.map(plan => {
+              {activeStrategyPlans.map(plan => {
                 const activeStage = plan.stages.find(s => !s.gatePassed) || plan.stages[plan.stages.length - 1];
                 if (!activeStage) return null;
                 const isTargeted = targetGateRefs.some(

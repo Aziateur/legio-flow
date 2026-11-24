@@ -25,6 +25,7 @@ import {
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
+import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -134,7 +135,10 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const catMeta = resolveCategoryMeta(problem.category, problemCategories);
   const isGuardrail = isProblemGuardrail(problem);
   const lastDate = getLastOccurrenceDate(problem);
-  const roadmapTitles = strategyPlans.map(p => p.title.trim()).filter(Boolean);
+  const roadmapTitles = strategyPlans
+    .filter(isActiveStrategyPlan)
+    .map(p => p.title.trim())
+    .filter(Boolean);
   const maxTop = problemSettings.maxTopConstraints || 3;
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
 

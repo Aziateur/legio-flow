@@ -30,6 +30,7 @@ import {
   computeGwsAllocationInRange
 } from '../../lib/macroAnalytics';
 import { formatProblemsForReviewText, problemOccurredInRange } from '../../lib/problems';
+import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import {
   ALIGNMENT_VERDICTS,
   PARK_REASON_META,
@@ -413,6 +414,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
   ]);
 
   // Pivot & Parked Memory Audit (outcomes parked + roadmaps pivoted in this period)
+  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
   const parkedOutcomesInPeriod = currentPlan.tasks.filter(t => t.status === 'parked');
   const roadmapPivotsInPeriod = strategyPlans.flatMap(sp =>
     (sp.pivotHistory || [])
@@ -836,7 +838,7 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
 
     lines.push('');
     lines.push(`--- 3. ROADMAPS & SYSTEMIC BOTTLENECKS ---`);
-    strategyPlans.forEach(sp => {
+    activeStrategyPlans.forEach(sp => {
       const passed = sp.stages.filter(s => s.gatePassed).length;
       const active = sp.stages.find(s => !s.gatePassed);
       const ra = roadmapAudits[sp.id];
@@ -2012,13 +2014,13 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
           </div>
 
           {/* 3A. Domain-by-Domain Written Roadmaps Audit (Full width, interactive) */}
-          {strategyPlans.length === 0 ? (
+          {activeStrategyPlans.length === 0 ? (
             <div className="p-5 rounded-2xl bg-slate-950 border border-dashed border-slate-800 text-xs text-slate-400">
-              No Written Stage-Gate Roadmaps created yet. Create them in Planning Hub → Roadmaps to audit stage progression here.
+              No active Written Stage-Gate Roadmaps yet. Create or promote them in Planning Hub → Roadmaps to audit stage progression here.
             </div>
           ) : (
             <div className="space-y-4">
-              {strategyPlans.map(sp => {
+              {activeStrategyPlans.map(sp => {
                 const passedStages = sp.stages.filter(s => s.gatePassed);
                 const passedInPeriod = passedStages.filter(
                   s => s.gatePassedAt && s.gatePassedAt >= startDate && s.gatePassedAt <= endDate

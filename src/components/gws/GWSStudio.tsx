@@ -8,6 +8,7 @@ import {
 } from '../../context/StorageContext';
 import { GWSSession, ProblemCategory } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
+import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
@@ -88,6 +89,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
+  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
   const currentDailyEntry = getEntryForDate(selectedDate);
   const todayPriorities = getPriorityItemsForEntry(currentDailyEntry).filter(p => p.text.trim().length > 0);
   const activeWeeklyPlan =
@@ -609,7 +611,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
 
               {/* Strategic Alignment Tag (LVL 4+: powers Stated Priorities vs. Actual Hours in Reviews) */}
               {caps.gwsFocusAndRoadmapTagging &&
-                (activeFocusOptions.length > 0 || strategyPlans.length > 0 || lifePillars.length > 0) && (
+                (activeFocusOptions.length > 0 || activeStrategyPlans.length > 0 || lifePillars.length > 0) && (
                 <div className="pt-2 space-y-2">
                   {activeFocusOptions.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -637,9 +639,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                     </div>
                   )}
 
-                  {(strategyPlans.length > 0 || lifePillars.length > 0) && (
+                  {(activeStrategyPlans.length > 0 || lifePillars.length > 0) && (
                     <div className="flex flex-wrap items-center gap-2">
-                      {strategyPlans.length > 0 && (
+                      {activeStrategyPlans.length > 0 && (
                         <div className="flex items-center space-x-1.5">
                           <Compass className="w-3 h-3 text-cyan-400 shrink-0" />
                           <select
@@ -648,7 +650,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                             className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-[11px] font-semibold text-cyan-300 focus:outline-none focus:border-cyan-500/40"
                           >
                             <option value="">Roadmap (optional)...</option>
-                            {strategyPlans.map(sp => (
+                            {activeStrategyPlans.map(sp => (
                               <option key={sp.id} value={sp.id}>
                                 {sp.title}
                               </option>

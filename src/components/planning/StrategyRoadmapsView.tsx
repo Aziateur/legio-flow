@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   useStorage,
   findBestWeeklyPlanForDate,
@@ -6,7 +6,11 @@ import {
 } from '../../context/StorageContext';
 import { ParkReasonTag, StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
-import { getRoadmapStageBindings } from '../../lib/planHierarchy';
+import {
+  getRoadmapStageBindings,
+  isActiveStrategyPlan,
+  isPossibleStrategyPlan
+} from '../../lib/planHierarchy';
 import { PARK_REASON_META } from '../../lib/energyAnalytics';
 import { daysBetweenDates, normalizeTag } from '../../lib/problems';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
@@ -30,8 +34,15 @@ import {
   Eye,
   Crosshair,
   FileText,
-  Pencil
+  Pencil,
+  Sparkles,
+  ArrowUpRight,
+  Zap,
+  Ban,
+  Archive
 } from 'lucide-react';
+
+const POSSIBLE_BOARD_ID = '__possible_roadmaps__';
 
 const createEmptyStage = (stageNum: number): StrategyStage => ({
   id: `stg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -45,6 +56,42 @@ const createEmptyStage = (stageNum: number): StrategyStage => ({
   gatePassed: false
 });
 
+const createDefaultStages = (base: number): StrategyStage[] => [
+  {
+    id: `stg_${base}_0`,
+    title: 'Stage 0: Foundation & Setup',
+    systemState: 'System set up',
+    proximalGoals: [],
+    whatItLooksLike: '',
+    notPossibleUntil: '',
+    dayInALife: '',
+    gateCriterion: '',
+    gatePassed: false
+  },
+  {
+    id: `stg_${base}_1`,
+    title: 'Stage 1: Functional Execution',
+    systemState: 'System functional',
+    proximalGoals: [],
+    whatItLooksLike: '',
+    notPossibleUntil: '',
+    dayInALife: '',
+    gateCriterion: '',
+    gatePassed: false
+  },
+  {
+    id: `stg_${base}_2`,
+    title: 'Stage 2: Mastery & Scale',
+    systemState: 'System scaled',
+    proximalGoals: [],
+    whatItLooksLike: '',
+    notPossibleUntil: '',
+    dayInALife: '',
+    gateCriterion: '',
+    gatePassed: false
+  }
+];
+
 const createNewPlanTemplate = (count: number): StrategyPlan => {
   const now = new Date().toISOString();
   const base = Date.now();
@@ -52,43 +99,10 @@ const createNewPlanTemplate = (count: number): StrategyPlan => {
     id: `plan_${base}_${Math.random().toString(36).slice(2, 6)}`,
     title: count === 0 ? 'Master Strategy Plan' : `New Strategy Plan ${count + 1}`,
     description: 'Written stage-gate roadmap from setup to mastery.',
+    status: 'active',
     createdAt: now,
     updatedAt: now,
-    stages: [
-      {
-        id: `stg_${base}_0`,
-        title: 'Stage 0: Foundation & Setup',
-        systemState: 'System set up',
-        proximalGoals: [],
-        whatItLooksLike: '',
-        notPossibleUntil: '',
-        dayInALife: '',
-        gateCriterion: '',
-        gatePassed: false
-      },
-      {
-        id: `stg_${base}_1`,
-        title: 'Stage 1: Functional Execution',
-        systemState: 'System functional',
-        proximalGoals: [],
-        whatItLooksLike: '',
-        notPossibleUntil: '',
-        dayInALife: '',
-        gateCriterion: '',
-        gatePassed: false
-      },
-      {
-        id: `stg_${base}_2`,
-        title: 'Stage 2: Mastery & Scale',
-        systemState: 'System scaled',
-        proximalGoals: [],
-        whatItLooksLike: '',
-        notPossibleUntil: '',
-        dayInALife: '',
-        gateCriterion: '',
-        gatePassed: false
-      }
-    ]
+    stages: createDefaultStages(base)
   };
 };
 
@@ -113,7 +127,27 @@ export const StrategyRoadmapsView: React.FC = () => {
     setPlanningSubTab
   } = useStorage();
 
-  const [selectedPlanId, setSelectedPlanId] = useState<string>(strategyPlans[0]?.id || '');
+  const activePlans = strategyPlans.filter(isActiveStrategyPlan);
+  const possiblePlans = strategyPlans.filter(isPossibleStrategyPlan);
+  const promotablePlans = possiblePlans.filter(p => p.status === 'possible');
+  const shelvedPlans = possiblePlans.filter(p => p.status === 'not_pursuing');
+
+  const [selectedPlanId, setSelectedPlanId] = useState<string>(() => {
+    const firstActive = strategyPlans.find(isActiveStrategyPlan);
+    if (firstActive) return firstActive.id;
+    if (strategyPlans.some(isPossibleStrategyPlan)) return POSSIBLE_BOARD_ID;
+    return '';
+  });
+  const [possibleFilter, setPossibleFilter] = useState<'all' | 'possible' | 'not_pursuing'>('all');
+  const [newPossibleTitle, setNewPossibleTitle] = useState('');
+  const [newPossibleStatus, setNewPossibleStatus] = useState<'possible' | 'not_pursuing'>('possible');
+  const [newPossibleActivation, setNewPossibleActivation] = useState('');
+  const [newPossibleDescription, setNewPossibleDescription] = useState('');
+  const [highlightedPossibleId, setHighlightedPossibleId] = useState<string | null>(null);
+  const [copiedPossibleMd, setCopiedPossibleMd] = useState(false);
+  const [editingActiveParam, setEditingActiveParam] = useState(false);
+  const newPossibleInputRef = useRef<HTMLInputElement | null>(null);
+
   const [collapsedStageIds, setCollapsedStageIds] = useState<Record<string, boolean>>({});
   const [editLockedMode, setEditLockedMode] = useState<boolean>(false);
   const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({});
@@ -125,15 +159,24 @@ export const StrategyRoadmapsView: React.FC = () => {
   const [pivotNote, setPivotNote] = useState('');
   const [pivotPauseStatus, setPivotPauseStatus] = useState(false);
 
+  const isViewingPossibleBoard = selectedPlanId === POSSIBLE_BOARD_ID;
+
   useEffect(() => {
-    if (strategyPlans.length === 0) {
-      setSelectedPlanId('');
-    } else if (!strategyPlans.some(p => p.id === selectedPlanId)) {
-      setSelectedPlanId(strategyPlans[0].id);
+    if (selectedPlanId === POSSIBLE_BOARD_ID) return;
+    if (activePlans.length === 0) {
+      if (possiblePlans.length > 0) {
+        setSelectedPlanId(POSSIBLE_BOARD_ID);
+      } else {
+        setSelectedPlanId('');
+      }
+    } else if (!activePlans.some(p => p.id === selectedPlanId)) {
+      setSelectedPlanId(activePlans[0].id);
     }
   }, [strategyPlans, selectedPlanId]);
 
-  const activePlan = strategyPlans.find(p => p.id === selectedPlanId) || strategyPlans[0] || null;
+  const activePlan = isViewingPossibleBoard
+    ? null
+    : activePlans.find(p => p.id === selectedPlanId) || activePlans[0] || null;
   const sortedWeeklyPlans = Object.values(weeklyPlans).sort((a, b) => a.weekNumber - b.weekNumber);
   const defaultWeeklyPlan =
     findBestWeeklyPlanForDate(selectedDate, weeklyPlans, selectedWeekId) ||
@@ -147,9 +190,132 @@ export const StrategyRoadmapsView: React.FC = () => {
   const activeQuarterPlan = getQuarterlyPlan(activeQuarterKey);
 
   const handleCreatePlan = () => {
-    const newPlan = createNewPlanTemplate(strategyPlans.length);
+    const newPlan = createNewPlanTemplate(activePlans.length);
     saveStrategyPlan(newPlan);
     setSelectedPlanId(newPlan.id);
+    setEditLockedMode(false);
+  };
+
+  const handleOpenPossibleBoard = (focusInput = false, presetStatus?: 'possible' | 'not_pursuing') => {
+    setSelectedPlanId(POSSIBLE_BOARD_ID);
+    if (presetStatus) setNewPossibleStatus(presetStatus);
+    if (focusInput) {
+      setTimeout(() => {
+        newPossibleInputRef.current?.focus();
+      }, 40);
+    }
+  };
+
+  const handleJumpToPossibleCard = (planId: string) => {
+    setSelectedPlanId(POSSIBLE_BOARD_ID);
+    setPossibleFilter('all');
+    setHighlightedPossibleId(planId);
+    setTimeout(() => {
+      document.getElementById(`possible_roadmap_${planId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }, 60);
+    setTimeout(() => {
+      setHighlightedPossibleId(prev => (prev === planId ? null : prev));
+    }, 2200);
+  };
+
+  const handleAddPossiblePlan = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newPossibleTitle.trim();
+    if (!title) return;
+    const now = new Date().toISOString();
+    const newPlan: StrategyPlan = {
+      id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title,
+      description: newPossibleDescription.trim(),
+      activationCondition: newPossibleActivation.trim(),
+      status: newPossibleStatus,
+      stages: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    saveStrategyPlan(newPlan);
+    setNewPossibleTitle('');
+    setNewPossibleActivation('');
+    setNewPossibleDescription('');
+    setSelectedPlanId(POSSIBLE_BOARD_ID);
+    setHighlightedPossibleId(newPlan.id);
+    setTimeout(() => {
+      setHighlightedPossibleId(prev => (prev === newPlan.id ? null : prev));
+    }, 2000);
+  };
+
+  const handlePromoteToActive = (plan: StrategyPlan) => {
+    const now = new Date().toISOString();
+    const promoted: StrategyPlan = {
+      ...plan,
+      status: 'active',
+      stages: plan.stages.length > 0 ? plan.stages : createDefaultStages(Date.now()),
+      updatedAt: now
+    };
+    saveStrategyPlan(promoted);
+    setSelectedPlanId(promoted.id);
+    setEditLockedMode(false);
+    setPullNotice(`Promoted "${promoted.title || 'Untitled Roadmap'}" to Active Roadmaps`);
+    setTimeout(() => setPullNotice(null), 2800);
+  };
+
+  const handleDemoteActivePlan = (targetStatus: 'possible' | 'not_pursuing' = 'possible') => {
+    if (!activePlan) return;
+    saveStrategyPlan({
+      ...activePlan,
+      status: targetStatus,
+      updatedAt: new Date().toISOString()
+    });
+    handleJumpToPossibleCard(activePlan.id);
+  };
+
+  const updatePlanById = (planId: string, patch: Partial<StrategyPlan>) => {
+    const target = strategyPlans.find(p => p.id === planId);
+    if (!target) return;
+    saveStrategyPlan({ ...target, ...patch });
+  };
+
+  const handleDeletePlanById = (plan: StrategyPlan) => {
+    if (!confirm(`Delete roadmap "${plan.title || 'Untitled Roadmap'}"? This cannot be undone.`)) {
+      return;
+    }
+    deleteStrategyPlan(plan.id);
+  };
+
+  const handleCopyPossibleMarkdown = () => {
+    const lines: string[] = ['# Possible Roadmaps', ''];
+    if (promotablePlans.length > 0) {
+      lines.push('## Can Promote to Active');
+      promotablePlans.forEach(p => {
+        lines.push(`- **${p.title || 'Untitled'}**`);
+        if (p.activationCondition?.trim()) {
+          lines.push(`  - Activation Parameter: ${p.activationCondition.trim()}`);
+        }
+        if (p.description?.trim()) {
+          lines.push(`  - Description: ${p.description.trim()}`);
+        }
+      });
+      lines.push('');
+    }
+    if (shelvedPlans.length > 0) {
+      lines.push("## Won't Activate (Shelved)");
+      shelvedPlans.forEach(p => {
+        lines.push(`- **${p.title || 'Untitled'}**`);
+        if (p.activationCondition?.trim()) {
+          lines.push(`  - Activation Parameter: ${p.activationCondition.trim()}`);
+        }
+        if (p.description?.trim()) {
+          lines.push(`  - Description: ${p.description.trim()}`);
+        }
+      });
+      lines.push('');
+    }
+    navigator.clipboard.writeText(lines.join('\n').trim());
+    setCopiedPossibleMd(true);
+    setTimeout(() => setCopiedPossibleMd(false), 2200);
   };
 
   const handleDuplicatePlan = () => {
@@ -177,9 +343,9 @@ export const StrategyRoadmapsView: React.FC = () => {
   const handleDeletePlan = () => {
     if (!activePlan) return;
     if (!confirm(`Delete written plan "${activePlan.title}"? This cannot be undone.`)) return;
-    const fallback = strategyPlans.find(p => p.id !== activePlan.id);
+    const fallback = activePlans.find(p => p.id !== activePlan.id);
     deleteStrategyPlan(activePlan.id);
-    setSelectedPlanId(fallback?.id || '');
+    setSelectedPlanId(fallback?.id || (possiblePlans.length > 0 ? POSSIBLE_BOARD_ID : ''));
   };
 
   const updateActivePlan = (patch: Partial<StrategyPlan>) => {
@@ -402,6 +568,9 @@ export const StrategyRoadmapsView: React.FC = () => {
     if (activePlan.description?.trim()) {
       lines.push(activePlan.description.trim());
     }
+    if (activePlan.activationCondition?.trim()) {
+      lines.push(`Activation Parameter: ${activePlan.activationCondition.trim()}`);
+    }
     lines.push('');
 
     activePlan.stages.forEach((stage, idx) => {
@@ -467,18 +636,172 @@ export const StrategyRoadmapsView: React.FC = () => {
     }
   };
 
+  const renderPossibleRoadmapCard = (plan: StrategyPlan) => {
+    const isPromotable = plan.status === 'possible';
+    const isHighlighted = highlightedPossibleId === plan.id;
+
+    return (
+      <div
+        key={plan.id}
+        id={`possible_roadmap_${plan.id}`}
+        className={`rounded-2xl border p-4 sm:p-5 space-y-3.5 transition-all ${
+          isHighlighted
+            ? 'border-cyan-400/70 bg-cyan-500/10 ring-1 ring-cyan-400/30 shadow-lg'
+            : isPromotable
+            ? 'bg-slate-950/90 border-cyan-500/25 hover:border-cyan-500/45'
+            : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+        }`}
+      >
+        {/* Top Row: Name + Status Switcher + Delete */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex-1 min-w-0 flex items-center gap-2">
+            <span
+              className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                isPromotable ? 'bg-cyan-400 shadow-sm shadow-cyan-400/50' : 'bg-slate-500'
+              }`}
+            />
+            <input
+              type="text"
+              value={plan.title}
+              onChange={e => updatePlanById(plan.id, { title: e.target.value })}
+              placeholder="Roadmap name..."
+              className="flex-1 min-w-0 bg-transparent hover:bg-slate-900/70 focus:bg-slate-900 text-base sm:text-lg font-extrabold text-slate-100 rounded-xl px-2 py-1 -mx-2 focus:outline-none focus:ring-1 focus:ring-cyan-500/40 transition-colors"
+            />
+            {plan.stages.length > 0 && (
+              <span
+                className="shrink-0 px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400"
+                title="Previously written stages are preserved if you promote this back to Active"
+              >
+                {plan.stages.length} stages saved
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => updatePlanById(plan.id, { status: 'possible' })}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                  isPromotable
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/35'
+                    : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                }`}
+              >
+                Can Promote
+              </button>
+              <button
+                type="button"
+                onClick={() => updatePlanById(plan.id, { status: 'not_pursuing' })}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                  !isPromotable
+                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                    : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                }`}
+              >
+                Won&apos;t Activate
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleDeletePlanById(plan)}
+              title="Delete roadmap"
+              className="p-1.5 rounded-xl bg-slate-900 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 border border-slate-800 hover:border-rose-500/30 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Activation Parameter */}
+        <div className="space-y-1">
+          <label className="flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+            <Zap className="w-3 h-3" />
+            <span>
+              Activation Parameter{' '}
+              <span className="font-normal normal-case text-slate-500">
+                (exact condition required before activating)
+              </span>
+            </span>
+          </label>
+          <input
+            type="text"
+            value={plan.activationCondition || ''}
+            onChange={e => updatePlanById(plan.id, { activationCondition: e.target.value })}
+            placeholder="e.g. Only activate when main roadmap passes Stage 2 & monthly cash reserve > $10k..."
+            className="w-full bg-slate-900/90 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none transition-colors"
+          />
+        </div>
+
+        {/* Description Text Box */}
+        <div className="space-y-1">
+          <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+            Description
+          </label>
+          <textarea
+            rows={isPromotable ? 2 : 3}
+            value={plan.description || ''}
+            onChange={e => updatePlanById(plan.id, { description: e.target.value })}
+            placeholder={
+              isPromotable
+                ? 'Describe this candidate roadmap, its upside, and why it is worth keeping on deck...'
+                : 'Describe this roadmap and why you are NOT activating it right now...'
+            }
+            className="w-full bg-slate-900/90 border border-slate-800 focus:border-slate-600 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-y transition-colors leading-relaxed"
+          />
+        </div>
+
+        {/* Footer Action Row */}
+        <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70">
+          {isPromotable ? (
+            <>
+              <span className="text-[11px] text-slate-500">
+                Hidden from Active Plans, Weekly Puller &amp; Quarterly Gates until promoted.
+              </span>
+              <button
+                type="button"
+                onClick={() => handlePromoteToActive(plan)}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold shadow-sm transition-colors"
+              >
+                <ArrowUpRight className="w-3.5 h-3.5" />
+                <span>Promote to Active</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center space-x-1.5 text-[11px] text-rose-300/80">
+                <Ban className="w-3.5 h-3.5 shrink-0" />
+                <span>Won&apos;t activate right now — stays out of active execution</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => updatePlanById(plan.id, { status: 'possible' })}
+                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 border border-slate-800 hover:border-cyan-500/35 text-[11px] font-bold transition-colors"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>Move to Can Promote</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
-        {/* LEFT SIDEBAR: MULTIPLE WRITTEN PLANS DIRECTORY */}
+        {/* LEFT SIDEBAR: ACTIVE ROADMAPS + POSSIBLE ROADMAPS */}
         <aside className="lg:col-span-3 space-y-3 lg:sticky lg:top-20">
+          {/* ACTIVE ROADMAPS CARD */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 shadow-xl space-y-3">
             <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
               <div className="flex items-center space-x-2">
                 <BookOpen className="w-4 h-4 text-amber-400" />
                 <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-100">
-                  Written Plans ({strategyPlans.length})
+                  Active Roadmaps ({activePlans.length})
                 </h2>
               </div>
               <button
@@ -491,21 +814,21 @@ export const StrategyRoadmapsView: React.FC = () => {
               </button>
             </div>
 
-            {strategyPlans.length === 0 ? (
+            {activePlans.length === 0 ? (
               <div className="p-4 rounded-2xl border border-dashed border-slate-800 text-center space-y-2">
-                <p className="text-xs text-slate-400">No written roadmaps yet.</p>
+                <p className="text-xs text-slate-400">No active roadmaps yet.</p>
                 <button
                   type="button"
                   onClick={handleCreatePlan}
                   className="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-bold"
                 >
-                  Create Your First Plan
+                  Create Active Plan
                 </button>
               </div>
             ) : (
               <div className="space-y-2">
-                {strategyPlans.map(plan => {
-                  const isSelected = activePlan?.id === plan.id;
+                {activePlans.map(plan => {
+                  const isSelected = !isViewingPossibleBoard && activePlan?.id === plan.id;
                   const passedGates = plan.stages.filter(s => s.gatePassed).length;
                   const activeIdx = getActiveStageIndex(plan);
                   const activeStage = plan.stages[activeIdx];
@@ -542,8 +865,15 @@ export const StrategyRoadmapsView: React.FC = () => {
                       </div>
 
                       {activeStage && (
-                        <div className="text-[11px] text-slate-400 truncate">
-                          Now: <span className="text-slate-300 font-medium">{activeStage.title}</span>
+                        <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5">
+                          {plan.status === 'paused' && (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[9px] font-extrabold uppercase">
+                              Paused
+                            </span>
+                          )}
+                          <span className="truncate">
+                            Now: <span className="text-slate-300 font-medium">{activeStage.title}</span>
+                          </span>
                         </div>
                       )}
 
@@ -559,7 +889,7 @@ export const StrategyRoadmapsView: React.FC = () => {
               </div>
             )}
 
-            {activePlan && (
+            {activePlan && !isViewingPossibleBoard && (
               <div className="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
@@ -585,6 +915,15 @@ export const StrategyRoadmapsView: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={() => handleDemoteActivePlan('possible')}
+                  className="col-span-2 flex items-center justify-center space-x-1 py-1.5 px-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/25 text-[11px] font-bold transition-colors"
+                  title="Move this roadmap out of Active into Possible Roadmaps (all stages are safely kept)"
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  <span>Move to Possible List</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleDeletePlan}
                   className="col-span-2 flex items-center justify-center space-x-1 py-1.5 px-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 text-[11px] font-bold transition-colors"
                 >
@@ -594,25 +933,357 @@ export const StrategyRoadmapsView: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* POSSIBLE ROADMAPS SIDEBAR CARD */}
+          <div
+            className={`bg-slate-900/90 border rounded-3xl p-4 shadow-xl space-y-3 transition-colors ${
+              isViewingPossibleBoard ? 'border-cyan-500/50 ring-1 ring-cyan-500/20' : 'border-slate-800'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
+              <button
+                type="button"
+                onClick={() => handleOpenPossibleBoard(false)}
+                className="flex items-center space-x-2 text-left group min-w-0"
+              >
+                <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+                <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-100 group-hover:text-cyan-300 transition-colors truncate">
+                  Possible ({possiblePlans.length})
+                </h2>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenPossibleBoard(true)}
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/35 text-[11px] font-extrabold transition-colors shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
+              <span className="px-2 py-0.5 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/25">
+                {promotablePlans.length} Can Promote
+              </span>
+              <span className="px-2 py-0.5 rounded-lg bg-slate-950 text-slate-400 border border-slate-800">
+                {shelvedPlans.length} Won&apos;t Activate
+              </span>
+            </div>
+
+            {possiblePlans.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => handleOpenPossibleBoard(true)}
+                className="w-full p-3 rounded-2xl border border-dashed border-slate-800 hover:border-cyan-500/35 text-center space-y-1 transition-colors"
+              >
+                <p className="text-[11px] text-slate-400">
+                  Capture possible &amp; parked roadmaps with activation parameters.
+                </p>
+                <span className="inline-block text-[11px] font-bold text-cyan-400">
+                  Open Possible List →
+                </span>
+              </button>
+            ) : (
+              <div className="space-y-1.5">
+                {possiblePlans.map(plan => {
+                  const isPromotable = plan.status === 'possible';
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => handleJumpToPossibleCard(plan.id)}
+                      className={`w-full text-left p-2.5 rounded-xl border transition-all space-y-1 ${
+                        isViewingPossibleBoard && highlightedPossibleId === plan.id
+                          ? 'bg-cyan-500/15 border-cyan-500/45'
+                          : 'bg-slate-950/70 border-slate-800/90 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center space-x-1.5 min-w-0">
+                          <span
+                            className={`w-2 h-2 rounded-full shrink-0 ${
+                              isPromotable ? 'bg-cyan-400' : 'bg-slate-500'
+                            }`}
+                          />
+                          <span className="text-xs font-bold text-slate-200 truncate">
+                            {plan.title || 'Untitled Roadmap'}
+                          </span>
+                        </span>
+                        <span
+                          className={`shrink-0 text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                            isPromotable
+                              ? 'bg-cyan-500/15 text-cyan-300'
+                              : 'bg-slate-900 text-slate-500'
+                          }`}
+                        >
+                          {isPromotable ? 'Promote' : "Won't"}
+                        </span>
+                      </div>
+                      {plan.activationCondition?.trim() && (
+                        <div className="flex items-center space-x-1 text-[10px] text-amber-300/80 truncate">
+                          <Zap className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">{plan.activationCondition}</span>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => handleOpenPossibleBoard(false)}
+                  className={`w-full py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-colors ${
+                    isViewingPossibleBoard
+                      ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/40'
+                      : 'bg-slate-950 hover:bg-slate-800 text-cyan-300 border-slate-800'
+                  }`}
+                >
+                  {isViewingPossibleBoard ? 'Viewing Possible List' : 'Manage All Possible →'}
+                </button>
+              </div>
+            )}
+          </div>
         </aside>
 
-        {/* RIGHT MAIN AREA: WRITTEN STAGE-GATE DOCUMENT */}
+        {/* RIGHT MAIN AREA: POSSIBLE ROADMAPS BOARD OR ACTIVE WRITTEN STAGE-GATE DOCUMENT */}
         <section className="lg:col-span-9 space-y-5">
-          {!activePlan ? (
+          {isViewingPossibleBoard ? (
+            <div className="space-y-5">
+              {/* Possible Roadmaps Header */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="inline-flex items-center space-x-1.5 text-[10px] font-extrabold uppercase tracking-widest text-cyan-400">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Roadmap Pipeline &amp; Anti-Distraction Filter</span>
+                    </span>
+                    <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100">
+                      Possible Roadmaps
+                    </h2>
+                    <p className="text-xs sm:text-sm text-slate-400 max-w-2xl">
+                      List candidate roadmaps you might promote to Active, alongside ideas you intentionally won&apos;t activate right now — each with its Name, Description, and exact Activation Parameter.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {possiblePlans.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleCopyPossibleMarkdown}
+                        className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-bold transition-colors"
+                      >
+                        {copiedPossibleMd ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                        )}
+                        <span>{copiedPossibleMd ? 'Copied!' : 'Copy List'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Add New Possible / Won't Activate Roadmap Form */}
+                <form
+                  onSubmit={handleAddPossiblePlan}
+                  className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                      Add Possible Roadmap
+                    </span>
+                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setNewPossibleStatus('possible')}
+                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                          newPossibleStatus === 'possible'
+                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/35'
+                            : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                        }`}
+                      >
+                        Can Promote to Active
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewPossibleStatus('not_pursuing')}
+                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                          newPossibleStatus === 'not_pursuing'
+                            ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                            : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                        }`}
+                      >
+                        Won&apos;t Activate
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                        Roadmap Name *
+                      </label>
+                      <input
+                        ref={newPossibleInputRef}
+                        type="text"
+                        value={newPossibleTitle}
+                        onChange={e => setNewPossibleTitle(e.target.value)}
+                        placeholder="e.g. YouTube Content Engine, Prop Firm Scaling..."
+                        className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="flex items-center space-x-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
+                        <Zap className="w-3 h-3" />
+                        <span>Activation Parameter</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={newPossibleActivation}
+                        onChange={e => setNewPossibleActivation(e.target.value)}
+                        placeholder="e.g. Only activate after Trading Stage 2 + 6 months runway..."
+                        className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                      Description
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={newPossibleDescription}
+                      onChange={e => setNewPossibleDescription(e.target.value)}
+                      placeholder={
+                        newPossibleStatus === 'possible'
+                          ? 'Describe this roadmap and why it is a strong candidate to promote later...'
+                          : 'Describe this roadmap and why you are choosing NOT to activate it right now...'
+                      }
+                      className="w-full bg-slate-900 border border-slate-800 focus:border-slate-600 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none resize-y"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={!newPossibleTitle.trim()}
+                      className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-extrabold shadow-sm transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>
+                        {newPossibleStatus === 'possible'
+                          ? 'Add to Can Promote'
+                          : "Add to Won't Activate"}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Filter Pills */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {(
+                    [
+                      { key: 'all', label: `All (${possiblePlans.length})` },
+                      { key: 'possible', label: `Can Promote (${promotablePlans.length})` },
+                      { key: 'not_pursuing', label: `Won't Activate (${shelvedPlans.length})` }
+                    ] as const
+                  ).map(tab => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setPossibleFilter(tab.key)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                        possibleFilter === tab.key
+                          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/40'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Possible Roadmaps Lists */}
+              {possiblePlans.length === 0 ? (
+                <div className="bg-slate-900/80 border border-dashed border-slate-800 rounded-3xl p-10 text-center space-y-2">
+                  <Sparkles className="w-8 h-8 text-cyan-400/70 mx-auto" />
+                  <h3 className="text-sm font-extrabold text-slate-200">
+                    No possible roadmaps logged yet
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Use the form above to park future roadmap ideas or explicitly log ones you won&apos;t activate — along with the exact activation parameter required before touching them.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {(possibleFilter === 'all' || possibleFilter === 'possible') && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between px-1">
+                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-cyan-300 flex items-center space-x-2">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                          <span>Can Promote to Active ({promotablePlans.length})</span>
+                        </h3>
+                      </div>
+                      {promotablePlans.length === 0 ? (
+                        <div className="p-4 rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 text-xs text-slate-500">
+                          No promotable roadmaps in queue right now.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {promotablePlans.map(renderPossibleRoadmapCard)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(possibleFilter === 'all' || possibleFilter === 'not_pursuing') && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between px-1">
+                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-300/90 flex items-center space-x-2">
+                          <Ban className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Won&apos;t Activate — Shelved ({shelvedPlans.length})</span>
+                        </h3>
+                      </div>
+                      {shelvedPlans.length === 0 ? (
+                        <div className="p-4 rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 text-xs text-slate-500">
+                          No shelved (&quot;Won&apos;t Activate&quot;) roadmaps logged yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {shelvedPlans.map(renderPossibleRoadmapCard)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : !activePlan ? (
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 text-center space-y-4 shadow-xl">
               <BookOpen className="w-10 h-10 text-amber-400 mx-auto" />
               <h2 className="text-xl font-extrabold text-slate-100">Create a Written Strategy Plan</h2>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Map out sequential stages, system states, proximal goals, discipline boundaries, day-in-a-life stories, and the exact gates to unlock each next level — in clean written form.
+                Map out sequential stages, system states, proximal goals, discipline boundaries, day-in-a-life stories, and the exact gates to unlock each next level — or list Possible Roadmaps with activation parameters.
               </p>
-              <button
-                type="button"
-                onClick={handleCreatePlan}
-                className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold shadow-md"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create First Written Plan</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleCreatePlan}
+                  className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold shadow-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create Active Roadmap</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenPossibleBoard(true)}
+                  className="inline-flex items-center space-x-1.5 px-5 py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/35 text-xs font-extrabold"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Add Possible Roadmap</span>
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -621,7 +1292,7 @@ export const StrategyRoadmapsView: React.FC = () => {
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1 min-w-0 space-y-1.5">
                     <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
-                      Written Stage-Gate Roadmap
+                      Active Stage-Gate Roadmap
                     </span>
                     <input
                       type="text"
@@ -637,6 +1308,21 @@ export const StrategyRoadmapsView: React.FC = () => {
                       placeholder="Add a 1-line summary or core thesis for this plan..."
                       className="w-full bg-transparent text-xs sm:text-sm text-slate-400 focus:outline-none focus:text-slate-200 focus:bg-slate-950/80 rounded-lg px-2 -mx-2 py-0.5 transition-colors"
                     />
+                    {(editingActiveParam || (activePlan.activationCondition && activePlan.activationCondition.trim() !== '')) && (
+                      <div className="flex items-center space-x-1.5 pt-0.5 text-[11px] text-amber-300/90">
+                        <Zap className="w-3 h-3 text-amber-400 shrink-0" />
+                        <span className="font-bold text-slate-500 shrink-0">Activation Parameter:</span>
+                        <input
+                          type="text"
+                          value={activePlan.activationCondition || ''}
+                          onFocus={() => setEditingActiveParam(true)}
+                          onBlur={() => setEditingActiveParam(false)}
+                          onChange={e => updateActivePlan({ activationCondition: e.target.value })}
+                          placeholder="Activation parameter..."
+                          className="flex-1 min-w-0 bg-transparent focus:bg-slate-950/80 rounded px-1.5 py-0.5 text-amber-300 focus:outline-none"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -818,7 +1504,7 @@ export const StrategyRoadmapsView: React.FC = () => {
                 {pullNotice && (
                   <div className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-xs font-bold text-emerald-300">
                     <span>✓ {pullNotice}</span>
-                    {activeWeeklyPlan && (
+                    {activeWeeklyPlan && pullNotice.includes(`to Week ${activeWeeklyPlan.weekNumber}`) && (
                       <button
                         type="button"
                         onClick={() => {
