@@ -18,6 +18,7 @@ import {
 import { SupabaseSyncModal } from './SupabaseSyncModal';
 import { AuthModal } from './AuthModal';
 import { AdminModal } from './AdminModal';
+import { LEVEL_META, getLevelCapabilities } from '../../lib/levelFeatures';
 
 export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGWS }) => {
   const { 
@@ -146,23 +147,19 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
     }
   };
 
+  const caps = getLevelCapabilities(systemLevel);
+
   // Filter nav tabs according to selected progressive system level (1 to 5)
   const allNavItems = [
-    { id: 'planning' as const, label: 'Planning Hub', icon: Compass, minLevel: 1 },
-    { id: 'checklist' as const, label: 'Checklist', icon: CheckCircle2, minLevel: 1 },
-    { id: 'gws' as const, label: 'GWS Studio', icon: Timer, minLevel: 2 },
-    { id: 'review' as const, label: 'Review Hub', icon: TrendingUp, minLevel: 1 },
+    { id: 'planning' as const, label: 'Planning Hub', icon: Compass, enabled: caps.dailyPlan },
+    { id: 'checklist' as const, label: 'Checklist', icon: CheckCircle2, enabled: caps.dailyChecklist },
+    { id: 'gws' as const, label: 'GWS Studio', icon: Timer, enabled: caps.gwsStudio },
+    { id: 'review' as const, label: 'Review Hub', icon: TrendingUp, enabled: caps.dailyReview }
   ];
 
-  const navItems = allNavItems.filter(item => systemLevel >= item.minLevel);
+  const navItems = allNavItems.filter(item => item.enabled);
 
-  const levelDescriptions = {
-    1: { name: 'Level 1: Basic Flow', desc: 'Daily checklist, mission plan & daily review' },
-    2: { name: 'Level 2: Deep Work', desc: 'Adds GWS cockpit, stopwatch & reflexions' },
-    3: { name: 'Level 3: Goal Crusher', desc: 'Adds Weekly Goal Crusher (10 Pts) & Weeks Matrix' },
-    4: { name: 'Level 4: Monthly & Macro', desc: 'Adds Monthly Plan plus Monthly & Quarterly Reviews' },
-    5: { name: 'Level 5: Yearly Strategy', desc: 'Adds Yearly Plan & Yearly Review across all timeframes' }
-  };
+  const levelDescriptions = LEVEL_META;
 
   return (
     <>
@@ -262,13 +259,17 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     </>
                   )}
                 </span>
-                <span className="text-slate-600">|</span>
-                <span>
-                  GWS: <strong className="text-slate-100 font-mono">{totalGwsHours}h</strong>
-                </span>
+                {caps.gwsStudio && (
+                  <>
+                    <span className="text-slate-600">|</span>
+                    <span>
+                      GWS: <strong className="text-slate-100 font-mono">{totalGwsHours}h</strong>
+                    </span>
+                  </>
+                )}
               </div>
 
-              {/* Start GWS / Live Active Timer Button (with 1-click Cancel X when active) */}
+              {/* Start GWS / Live Active Timer Button (shown from LVL 2+, or if a timer is already running) */}
               {hasActiveGwsTimer ? (
                 <div
                   className={`flex items-center rounded-lg font-bold text-xs uppercase tracking-wider shadow-md whitespace-nowrap overflow-hidden ${
@@ -309,7 +310,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
-              ) : (
+              ) : caps.gwsStudio ? (
                 <button
                   onClick={onOpenQuickGWS}
                   title="Start a GWS deep work sprint"
@@ -320,7 +321,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     + GWS<span className="hidden xl:inline"> Sprint</span>
                   </span>
                 </button>
-              )}
+              ) : null}
 
               {/* Notification Bell (Missing Day / Week Plan Alerts) */}
               <div className="relative">
@@ -490,14 +491,14 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                     <X className="w-3 h-3" />
                   </button>
                 </div>
-              ) : (
+              ) : caps.gwsStudio ? (
                 <button
                   onClick={onOpenQuickGWS}
                   className="px-2.5 py-1.5 rounded-lg font-bold text-xs whitespace-nowrap bg-amber-500 text-slate-950"
                 >
                   + GWS
                 </button>
-              )}
+              ) : null}
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="p-1.5 text-slate-400 hover:text-slate-100"

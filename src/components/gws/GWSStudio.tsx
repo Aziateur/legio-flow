@@ -8,6 +8,7 @@ import {
 } from '../../context/StorageContext';
 import { GWSSession, ProblemCategory } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 import { 
@@ -64,6 +65,7 @@ interface GWSStudioProps {
 
 export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }) => {
   const { 
+    systemLevel,
     selectedDate, 
     gwsSessions, 
     activeGwsTimer,
@@ -85,6 +87,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     recordProblemRecurrence
   } = useStorage();
 
+  const caps = getLevelCapabilities(systemLevel);
   const currentDailyEntry = getEntryForDate(selectedDate);
   const todayPriorities = getPriorityItemsForEntry(currentDailyEntry).filter(p => p.text.trim().length > 0);
   const activeWeeklyPlan =
@@ -604,8 +607,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                 </label>
               )}
 
-              {/* Strategic Alignment Tag (Optional — powers Stated Priorities vs. Actual Hours in Reviews) */}
-              {(activeFocusOptions.length > 0 || strategyPlans.length > 0 || lifePillars.length > 0) && (
+              {/* Strategic Alignment Tag (LVL 4+: powers Stated Priorities vs. Actual Hours in Reviews) */}
+              {caps.gwsFocusAndRoadmapTagging &&
+                (activeFocusOptions.length > 0 || strategyPlans.length > 0 || lifePillars.length > 0) && (
                 <div className="pt-2 space-y-2">
                   {activeFocusOptions.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">

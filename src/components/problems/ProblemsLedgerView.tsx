@@ -26,12 +26,14 @@ import {
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemItemRow } from './ProblemItemRow';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  Circle,
   Crosshair,
   Filter,
   Inbox,
@@ -62,6 +64,8 @@ const COLOR_KEYS: ProblemColorKey[] = [
 
 export const ProblemsLedgerView: React.FC = () => {
   const {
+    systemLevel,
+    setSystemLevel,
     todayDate,
     problems,
     problemCategories,
@@ -73,8 +77,11 @@ export const ProblemsLedgerView: React.FC = () => {
     selectedWeekId,
     addProblem,
     recordProblemRecurrence,
-    updateProblem
+    updateProblem,
+    deleteProblem
   } = useStorage();
+
+  const caps = getLevelCapabilities(systemLevel);
 
   const maxTop = problemSettings.maxTopConstraints || 3;
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
@@ -323,6 +330,185 @@ export const ProblemsLedgerView: React.FC = () => {
     (severityFilter !== 'all' ? 1 : 0) +
     (tagFilter !== 'all' ? 1 : 0) +
     (searchQuery.trim() ? 1 : 0);
+
+  // ================================================================
+  // LVL 2 LITE MODE: Simple Friction Inbox (Zero Overwhelm)
+  // ================================================================
+  if (!caps.problemsConstraintEngine) {
+    const activeLite = topLevelProblems
+      .filter(p => p.status !== 'solved')
+      .sort((a, b) => getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a)));
+    const solvedLite = topLevelProblems
+      .filter(p => p.status === 'solved')
+      .sort((a, b) => getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a)));
+    const showSolvedLite = activeTab === 'solved';
+    const liteList = showSolvedLite ? solvedLite : activeLite;
+
+    const handleLiteCapture = (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = quickTitle.trim();
+      if (!trimmed) return;
+      const existing = problems.find(p => p.title.trim().toLowerCase() === trimmed.toLowerCase());
+      if (existing) {
+        recordProblemRecurrence(existing.id, { date: selectedDate, sourceType: 'daily' });
+      } else {
+        addProblem({
+          title: trimmed,
+          category: problemCategories[0]?.id || 'mindset',
+          scale: 'friction',
+          severity: 2,
+          impact: severityToImpact(2),
+          tags: [],
+          sourceType: 'daily',
+          date: selectedDate
+        });
+      }
+      setQuickTitle('');
+    };
+
+    return (
+      <div className="w-full max-w-[960px] mx-auto space-y-6">
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-orange-400 flex items-center space-x-1.5">
+                <Inbox className="w-3.5 h-3.5" />
+                <span>Friction Inbox · LVL 2 Lite</span>
+              </span>
+              <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
+                Notice What Trips You Up
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Capture daily &amp; GWS sprint frictions in one flat list. Tap +1 when something repeats, or check it off when resolved.
+              </p>
+            </div>
+
+            <div className="inline-flex rounded-xl bg-slate-950 border border-slate-800 p-1 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setActiveTab('constraints')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  !showSolvedLite
+                    ? 'bg-orange-500 text-slate-950'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Active ({activeLite.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('solved')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
+                  showSolvedLite
+                    ? 'bg-emerald-500 text-slate-950'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Solved ({solvedLite.length})
+              </button>
+            </div>
+          </div>
+
+          <form onSubmit={handleLiteCapture} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={quickTitle}
+              onChange={e => setQuickTitle(e.target.value)}
+              placeholder="Capture a friction or distraction & press Enter..."
+              className="flex-1 bg-slate-950 border border-slate-800 focus:border-orange-500/50 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!quickTitle.trim()}
+              className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Log</span>
+            </button>
+          </form>
+
+          {liteList.length === 0 ? (
+            <div className="p-8 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+              {showSolvedLite
+                ? 'No resolved frictions yet.'
+                : 'Inbox clean! Any mid-sprint GWS slips or daily frictions will show up here.'}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {liteList.map(p => {
+                const isSolved = p.status === 'solved';
+                const hits = getClusterTotalHits(problems, p);
+                return (
+                  <div
+                    key={p.id}
+                    className={`flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-colors ${
+                      isSolved
+                        ? 'bg-emerald-500/5 border-emerald-500/20 text-slate-500'
+                        : 'bg-slate-950 border-slate-800 text-slate-100'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => updateProblem(p.id, { status: isSolved ? 'open' : 'solved' })}
+                      className="flex items-center space-x-3 min-w-0 flex-1 text-left"
+                    >
+                      {isSolved ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <Circle className="w-4 h-4 text-slate-500 hover:text-emerald-400 shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <div className={`text-sm font-semibold truncate ${isSolved ? 'line-through text-slate-500' : 'text-slate-100'}`}>
+                          {p.title}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-500">
+                          Last hit: {getLastOccurrenceDate(p)}
+                        </div>
+                      </div>
+                    </button>
+
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          recordProblemRecurrence(p.id, { date: selectedDate, sourceType: 'daily' })
+                        }
+                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 font-mono text-xs font-bold text-orange-300"
+                        title="Happened again (+1)"
+                      >
+                        ×{hits} +1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteProblem(p.id)}
+                        className="p-1.5 text-slate-600 hover:text-rose-400 transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span>
+              Ready for Top 3 Root Constraints, S1–S5 severity grading, clustering &amp; fix experiments?
+            </span>
+            <button
+              type="button"
+              onClick={() => setSystemLevel(3)}
+              className="px-3 py-1 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 font-bold transition-colors"
+            >
+              Upgrade to LVL 3 →
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-[1280px] mx-auto space-y-6">

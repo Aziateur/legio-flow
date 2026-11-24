@@ -4,6 +4,7 @@ import { ChecklistItem, DailyEntry, DailyPriorityItem, GWSSession } from '../../
 import { getQuarterKeyForDate, getMonthInfo } from '../../lib/macroAnalytics';
 import { getChecklistDueStatus, getChecklistScheduleLabel } from '../../lib/checklistSchedule';
 import { IMPACT_META, getProblemImpact, hasExistingParent, isProblemGuardrail } from '../../lib/problems';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
   ChevronDown,
   ChevronUp,
@@ -50,6 +51,7 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
   onPullAllScheduledDue
 }) => {
   const {
+    systemLevel,
     getMonthlyPlan,
     getQuarterlyPlan,
     problems,
@@ -59,6 +61,8 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
     setPlanningSubTab,
     setReviewSubTab
   } = useStorage();
+
+  const caps = getLevelCapabilities(systemLevel);
 
   const [open, setOpen] = useState<boolean>(() => {
     try {
@@ -79,12 +83,14 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
   const monthFocuses = (monthPlan.topFocuses || []).map(f => f.trim()).filter(Boolean);
   const quarterFocuses = (quarterPlan.topFocuses || []).map(f => f.trim()).filter(Boolean);
   const hasCompass =
-    monthFocuses.length > 0 ||
-    quarterFocuses.length > 0 ||
-    Boolean(monthPlan.focusTheme?.trim()) ||
-    Boolean(quarterPlan.focusTheme?.trim());
+    caps.dailyMacroCompass &&
+    (monthFocuses.length > 0 ||
+      quarterFocuses.length > 0 ||
+      Boolean(monthPlan.focusTheme?.trim()) ||
+      Boolean(quarterPlan.focusTheme?.trim()));
 
-  const showGuardrails = problemSettings.showPreFlightInDaily !== false;
+  const showGuardrails =
+    caps.problemsConstraintEngine && problemSettings.showPreFlightInDaily !== false;
   const activeGuardrails = useMemo(() => {
     if (!showGuardrails) return [];
     const topLevel = problems.filter(
@@ -100,7 +106,8 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
       });
   }, [problems, showGuardrails]);
 
-  const hasCorrection = Boolean(latestPreviousReview || latestGwsCommitment);
+  const effectiveGwsCommitment = caps.gwsStudio ? latestGwsCommitment : undefined;
+  const hasCorrection = Boolean(latestPreviousReview || effectiveGwsCommitment);
   const pullCount = unfinishedFromPrevDay.length + scheduledDueForDay.length;
   const hasAnyContent = hasCompass || activeGuardrails.length > 0 || hasCorrection || pullCount > 0;
 
@@ -189,7 +196,7 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
               <Sparkles className="w-3 h-3 shrink-0" />
               <span className="truncate">
                 {latestPreviousReview?.reviewNotes?.trim() ||
-                  latestGwsCommitment?.reflexions.improveNext?.trim()}
+                  effectiveGwsCommitment?.reflexions.improveNext?.trim()}
               </span>
             </button>
           )}
@@ -360,9 +367,9 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
                         </span>
                       </p>
                     )}
-                    {latestGwsCommitment?.reflexions.improveNext?.trim() && (
+                    {effectiveGwsCommitment?.reflexions.improveNext?.trim() && (
                       <p className="text-amber-300/90 text-[11px]">
-                        Next Sprint Focus: &ldquo;{latestGwsCommitment.reflexions.improveNext.trim()}&rdquo;
+                        Next Sprint Focus: &ldquo;{effectiveGwsCommitment.reflexions.improveNext.trim()}&rdquo;
                       </p>
                     )}
                   </div>

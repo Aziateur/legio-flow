@@ -25,16 +25,19 @@ import {
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemItemRow } from './ProblemItemRow';
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Circle,
   Crosshair,
   ExternalLink,
   Plus,
-  Shield
+  Shield,
+  Trash2
 } from 'lucide-react';
 
 interface ProblemLoggerPanelProps {
@@ -78,6 +81,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   onDraftTagsChange
 }) => {
   const {
+    systemLevel,
     todayDate,
     problems,
     problemCategories,
@@ -85,9 +89,13 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     addProblem,
     recordProblemRecurrence,
     updateProblem,
+    deleteProblem,
     setActiveTab,
     setReviewSubTab
   } = useStorage();
+
+  const caps = getLevelCapabilities(systemLevel);
+  const fullEngine = caps.problemsConstraintEngine;
 
   const defaultScale = defaultScaleForSource(sourceType);
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
@@ -182,9 +190,9 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       .slice(0, 4);
   }, [mode, topLevelProblems, problems, displayedProblems]);
 
-  // Active fixes / rules to verify during Daily or Weekly reviews
+  // Active fixes / rules to verify during Daily or Weekly reviews (LVL 3+ Constraint Engine)
   const activeFixesToAudit = useMemo(() => {
-    if (!showAuditStrip) return [];
+    if (!showAuditStrip || !fullEngine) return [];
     const shownIds = new Set(displayedProblems.map(p => p.id));
     return topLevelProblems
       .filter(
@@ -248,6 +256,57 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     });
   };
 
+  // Minimal flat row for LVL 1–2 (zero clustering / severity / experiment overwhelm)
+  const renderLiteRow = (p: ProblemEntry) => {
+    const isSolved = p.status === 'solved';
+    const hits = getClusterTotalHits(problems, p);
+    return (
+      <div
+        key={p.id}
+        className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-xs transition-colors ${
+          isSolved
+            ? 'bg-emerald-500/5 border-emerald-500/20 text-slate-500'
+            : 'bg-slate-900/70 border-slate-800 text-slate-200'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => updateProblem(p.id, { status: isSolved ? 'open' : 'solved' })}
+          className="flex items-center space-x-2 min-w-0 flex-1 text-left"
+          title={isSolved ? 'Reopen friction' : 'Mark resolved'}
+        >
+          {isSolved ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          ) : (
+            <Circle className="w-4 h-4 text-slate-500 hover:text-emerald-400 shrink-0" />
+          )}
+          <span className={`truncate ${isSolved ? 'line-through text-slate-500' : 'font-medium text-slate-100'}`}>
+            {p.title}
+          </span>
+        </button>
+
+        <div className="flex items-center space-x-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleQuickRecur(p)}
+            className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 font-mono text-[10px] font-bold text-orange-300"
+            title="Happened again (+1)"
+          >
+            ×{hits} +1
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteProblem(p.id)}
+            className="p-1 text-slate-600 hover:text-rose-400 transition-colors"
+            title="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // ================================================================
   // MODE 1: ULTRA-FAST COMPACT CAPTURE (GWS Studio & Create Modal)
   // ================================================================
@@ -281,18 +340,20 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             placeholder="1-line friction or blocker & press Enter (triage later in Problem Log)..."
             className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
           />
-          <select
-            value={internalSeverity}
-            onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
-            title="Severity grade (1 Minor to 5 Critical)"
-            className="bg-slate-900 border border-slate-800 rounded-xl px-2 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
-          >
-            {PROBLEM_SEVERITIES.map(sv => (
-              <option key={sv.grade} value={sv.grade}>
-                {sv.code} · {sv.shortLabel}
-              </option>
-            ))}
-          </select>
+          {fullEngine && (
+            <select
+              value={internalSeverity}
+              onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
+              title="Severity grade (1 Minor to 5 Critical)"
+              className="bg-slate-900 border border-slate-800 rounded-xl px-2 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
+            >
+              {PROBLEM_SEVERITIES.map(sv => (
+                <option key={sv.grade} value={sv.grade}>
+                  {sv.code} · {sv.shortLabel}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             onClick={handleLogProblem}
@@ -313,7 +374,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 onClick={() => handleQuickRecur(p)}
                 className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-[10px] text-slate-300 hover:text-orange-200 transition-colors"
               >
-                {p.isTopConstraint && <Crosshair className="w-2.5 h-2.5 text-rose-400" />}
+                {fullEngine && p.isTopConstraint && <Crosshair className="w-2.5 h-2.5 text-rose-400" />}
                 <span className="truncate max-w-[160px]">{p.title}</span>
                 <span className="font-mono text-orange-400 font-bold">+1</span>
               </button>
@@ -323,17 +384,21 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
         {displayedProblems.length > 0 && (
           <div className="space-y-1.5 pt-1">
-            {displayedProblems.map(p => (
-              <ProblemItemRow
-                key={p.id}
-                problem={p}
-                contextDate={date}
-                contextSourceType={sourceType}
-                contextSourceRef={sourceRef}
-                targetWeekId={targetWeekId}
-                compact
-              />
-            ))}
+            {displayedProblems.map(p =>
+              fullEngine ? (
+                <ProblemItemRow
+                  key={p.id}
+                  problem={p}
+                  contextDate={date}
+                  contextSourceType={sourceType}
+                  contextSourceRef={sourceRef}
+                  targetWeekId={targetWeekId}
+                  compact
+                />
+              ) : (
+                renderLiteRow(p)
+              )
+            )}
           </div>
         )}
       </div>
@@ -363,17 +428,19 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
         </div>
 
         <div className="flex items-center space-x-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('review');
-              setReviewSubTab('problems');
-            }}
-            className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
-          >
-            <span>Problem Log</span>
-            <ExternalLink className="w-3 h-3" />
-          </button>
+          {caps.problemsInboxLite && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('review');
+                setReviewSubTab('problems');
+              }}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
+            >
+              <span>{fullEngine ? 'Problem Log' : 'Friction Inbox'}</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+          )}
 
           {(mode === 'weekly_triage' || mode === 'roadmap') && (
             <button
@@ -403,24 +470,28 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 }
               }}
               placeholder={
-                sourceType === 'daily'
+                !fullEngine
+                  ? 'Note what got in your way today & press Enter...'
+                  : sourceType === 'daily'
                   ? 'Capture today’s friction (press Enter — triage deeper in Problem Log)...'
                   : 'Log a recurring bottleneck or constraint & press Enter...'
               }
               className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
             />
-            <select
-              value={internalSeverity}
-              onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
-              title="Severity grade (1 Minor to 5 Critical)"
-              className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
-            >
-              {PROBLEM_SEVERITIES.map(sv => (
-                <option key={sv.grade} value={sv.grade}>
-                  {sv.code} · {sv.shortLabel}
-                </option>
-              ))}
-            </select>
+            {fullEngine && (
+              <select
+                value={internalSeverity}
+                onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
+                title="Severity grade (1 Minor to 5 Critical)"
+                className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
+              >
+                {PROBLEM_SEVERITIES.map(sv => (
+                  <option key={sv.grade} value={sv.grade}>
+                    {sv.code} · {sv.shortLabel}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={handleLogProblem}
@@ -445,7 +516,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                   onClick={() => handleQuickRecur(p)}
                   className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-[11px] text-slate-300 hover:text-orange-200 transition-colors"
                 >
-                  {p.isTopConstraint && <Crosshair className="w-3 h-3 text-rose-400 shrink-0" />}
+                  {fullEngine && p.isTopConstraint && <Crosshair className="w-3 h-3 text-rose-400 shrink-0" />}
                   <span className="truncate max-w-[200px]">{p.title}</span>
                   <span className="font-mono text-[10px] text-orange-400 font-extrabold">
                     ×{getClusterTotalHits(problems, p)} +1
@@ -508,26 +579,30 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
           {/* Problems List */}
           {displayedProblems.length === 0 ? (
             <div className="p-4 rounded-xl bg-slate-900/50 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
-              No problems logged for this {sourceType} scope yet.
+              No {fullEngine ? 'problems' : 'frictions'} logged for this {sourceType} scope yet.
             </div>
           ) : (
             <div className="space-y-2">
-              {displayedProblems.map(p => (
-                <ProblemItemRow
-                  key={p.id}
-                  problem={p}
-                  contextDate={date}
-                  contextSourceType={sourceType}
-                  contextSourceRef={sourceRef}
-                  targetWeekId={targetWeekId}
-                  periodOccurrenceCount={
-                    dateRange
-                      ? countClusterOccurrencesInRange(problems, p, dateRange.startDate, dateRange.endDate)
-                      : undefined
-                  }
-                  compact={mode === 'roadmap'}
-                />
-              ))}
+              {displayedProblems.map(p =>
+                fullEngine ? (
+                  <ProblemItemRow
+                    key={p.id}
+                    problem={p}
+                    contextDate={date}
+                    contextSourceType={sourceType}
+                    contextSourceRef={sourceRef}
+                    targetWeekId={targetWeekId}
+                    periodOccurrenceCount={
+                      dateRange
+                        ? countClusterOccurrencesInRange(problems, p, dateRange.startDate, dateRange.endDate)
+                        : undefined
+                    }
+                    compact={mode === 'roadmap'}
+                  />
+                ) : (
+                  renderLiteRow(p)
+                )
+              )}
             </div>
           )}
 

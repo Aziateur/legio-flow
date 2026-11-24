@@ -24,6 +24,7 @@ import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import { MacroReviewView } from './MacroReviewView';
 import { computeGwsAllocationInRange } from '../../lib/macroAnalytics';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
   formatProblemsForReviewText,
   hasExistingParent,
@@ -236,6 +237,7 @@ export const ReviewHub: React.FC = () => {
     setSelectedWeekId: selectWeekGlobal
   } = useStorage();
 
+  const caps = getLevelCapabilities(systemLevel);
   const currentDailyEntry = getEntryForDate(selectedDate);
   const currentWeeklyPlan = weeklyPlans[selectedWeekId] || weeklyPlans['week_1'] || Object.values(weeklyPlans)[0];
 
@@ -897,8 +899,11 @@ export const ReviewHub: React.FC = () => {
     jumpTarget?: () => void;
   }
 
-  // 1. Gather all Daily reviews
-  const dailyVaultItems: VaultItem[] = Object.values(dailyEntries)
+  // 1. Gather all Daily reviews (only compiled when Vault tab is active — prevents O(N²) rollups on every keystroke)
+  const isVaultOpen = reviewSubTab === 'vault' && caps.vault;
+  const dailyVaultItems: VaultItem[] = !isVaultOpen
+    ? []
+    : Object.values(dailyEntries)
     .filter(
       d =>
         (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
@@ -944,7 +949,10 @@ export const ReviewHub: React.FC = () => {
     });
 
   // 2. Gather all Weekly reviews (excluding completely blank auto-generated weeks)
-  const weeklyVaultItems: VaultItem[] = Object.values(weeklyPlans)
+  const weeklyVaultItems: VaultItem[] =
+    !isVaultOpen || !caps.weeklyReview
+      ? []
+      : Object.values(weeklyPlans)
     .filter(
       w =>
         w.tasks.length > 0 ||
@@ -1015,7 +1023,10 @@ export const ReviewHub: React.FC = () => {
     });
 
   // 3. Gather all GWS reflexions
-  const gwsVaultItems: VaultItem[] = gwsSessions.map(s => ({
+  const gwsVaultItems: VaultItem[] =
+    !isVaultOpen || !caps.gwsReview
+      ? []
+      : gwsSessions.map(s => ({
     id: `vault_gws_${s.id}`,
     type: 'gws',
     dateOrPeriod: s.date,
@@ -1032,7 +1043,10 @@ export const ReviewHub: React.FC = () => {
   }));
 
   // 4. Gather all Monthly reviews (from saved monthly reviews OR months with active smaller-scale reviews)
-  const monthlyVaultItems: VaultItem[] = allKnownMonths
+  const monthlyVaultItems: VaultItem[] =
+    !isVaultOpen || !caps.monthlyReview
+      ? []
+      : allKnownMonths
     .map(mKey => {
       const mData = compileMonthData(mKey);
       const hasActivity =
@@ -1088,7 +1102,10 @@ export const ReviewHub: React.FC = () => {
     .filter(Boolean) as VaultItem[];
 
   // 5. Gather all Quarterly reviews (from saved quarterly reviews OR quarters with active plans/data)
-  const quarterlyVaultItems: VaultItem[] = allKnownQuarters
+  const quarterlyVaultItems: VaultItem[] =
+    !isVaultOpen || !caps.quarterlyReview
+      ? []
+      : allKnownQuarters
     .map(qKey => {
       const qData = compileQuarterData(qKey);
       const qPlan = quarterlyPlans[qKey];
@@ -1153,7 +1170,10 @@ export const ReviewHub: React.FC = () => {
     .filter(Boolean) as VaultItem[];
 
   // 6. Gather all Yearly reviews (from saved yearly reviews OR active years with plans/data)
-  const yearlyVaultItems: VaultItem[] = allKnownYears
+  const yearlyVaultItems: VaultItem[] =
+    !isVaultOpen || !caps.yearlyReview
+      ? []
+      : allKnownYears
     .map(yKey => {
       const yData = compileYearData(yKey);
       const hasActivity =
@@ -1526,51 +1546,64 @@ export const ReviewHub: React.FC = () => {
               )}
             </div>
 
-            {/* Group 2: Cross-Cutting Ledgers (Problems & Vault) */}
-            <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
-              <button
-                type="button"
-                onClick={() => setReviewSubTab('problems')}
-                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                  reviewSubTab === 'problems'
-                    ? 'bg-orange-500 text-slate-950 shadow-sm shadow-orange-500/20'
-                    : 'text-slate-300 hover:text-orange-300 hover:bg-slate-900'
-                }`}
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>Problems{activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}</span>
-              </button>
+            {/* Group 2: Cross-Cutting Ledgers (Problems Inbox LVL 2+ & Vault LVL 3+) */}
+            {(caps.problemsInboxLite || caps.vault) && (
+              <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
+                {caps.problemsInboxLite && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('problems')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      reviewSubTab === 'problems'
+                        ? 'bg-orange-500 text-slate-950 shadow-sm shadow-orange-500/20'
+                        : 'text-slate-300 hover:text-orange-300 hover:bg-slate-900'
+                    }`}
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>
+                      {caps.problemsConstraintEngine ? 'Problems' : 'Friction Inbox'}
+                      {activeProblemCount > 0 ? ` (${activeProblemCount})` : ''}
+                    </span>
+                  </button>
+                )}
 
-              <button
-                type="button"
-                onClick={() => setReviewSubTab('vault')}
-                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                  reviewSubTab === 'vault'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Vault ({allVaultItems.length})</span>
-              </button>
-            </div>
+                {caps.vault && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewSubTab('vault')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      reviewSubTab === 'vault'
+                        ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Vault{isVaultOpen ? ` (${allVaultItems.length})` : ''}</span>
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Compact Single-Plus Action Button */}
             <button
               type="button"
               onClick={() => {
                 setCreateReviewType(
-                  reviewSubTab === 'yearly'
+                  reviewSubTab === 'yearly' && caps.yearlyReview
                     ? 'yearly'
-                    : reviewSubTab === 'quarterly'
+                    : reviewSubTab === 'quarterly' && caps.quarterlyReview
                     ? 'quarterly'
-                    : reviewSubTab === 'monthly'
+                    : reviewSubTab === 'monthly' && caps.monthlyReview
                     ? 'monthly'
-                    : reviewSubTab === 'weekly'
+                    : reviewSubTab === 'weekly' && caps.weeklyReview
                     ? 'weekly'
+                    : reviewSubTab === 'gws' && caps.gwsReview
+                    ? 'gws'
                     : reviewSubTab === 'daily'
                     ? 'daily'
-                    : 'weekly'
+                    : caps.weeklyReview
+                    ? 'weekly'
+                    : 'daily'
                 );
                 setShowCreateReviewModal(true);
               }}
@@ -2228,8 +2261,8 @@ export const ReviewHub: React.FC = () => {
                 )}
               </div>
 
-              {/* GWS Sprints Logged Today (Data to Reflect On) */}
-              {(() => {
+              {/* GWS Sprints Logged Today (Data to Reflect On — LVL 2+) */}
+              {caps.gwsStudio && (() => {
                 const todayGwsList = gwsSessions.filter(s => s.date === selectedDate);
                 const todayGwsMinutes = todayGwsList.reduce((acc, s) => acc + (s.actualMinutes || 0), 0);
                 return (
@@ -2888,7 +2921,8 @@ export const ReviewHub: React.FC = () => {
                   </span>
                 </div>
 
-                {(weekGwsAllocation.totalSessions > 0 || weekGwsAllocation.neglectedFocuses.length > 0) && (
+                {caps.gwsFocusAndRoadmapTagging &&
+                  (weekGwsAllocation.totalSessions > 0 || weekGwsAllocation.neglectedFocuses.length > 0) && (
                   <GwsAllocationCard
                     compact
                     allocation={weekGwsAllocation}
@@ -4110,56 +4144,64 @@ export const ReviewHub: React.FC = () => {
               </h2>
             </div>
 
-            {/* Type selector */}
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
-              <button
-                type="button"
-                onClick={() => setCreateReviewType('yearly')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  createReviewType === 'yearly'
-                    ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Yearly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreateReviewType('quarterly')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  createReviewType === 'quarterly'
-                    ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Quarterly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreateReviewType('monthly')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  createReviewType === 'monthly'
-                    ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreateReviewType('weekly')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  createReviewType === 'weekly'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Weekly
-              </button>
+            {/* Type selector (filtered by systemLevel) */}
+            <div className="flex flex-wrap gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+              {caps.yearlyReview && (
+                <button
+                  type="button"
+                  onClick={() => setCreateReviewType('yearly')}
+                  className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    createReviewType === 'yearly'
+                      ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Yearly
+                </button>
+              )}
+              {caps.quarterlyReview && (
+                <button
+                  type="button"
+                  onClick={() => setCreateReviewType('quarterly')}
+                  className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    createReviewType === 'quarterly'
+                      ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Quarterly
+                </button>
+              )}
+              {caps.monthlyReview && (
+                <button
+                  type="button"
+                  onClick={() => setCreateReviewType('monthly')}
+                  className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    createReviewType === 'monthly'
+                      ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Monthly
+                </button>
+              )}
+              {caps.weeklyReview && (
+                <button
+                  type="button"
+                  onClick={() => setCreateReviewType('weekly')}
+                  className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    createReviewType === 'weekly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Weekly
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setCreateReviewType('daily')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
+                className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
                   createReviewType === 'daily'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200'
@@ -4167,17 +4209,19 @@ export const ReviewHub: React.FC = () => {
               >
                 Daily
               </button>
-              <button
-                type="button"
-                onClick={() => setCreateReviewType('gws')}
-                className={`py-2 rounded-xl text-[11px] font-bold transition-all ${
-                  createReviewType === 'gws'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                GWS
-              </button>
+              {caps.gwsReview && (
+                <button
+                  type="button"
+                  onClick={() => setCreateReviewType('gws')}
+                  className={`flex-1 min-w-[70px] py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    createReviewType === 'gws'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  GWS
+                </button>
+              )}
             </div>
 
             {/* FORM 00: YEARLY REVIEW CREATION */}

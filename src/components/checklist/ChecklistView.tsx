@@ -12,6 +12,7 @@ import {
   getChecklistDueStatus
 } from '../../lib/checklistSchedule';
 import { AllowancesBoard } from './AllowancesBoard';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
   Activity,
   ArrowDownToLine,
@@ -198,6 +199,7 @@ function formatTotalVolume(count: number, perRep?: number, unit?: string): strin
 
 export const ChecklistView: React.FC = () => {
   const {
+    systemLevel,
     checklistItems,
     saveChecklistItems,
     dailyEntries,
@@ -211,7 +213,9 @@ export const ChecklistView: React.FC = () => {
     setPlanningSubTab
   } = useStorage();
 
+  const caps = getLevelCapabilities(systemLevel);
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
+  const effectiveViewFilter: ViewFilter = !caps.repsBoard && viewFilter === 'tally' ? 'all' : viewFilter;
   const [drafts, setDrafts] = useState<Record<ChecklistRecurrence, string>>({
     daily: '',
     weekly: '',
@@ -583,14 +587,15 @@ export const ChecklistView: React.FC = () => {
       : '0.0';
 
   const recurringVolumeRows = useMemo(() => {
-    return recurringItems
+    return checklistItems
+      .filter((i) => i.recurrence === 'daily' || i.recurrence === 'weekly' || i.recurrence === 'monthly')
       .map((item) => ({
         item,
         count: new Set(item.completedPeriods || []).size,
         doneCurrent: isItemDone(item)
       }))
       .sort((a, b) => b.count - a.count);
-  }, [recurringItems, selectedDate, selectedWeekId]);
+  }, [checklistItems, selectedDate, selectedWeekId]);
 
   const totalRecurringReps = recurringVolumeRows.reduce((acc, r) => acc + r.count, 0);
   const maxRecurringReps = Math.max(1, ...recurringVolumeRows.map((r) => r.count));
@@ -815,7 +820,7 @@ export const ChecklistView: React.FC = () => {
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
-                    <option value="tally">Reps Board</option>
+                    {caps.repsBoard && <option value="tally">Reps Board</option>}
                     <option value="none">One-Off</option>
                   </select>
 
@@ -916,7 +921,9 @@ export const ChecklistView: React.FC = () => {
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2.5">
             <ListChecks className="h-5 w-5 text-amber-400" />
-            <h1 className="text-lg font-bold tracking-tight text-slate-100">Checklist & Reps Board</h1>
+            <h1 className="text-lg font-bold tracking-tight text-slate-100">
+              {caps.repsBoard ? 'Checklist & Reps Board' : 'Checklist & Allowances'}
+            </h1>
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
               {doneCount} / {totalCount} Done
             </span>
@@ -924,10 +931,12 @@ export const ChecklistView: React.FC = () => {
               <Flame className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
               Best Streak: {bestActiveStreak.count > 0 ? `${bestActiveStreak.count}${bestActiveStreak.unit}` : '0'}
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
-              <BarChart3 className="h-3.5 w-3.5 text-cyan-400" />
-              {totalCombinedReps} Total Reps
-            </span>
+            {caps.repsBoard && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 font-mono">
+                <BarChart3 className="h-3.5 w-3.5 text-cyan-400" />
+                {totalCombinedReps} Total Reps
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400">
             {selectedDate} • {weekLabel} • {monthKey}
@@ -941,7 +950,7 @@ export const ChecklistView: React.FC = () => {
                 { id: 'all', label: 'All' },
                 { id: 'recurring', label: 'Recurring' },
                 { id: 'none', label: 'One-Off' },
-                { id: 'tally', label: 'Reps Board' },
+                ...(caps.repsBoard ? [{ id: 'tally' as const, label: 'Reps Board' }] : []),
                 { id: 'allowances', label: 'Allowances' }
               ] as { id: ViewFilter; label: string }[]
             ).map((tab) => (
@@ -950,7 +959,7 @@ export const ChecklistView: React.FC = () => {
                 type="button"
                 onClick={() => setViewFilter(tab.id)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  viewFilter === tab.id
+                  effectiveViewFilter === tab.id
                     ? 'bg-amber-500/20 text-amber-300'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -973,7 +982,7 @@ export const ChecklistView: React.FC = () => {
       </div>
 
       {/* 1. Recurring Sections (Daily / Weekly / Monthly with Consecutive Streaks) */}
-      {(viewFilter === 'all' || viewFilter === 'recurring') && (
+      {(effectiveViewFilter === 'all' || effectiveViewFilter === 'recurring') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
             <Repeat className="h-4 w-4 text-amber-400" />
@@ -988,7 +997,7 @@ export const ChecklistView: React.FC = () => {
       )}
 
       {/* 2. One-Off Section */}
-      {(viewFilter === 'all' || viewFilter === 'none') && (
+      {(effectiveViewFilter === 'all' || effectiveViewFilter === 'none') && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 px-1">
             <CheckCircle2 className="h-4 w-4 text-slate-400" />
@@ -1000,8 +1009,8 @@ export const ChecklistView: React.FC = () => {
         </section>
       )}
 
-      {/* 3. REPS BOARD — Mini Volume Dashboard below Checklist (GWS + Regular Habit Reps + Anytime Reps) */}
-      {(viewFilter === 'all' || viewFilter === 'tally') && (
+      {/* 3. REPS BOARD — Mini Volume Dashboard below Checklist (LVL 2+: GWS + Regular Habit Reps + Anytime Reps) */}
+      {caps.repsBoard && (effectiveViewFilter === 'all' || effectiveViewFilter === 'tally') && (
         <section className="space-y-4 pt-2">
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="flex items-center gap-2">
@@ -1466,8 +1475,8 @@ export const ChecklistView: React.FC = () => {
         </section>
       )}
 
-      {/* 4. ALLOWANCES & QUOTAS BOARD — Daily / Weekly / Monthly Countdown Budgets (right below Reps Board) */}
-      {(viewFilter === 'all' || viewFilter === 'allowances') && (
+      {/* 4. ALLOWANCES & QUOTAS BOARD — Daily / Weekly / Monthly Countdown Budgets (Available from LVL 1+) */}
+      {(effectiveViewFilter === 'all' || effectiveViewFilter === 'allowances') && (
         <AllowancesBoard
           selectedDate={selectedDate}
           selectedWeekId={selectedWeekId}

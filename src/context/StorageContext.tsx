@@ -44,6 +44,11 @@ import {
   severityToImpact
 } from '../lib/problems';
 import {
+  coerceActiveTabForLevel,
+  coercePlanningSubTabForLevel,
+  coerceReviewSubTabForLevel
+} from '../lib/levelFeatures';
+import {
   DEFAULT_TEMPLATES,
   INITIAL_DAILY_ENTRIES,
   INITIAL_GWS_SESSIONS,
@@ -995,7 +1000,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return `week_${getWeekNumberForDate(selectedDate, getEffectiveEpochMonday(weeklyPlans))}`;
   });
 
-  // Progressive System Level (1 to 5)
+  // Progressive System Level (1 to 5): preserve existing users, start brand-new blank browsers at LVL 1
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL);
@@ -1003,9 +1008,15 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const parsed = parseInt(saved, 10);
         if (parsed >= 1 && parsed <= 5) return parsed as SystemLevel;
       }
-      return 5;
+      const hasExistingLocalData = Boolean(
+        localStorage.getItem(STORAGE_KEYS.DAILY) ||
+          localStorage.getItem(STORAGE_KEYS.WEEKLY) ||
+          localStorage.getItem(STORAGE_KEYS.GWS) ||
+          localStorage.getItem(STORAGE_KEYS.STRATEGY_PLANS)
+      );
+      return hasExistingLocalData ? 5 : 1;
     } catch {
-      return 5;
+      return 1;
     }
   });
 
@@ -1480,11 +1491,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (pushTimerRef.current) {
       clearTimeout(pushTimerRef.current);
     }
-    // 120ms micro-coalesce so rapid updates batch into one guarded push
+    // 1000ms coalesce so typing bursts upload once instead of per-word (localStorage is instant + tab unload flushes via keepalive)
     pushTimerRef.current = setTimeout(() => {
       pushTimerRef.current = null;
       void flushCloudPushNow();
-    }, 120);
+    }, 1000);
   };
 
   const markLocalMutation = (triggerCloudPush = true) => {
@@ -1751,6 +1762,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (parsed && typeof parsed === 'object') {
             deletedIdsRef.current = pruneTombstones(parsed);
           }
+        } else if (e.key === STORAGE_KEYS.SYSTEM_LEVEL) {
+          const parsed = parseInt(e.newValue, 10);
+          if (parsed >= 1 && parsed <= 5) {
+            systemLevelRef.current = parsed as SystemLevel;
+            setSystemLevelState(parsed as SystemLevel);
+          }
         } else if (e.key === LAST_CLOUD_UPDATED_AT_KEY) {
           lastSyncedCloudUpdatedAtRef.current = e.newValue;
         }
@@ -1902,72 +1919,110 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
-  // Parse initial route from hash
-  const parseHash = (): { main: MainTab; planningSub: PlanningSubTab; reviewSub: ReviewSubTab } => {
+  // Parse initial route from hash (coerced to currently unlocked systemLevel)
+  const parseHash = (lvl: SystemLevel = systemLevelRef.current): { main: MainTab; planningSub: PlanningSubTab; reviewSub: ReviewSubTab } => {
     const raw = window.location.hash.replace('#', '');
     const parts = raw.split('/');
     const p1 = parts[0];
     const p2 = parts[1];
 
+    const finalize = (main: MainTab, planningSub: PlanningSubTab, reviewSub: ReviewSubTab) => ({
+      main: coerceActiveTabForLevel(main, lvl),
+      planningSub: coercePlanningSubTabForLevel(planningSub, lvl),
+      reviewSub: coerceReviewSubTabForLevel(reviewSub, lvl)
+    });
+
     if (p1 === 'planning') {
       const sub: PlanningSubTab =
-        p2 === 'weekly' || p2 === 'monthly' || p2 === 'yearly' || p2 === 'roadmaps' || p2 === 'matrix'
+        p2 === 'weekly' ||
+        p2 === 'monthly' ||
+        p2 === 'quarterly' ||
+        p2 === 'yearly' ||
+        p2 === 'roadmaps' ||
+        p2 === 'matrix'
           ? (p2 as PlanningSubTab)
           : p2 === 'three_year' || p2 === '3year'
           ? 'yearly'
           : 'daily';
-      return { main: 'planning', planningSub: sub, reviewSub: 'daily' };
+      return finalize('planning', sub, 'daily');
     }
     if (p1 === 'roadmaps' || p1 === 'strategy') {
-      return { main: 'planning', planningSub: 'roadmaps', reviewSub: 'daily' };
+      return finalize('planning', 'roadmaps', 'daily');
     }
     if (p1 === 'matrix' || p1 === 'spreadsheet') {
-      return { main: 'planning', planningSub: 'matrix', reviewSub: 'daily' };
+      return finalize('planning', 'matrix', 'daily');
     }
     if (p1 === 'review') {
-      const sub = (p2 === 'daily' || p2 === 'gws' || p2 === 'weekly' || p2 === 'monthly' || p2 === 'quarterly' || p2 === 'yearly')
-        ? (p2 as ReviewSubTab)
-        : 'vault';
-      return { main: 'review', planningSub: 'daily', reviewSub: sub };
+      const sub: ReviewSubTab =
+        p2 === 'daily' ||
+        p2 === 'gws' ||
+        p2 === 'weekly' ||
+        p2 === 'monthly' ||
+        p2 === 'quarterly' ||
+        p2 === 'yearly' ||
+        p2 === 'problems' ||
+        p2 === 'vault'
+          ? (p2 as ReviewSubTab)
+          : lvl >= 3
+          ? 'vault'
+          : 'daily';
+      return finalize('review', 'daily', sub);
     }
-    if (p1 === 'checklist') return { main: 'checklist', planningSub: 'daily', reviewSub: 'daily' };
-    if (p1 === 'gws') return { main: 'gws', planningSub: 'daily', reviewSub: 'daily' };
-    if (p1 === 'templates') return { main: 'templates', planningSub: 'daily', reviewSub: 'daily' };
+    if (p1 === 'checklist') return finalize('checklist', 'daily', 'daily');
+    if (p1 === 'gws') return finalize('gws', 'daily', 'daily');
+    if (p1 === 'templates') return finalize('templates', 'daily', 'daily');
 
-    if (p1 === 'daily') return { main: 'planning', planningSub: 'daily', reviewSub: 'daily' };
-    if (p1 === 'weekly') return { main: 'planning', planningSub: 'weekly', reviewSub: 'weekly' };
+    if (p1 === 'daily') return finalize('planning', 'daily', 'daily');
+    if (p1 === 'weekly') return finalize('planning', 'weekly', 'weekly');
 
-    return { main: 'planning', planningSub: 'daily', reviewSub: 'daily' };
+    return finalize('planning', 'daily', 'daily');
   };
 
-  const initialRoute = parseHash();
+  const initialRoute = parseHash(systemLevel);
   const [activeTab, setActiveTabState] = useState<MainTab>(initialRoute.main);
   const [planningSubTab, setPlanningSubTabState] = useState<PlanningSubTab>(initialRoute.planningSub);
   const [reviewSubTab, setReviewSubTabState] = useState<ReviewSubTab>(initialRoute.reviewSub);
 
+  // Automatic safe tab fallback whenever systemLevel lowers so user is never stranded on a hidden tab
+  useEffect(() => {
+    const safeMain = coerceActiveTabForLevel(activeTab, systemLevel);
+    const safePlanning = coercePlanningSubTabForLevel(planningSubTab, systemLevel);
+    const safeReview = coerceReviewSubTabForLevel(reviewSubTab, systemLevel);
+    if (safeMain !== activeTab) setActiveTabState(safeMain);
+    if (safePlanning !== planningSubTab) setPlanningSubTabState(safePlanning);
+    if (safeReview !== reviewSubTab) setReviewSubTabState(safeReview);
+  }, [systemLevel, activeTab, planningSubTab, reviewSubTab]);
+
   const setActiveTab = (tab: MainTab) => {
-    setActiveTabState(tab);
-    if (tab === 'planning') {
-      window.location.hash = `planning/${planningSubTab}`;
-    } else if (tab === 'matrix') {
+    const safeTab = coerceActiveTabForLevel(tab, systemLevelRef.current);
+    const safePlan = coercePlanningSubTabForLevel(planningSubTab, systemLevelRef.current);
+    const safeRev = coerceReviewSubTabForLevel(reviewSubTab, systemLevelRef.current);
+    setActiveTabState(safeTab);
+    if (safeTab === 'planning') {
+      if (safePlan !== planningSubTab) setPlanningSubTabState(safePlan);
+      window.location.hash = `planning/${safePlan}`;
+    } else if (safeTab === 'matrix') {
       window.location.hash = 'matrix';
-    } else if (tab === 'review') {
-      window.location.hash = `review/${reviewSubTab}`;
+    } else if (safeTab === 'review') {
+      if (safeRev !== reviewSubTab) setReviewSubTabState(safeRev);
+      window.location.hash = `review/${safeRev}`;
     } else {
-      window.location.hash = tab;
+      window.location.hash = safeTab;
     }
   };
 
   const setPlanningSubTab = (sub: PlanningSubTab) => {
-    setPlanningSubTabState(sub);
+    const safeSub = coercePlanningSubTabForLevel(sub, systemLevelRef.current);
+    setPlanningSubTabState(safeSub);
     setActiveTabState('planning');
-    window.location.hash = `planning/${sub}`;
+    window.location.hash = `planning/${safeSub}`;
   };
 
   const setReviewSubTab = (sub: ReviewSubTab) => {
-    setReviewSubTabState(sub);
+    const safeSub = coerceReviewSubTabForLevel(sub, systemLevelRef.current);
+    setReviewSubTabState(safeSub);
     setActiveTabState('review');
-    window.location.hash = `review/${sub}`;
+    window.location.hash = `review/${safeSub}`;
   };
 
   useEffect(() => {
@@ -3516,6 +3571,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitChecklistCategories(INITIAL_CHECKLIST_CATEGORIES);
     commitChecklistItems(INITIAL_CHECKLIST_ITEMS);
     commitAllowanceItems(INITIAL_ALLOWANCE_ITEMS);
+    commitDeletedIds({});
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
     markLocalMutation();
@@ -3564,7 +3620,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       checklistCategories: [{ id: 'cat_general', name: 'General' }] as ChecklistCategory[],
       checklistItems: [] as ChecklistItem[],
       allowanceItems: [] as AllowanceItem[],
-      systemLevel: 5 as SystemLevel
+      systemLevel: 1 as SystemLevel
     };
   };
 
@@ -3590,6 +3646,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     commitChecklistCategories(fresh.checklistCategories);
     commitChecklistItems(fresh.checklistItems);
     commitAllowanceItems(fresh.allowanceItems);
+    commitSystemLevel(fresh.systemLevel);
     setTodayDate(nowStr);
     setSelectedDate(nowStr);
     selectedWeekIdRef.current = freshWeekId;
@@ -3758,11 +3815,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       commitDeletedIds(state.deletedIds);
     }
     if (state.systemLevel >= 1 && state.systemLevel <= 5) {
-      const nextLvl =
-        (state.systemLevel === 3 || state.systemLevel === 4) && !localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL)
-          ? 5
-          : state.systemLevel;
-      commitSystemLevel(nextLvl as SystemLevel);
+      commitSystemLevel(state.systemLevel as SystemLevel);
     }
   };
 

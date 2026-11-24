@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStorage } from '../../context/StorageContext';
 import { SUPABASE_SCHEMA_SQL } from '../../lib/supabase';
+import { LEVEL_META } from '../../lib/levelFeatures';
 import {
   User,
   LogIn,
@@ -296,6 +297,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           key={lvl}
                           type="button"
                           onClick={() => setSystemLevel(lvl)}
+                          title={LEVEL_META[lvl].desc}
                           className={`py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
                             systemLevel === lvl
                               ? 'bg-amber-500 text-slate-950 shadow-sm'
@@ -306,6 +308,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         </button>
                       ))}
                     </div>
+                    <p className="text-[11px] text-slate-400 leading-snug pt-0.5">
+                      <strong className="text-slate-200">{LEVEL_META[systemLevel].name}:</strong>{' '}
+                      {LEVEL_META[systemLevel].desc}
+                    </p>
                   </div>
 
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">

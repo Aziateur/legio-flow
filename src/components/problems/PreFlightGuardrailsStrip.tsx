@@ -7,6 +7,7 @@ import {
   isProblemGuardrail
 } from '../../lib/problems';
 import { ProblemSourceType } from '../../types/schema';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ChevronDown, ChevronUp, Shield, Crosshair, ExternalLink } from 'lucide-react';
 
 interface PreFlightGuardrailsStripProps {
@@ -21,12 +22,15 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
   sourceRef
 }) => {
   const {
+    systemLevel,
     problems,
     problemSettings,
     recordProblemRecurrence,
     setActiveTab,
     setReviewSubTab
   } = useStorage();
+
+  const caps = getLevelCapabilities(systemLevel);
 
   const storageKey = `legio_preflight_open_${context}_v1`;
   const [open, setOpen] = useState<boolean>(() => {
@@ -39,9 +43,10 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
   const [loggedId, setLoggedId] = useState<string | null>(null);
 
   const enabled =
-    context === 'daily'
+    caps.problemsConstraintEngine &&
+    (context === 'daily'
       ? problemSettings.showPreFlightInDaily !== false
-      : problemSettings.showPreFlightInGws !== false;
+      : problemSettings.showPreFlightInGws !== false);
 
   const activeItems = useMemo(() => {
     const topLevel = problems.filter(

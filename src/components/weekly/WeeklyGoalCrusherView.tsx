@@ -9,6 +9,7 @@ import {
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import { getCommittedGatesForQuarter } from '../../lib/planHierarchy';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
   Target, 
@@ -35,6 +36,7 @@ import {
 
 export const WeeklyGoalCrusherView: React.FC = () => {
   const { 
+    systemLevel,
     todayDate,
     weeklyPlans, 
     selectedWeekId, 
@@ -52,6 +54,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     yearlyPlans
   } = useStorage();
 
+  const caps = getLevelCapabilities(systemLevel);
   const plan = weeklyPlans[selectedWeekId] || weeklyPlans['week_3'] || Object.values(weeklyPlans)[0];
   const weekDaysRange = getCurrentWeekRange(plan.startDate || selectedDate);
 
@@ -74,20 +77,22 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const linkedYearlyPlan = yearlyPlans[planYearKey];
   const committedQuarterGates = getCommittedGatesForQuarter(linkedQuarterlyPlan, strategyPlans);
 
-  const weeklyParentOptions: Array<{ value: string; label: string; group: string }> = [
-    ...(linkedMonthlyPlan?.tasks || [])
-      .filter(mt => mt.status !== 'parked')
-      .map(mt => ({
-        value: `monthly:${mt.id}`,
-        label: mt.text,
-        group: `${planMonthKey} Monthly Deliverables`
-      })),
-    ...committedQuarterGates.map(cg => ({
-      value: `gate:${cg.plan.id}|${cg.stage.id}`,
-      label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
-      group: `${planQuarterKey} Target Roadmap Gates`
-    }))
-  ];
+  const weeklyParentOptions: Array<{ value: string; label: string; group: string }> = caps.modelAWeekToMonth
+    ? [
+        ...(linkedMonthlyPlan?.tasks || [])
+          .filter(mt => mt.status !== 'parked')
+          .map(mt => ({
+            value: `monthly:${mt.id}`,
+            label: mt.text,
+            group: `${planMonthKey} Monthly Deliverables`
+          })),
+        ...committedQuarterGates.map(cg => ({
+          value: `gate:${cg.plan.id}|${cg.stage.id}`,
+          label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
+          group: `${planQuarterKey} Target Roadmap Gates`
+        }))
+      ]
+    : [];
 
   const encodeWeeklyParent = (t: TaskItem): string => {
     if (t.monthlyTaskId) return `monthly:${t.monthlyTaskId}`;
@@ -757,10 +762,11 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         </div>
       )}
 
-      {/* LOOKING UP: Serving Monthly Plan & Committed Quarterly Roadmap Gates */}
-      {(linkedMonthlyPlan?.focusTheme?.trim() ||
-        (linkedMonthlyPlan?.tasks || []).some(t => !t.completed && t.status !== 'parked') ||
-        committedQuarterGates.length > 0) && (
+      {/* LOOKING UP: Serving Monthly Plan & Committed Quarterly Roadmap Gates (LVL 4+) */}
+      {caps.modelAWeekToMonth &&
+        (linkedMonthlyPlan?.focusTheme?.trim() ||
+          (linkedMonthlyPlan?.tasks || []).some(t => !t.completed && t.status !== 'parked') ||
+          committedQuarterGates.length > 0) && (
         <div className="rounded-2xl bg-slate-900/80 border border-purple-500/25 overflow-hidden shadow-md">
           <div className="px-4 py-2.5 flex items-center justify-between gap-2">
             <button
@@ -937,23 +943,25 @@ export const WeeklyGoalCrusherView: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-400 pb-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <span>Weekly Deliverables ({plan.tasks.length})</span>
-              <button
-                type="button"
-                onClick={() => setShowPlanPuller(prev => !prev)}
-                className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-xl border text-[11px] font-extrabold transition-all active:scale-95 ${
-                  showPlanPuller
-                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
-                    : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/35'
-                }`}
-              >
-                <ArrowDownToLine className="w-3.5 h-3.5" />
-                <span>Pull from Plans</span>
-                {showPlanPuller ? (
-                  <ChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                )}
-              </button>
+              {caps.modelAWeekToMonth && (
+                <button
+                  type="button"
+                  onClick={() => setShowPlanPuller(prev => !prev)}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-xl border text-[11px] font-extrabold transition-all active:scale-95 ${
+                    showPlanPuller
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                      : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/35'
+                  }`}
+                >
+                  <ArrowDownToLine className="w-3.5 h-3.5" />
+                  <span>Pull from Plans</span>
+                  {showPlanPuller ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
             </div>
             <div className="flex items-center space-x-2">
               <span className="font-mono text-slate-500 text-[11px]">
@@ -979,8 +987,8 @@ export const WeeklyGoalCrusherView: React.FC = () => {
             </div>
           </div>
 
-          {/* Pull from Plans Drawer (Written Roadmaps active unlocked stage + Monthly + Yearly) */}
-          {showPlanPuller && (
+          {/* Pull from Plans Drawer (LVL 4+: Written Roadmaps active unlocked stage + Monthly + Quarterly + Yearly) */}
+          {caps.modelAWeekToMonth && showPlanPuller && (
             <div className="rounded-2xl bg-slate-950/90 border border-amber-500/30 p-4 sm:p-5 space-y-4 shadow-lg">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800/80">
                 <div className="flex flex-wrap items-center gap-1.5">

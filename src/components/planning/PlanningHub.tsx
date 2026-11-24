@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import {
   useStorage,
   findBestWeeklyPlanForDate,
@@ -6,12 +6,28 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { DailyTrackerView } from '../daily/DailyTrackerView';
-import { WeeklyGoalCrusherView } from '../weekly/WeeklyGoalCrusherView';
-import { SpreadsheetMatrixView } from '../matrix/SpreadsheetMatrixView';
-import { StrategyRoadmapsView } from './StrategyRoadmapsView';
-import { QuarterlyPlanSection } from './QuarterlyPlanSection';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
+
+const WeeklyGoalCrusherView = lazy(() =>
+  import('../weekly/WeeklyGoalCrusherView').then(m => ({ default: m.WeeklyGoalCrusherView }))
+);
+const SpreadsheetMatrixView = lazy(() =>
+  import('../matrix/SpreadsheetMatrixView').then(m => ({ default: m.SpreadsheetMatrixView }))
+);
+const StrategyRoadmapsView = lazy(() =>
+  import('./StrategyRoadmapsView').then(m => ({ default: m.StrategyRoadmapsView }))
+);
+const QuarterlyPlanSection = lazy(() =>
+  import('./QuarterlyPlanSection').then(m => ({ default: m.QuarterlyPlanSection }))
+);
+
+const SubViewFallback: React.FC = () => (
+  <div className="max-w-3xl mx-auto px-6 py-16 flex flex-col items-center justify-center space-y-2.5 text-slate-500">
+    <div className="w-6 h-6 rounded-full border-2 border-amber-500/30 border-t-amber-400 animate-spin" />
+    <span className="text-[11px] font-mono uppercase tracking-wider">Loading view...</span>
+  </div>
+);
 import {
   HierarchyOutcomeCard,
   ParentLinkOption
@@ -591,36 +607,40 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               )}
             </div>
 
-            {/* Group 2: Strategy Roadmaps & Matrix */}
-            <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
-              <button
-                type="button"
-                onClick={() => setPlanningSubTab('roadmaps')}
-                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                  planningSubTab === 'roadmaps'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Roadmaps</span>
-              </button>
+            {/* Group 2: Strategy Roadmaps (LVL 4+) & Weeks Matrix (LVL 3+) */}
+            {(systemLevel >= 4 || systemLevel >= 3) && (
+              <div className="flex items-center gap-1 p-1 rounded-2xl bg-slate-950 border border-slate-800/80">
+                {systemLevel >= 4 && (
+                  <button
+                    type="button"
+                    onClick={() => setPlanningSubTab('roadmaps')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      planningSubTab === 'roadmaps'
+                        ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Roadmaps</span>
+                  </button>
+                )}
 
-              {systemLevel >= 3 && (
-                <button
-                  type="button"
-                  onClick={() => setPlanningSubTab('matrix')}
-                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                    planningSubTab === 'matrix'
-                      ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                  }`}
-                >
-                  <Table className="w-3.5 h-3.5" />
-                  <span>Weeks Matrix</span>
-                </button>
-              )}
-            </div>
+                {systemLevel >= 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setPlanningSubTab('matrix')}
+                    className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      planningSubTab === 'matrix'
+                        ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <Table className="w-3.5 h-3.5" />
+                    <span>Weeks Matrix</span>
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Compact New Plan button */}
             <button
@@ -692,7 +712,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* VIEW 2: WEEKLY PLANNING */}
       {planningSubTab === 'weekly' && (
-        <WeeklyGoalCrusherView />
+        <Suspense fallback={<SubViewFallback />}>
+          <WeeklyGoalCrusherView />
+        </Suspense>
       )}
 
       {/* VIEW 3: MONTHLY PLANNING */}
@@ -1114,19 +1136,21 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
       {/* VIEW 3B: QUARTERLY PLANNING (90-DAY STRATEGIC CONTRACT) */}
       {planningSubTab === 'quarterly' && (
-        <QuarterlyPlanSection
-          selectedQuarterKey={selectedQuarterKey}
-          setSelectedQuarterKey={setSelectedQuarterKey}
-          selectedMonthKey={selectedMonthKey}
-          onOpenMonth={mKey => {
-            setSelectedMonthKey(mKey);
-            setPlanningSubTab('monthly');
-          }}
-          onOpenYear={yKey => {
-            setSelectedYearKey(yKey);
-            setPlanningSubTab('yearly');
-          }}
-        />
+        <Suspense fallback={<SubViewFallback />}>
+          <QuarterlyPlanSection
+            selectedQuarterKey={selectedQuarterKey}
+            setSelectedQuarterKey={setSelectedQuarterKey}
+            selectedMonthKey={selectedMonthKey}
+            onOpenMonth={mKey => {
+              setSelectedMonthKey(mKey);
+              setPlanningSubTab('monthly');
+            }}
+            onOpenYear={yKey => {
+              setSelectedYearKey(yKey);
+              setPlanningSubTab('yearly');
+            }}
+          />
+        </Suspense>
       )}
 
       {/* VIEW 4: YEARLY PLANNING */}
@@ -1390,12 +1414,18 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       )}
 
       {/* VIEW 5: WRITTEN STRATEGY ROADMAPS (STAGE-GATE PLANS) */}
-      {planningSubTab === 'roadmaps' && <StrategyRoadmapsView />}
+      {planningSubTab === 'roadmaps' && (
+        <Suspense fallback={<SubViewFallback />}>
+          <StrategyRoadmapsView />
+        </Suspense>
+      )}
 
       {/* VIEW 6: WEEKS MATRIX */}
       {planningSubTab === 'matrix' && (
         <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
-          <SpreadsheetMatrixView />
+          <Suspense fallback={<SubViewFallback />}>
+            <SpreadsheetMatrixView />
+          </Suspense>
         </div>
       )}
 
@@ -1422,12 +1452,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               </h2>
             </div>
 
-            {/* Type selector */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
+            {/* Type selector (filtered by systemLevel) */}
+            <div className="flex flex-wrap gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800">
               <button
                 type="button"
                 onClick={() => setCreatePlanType('daily')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`flex-1 min-w-[72px] py-2.5 rounded-xl text-xs font-bold transition-all ${
                   createPlanType === 'daily'
                     ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1435,50 +1465,58 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
               >
                 Daily
               </button>
-              <button
-                type="button"
-                onClick={() => setCreatePlanType('weekly')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
-                  createPlanType === 'weekly'
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Weekly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreatePlanType('monthly')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
-                  createPlanType === 'monthly'
-                    ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreatePlanType('quarterly')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
-                  createPlanType === 'quarterly'
-                    ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Quarterly
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreatePlanType('yearly')}
-                className={`py-2.5 rounded-xl text-xs font-bold transition-all ${
-                  createPlanType === 'yearly'
-                    ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Yearly
-              </button>
+              {systemLevel >= 3 && (
+                <button
+                  type="button"
+                  onClick={() => setCreatePlanType('weekly')}
+                  className={`flex-1 min-w-[72px] py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    createPlanType === 'weekly'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Weekly
+                </button>
+              )}
+              {systemLevel >= 4 && (
+                <button
+                  type="button"
+                  onClick={() => setCreatePlanType('monthly')}
+                  className={`flex-1 min-w-[72px] py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    createPlanType === 'monthly'
+                      ? 'bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Monthly
+                </button>
+              )}
+              {systemLevel >= 4 && (
+                <button
+                  type="button"
+                  onClick={() => setCreatePlanType('quarterly')}
+                  className={`flex-1 min-w-[72px] py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    createPlanType === 'quarterly'
+                      ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Quarterly
+                </button>
+              )}
+              {systemLevel >= 5 && (
+                <button
+                  type="button"
+                  onClick={() => setCreatePlanType('yearly')}
+                  className={`flex-1 min-w-[72px] py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    createPlanType === 'yearly'
+                      ? 'bg-rose-500 text-slate-950 shadow-md shadow-rose-500/20'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Yearly
+                </button>
+              )}
             </div>
 
             {/* Weekly Plan Creation Form */}

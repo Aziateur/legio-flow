@@ -7,6 +7,7 @@ import {
   getMonthlyChildrenOfQuarterlyTask,
   getMonthsForQuarter
 } from '../../lib/planHierarchy';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import {
@@ -43,6 +44,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
   onOpenYear
 }) => {
   const {
+    systemLevel,
     quarterlyPlans,
     getQuarterlyPlan,
     saveQuarterlyPlan,
@@ -93,6 +95,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     ])
   ).sort();
 
+  const caps = getLevelCapabilities(systemLevel);
   const activeOutcomes = activeQuarterPlan.tasks.filter(t => t.status !== 'parked');
   const doneCount = activeOutcomes.filter(t => t.completed).length;
   const targetGateRefs = activeQuarterPlan.targetGateRefs || [];
@@ -101,27 +104,31 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     [activeQuarterPlan, strategyPlans]
   );
 
-  // Parent link options for Quarterly Outcomes (Yearly Outcomes + Committed Roadmap Gates)
+  // Parent link options for Quarterly Outcomes (Yearly Outcomes at LVL 5 + Committed Roadmap Gates at LVL 4+)
   const parentOptions = useMemo<ParentLinkOption[]>(() => {
     const opts: ParentLinkOption[] = [];
-    linkedYearPlan.tasks
-      .filter(t => t.status !== 'parked')
-      .forEach(yt => {
+    if (caps.modelAQuarterToYear) {
+      linkedYearPlan.tasks
+        .filter(t => t.status !== 'parked')
+        .forEach(yt => {
+          opts.push({
+            value: `yearly:${yt.id}`,
+            label: yt.text,
+            group: `${qInfo.year} Yearly Objectives`
+          });
+        });
+    }
+    if (caps.roadmaps) {
+      committedGates.forEach(cg => {
         opts.push({
-          value: `yearly:${yt.id}`,
-          label: yt.text,
-          group: `${qInfo.year} Yearly Objectives`
+          value: `gate:${cg.plan.id}|${cg.stage.id}`,
+          label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
+          group: 'Committed Roadmap Gates'
         });
       });
-    committedGates.forEach(cg => {
-      opts.push({
-        value: `gate:${cg.plan.id}|${cg.stage.id}`,
-        label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
-        group: 'Committed Roadmap Gates'
-      });
-    });
+    }
     return opts;
-  }, [linkedYearPlan.tasks, committedGates, qInfo.year]);
+  }, [linkedYearPlan.tasks, committedGates, qInfo.year, caps.modelAQuarterToYear, caps.roadmaps]);
 
   const encodeTaskParent = (t: TaskItem): string => {
     if (t.yearlyTaskId) return `yearly:${t.yearlyTaskId}`;
@@ -352,8 +359,8 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
         </div>
       </div>
 
-      {/* LOOKING UP: Parent Year Compass Bar */}
-      {yearHasContext && (
+      {/* LOOKING UP: Parent Year Compass Bar (LVL 5 only, when Yearly Plan is unlocked) */}
+      {caps.modelAQuarterToYear && yearHasContext && (
         <div className="rounded-2xl bg-slate-900/80 border border-rose-500/25 overflow-hidden shadow-md">
           <div className="px-4 py-2.5 flex items-center justify-between gap-2">
             <button
