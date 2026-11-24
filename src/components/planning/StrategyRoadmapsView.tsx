@@ -4,12 +4,21 @@ import {
   findBestWeeklyPlanForDate,
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
-import { ParkReasonTag, StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
+import {
+  ParkReasonTag,
+  StrategyPlan,
+  StrategyPlanPriority,
+  StrategyStage,
+  TaskItem
+} from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
 import {
+  STRATEGY_PRIORITIES,
+  STRATEGY_PRIORITY_META,
   getRoadmapStageBindings,
   isActiveStrategyPlan,
-  isPossibleStrategyPlan
+  isPossibleStrategyPlan,
+  sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { PARK_REASON_META } from '../../lib/energyAnalytics';
 import { daysBetweenDates, normalizeTag } from '../../lib/problems';
@@ -99,6 +108,7 @@ const createNewPlanTemplate = (count: number): StrategyPlan => {
     id: `plan_${base}_${Math.random().toString(36).slice(2, 6)}`,
     title: count === 0 ? 'Master Strategy Plan' : `New Strategy Plan ${count + 1}`,
     description: 'Written stage-gate roadmap from setup to mastery.',
+    priority: count === 0 ? 1 : 2,
     status: 'active',
     createdAt: now,
     updatedAt: now,
@@ -127,13 +137,13 @@ export const StrategyRoadmapsView: React.FC = () => {
     setPlanningSubTab
   } = useStorage();
 
-  const activePlans = strategyPlans.filter(isActiveStrategyPlan);
-  const possiblePlans = strategyPlans.filter(isPossibleStrategyPlan);
+  const activePlans = sortStrategyPlansByPriority(strategyPlans.filter(isActiveStrategyPlan));
+  const possiblePlans = sortStrategyPlansByPriority(strategyPlans.filter(isPossibleStrategyPlan));
   const promotablePlans = possiblePlans.filter(p => p.status === 'possible');
   const shelvedPlans = possiblePlans.filter(p => p.status === 'not_pursuing');
 
   const [selectedPlanId, setSelectedPlanId] = useState<string>(() => {
-    const firstActive = strategyPlans.find(isActiveStrategyPlan);
+    const firstActive = sortStrategyPlansByPriority(strategyPlans.filter(isActiveStrategyPlan))[0];
     if (firstActive) return firstActive.id;
     if (strategyPlans.some(isPossibleStrategyPlan)) return POSSIBLE_BOARD_ID;
     return '';
@@ -141,6 +151,7 @@ export const StrategyRoadmapsView: React.FC = () => {
   const [possibleFilter, setPossibleFilter] = useState<'all' | 'possible' | 'not_pursuing'>('all');
   const [newPossibleTitle, setNewPossibleTitle] = useState('');
   const [newPossibleStatus, setNewPossibleStatus] = useState<'possible' | 'not_pursuing'>('possible');
+  const [newPossiblePriority, setNewPossiblePriority] = useState<StrategyPlanPriority>(2);
   const [newPossibleActivation, setNewPossibleActivation] = useState('');
   const [newPossibleDescription, setNewPossibleDescription] = useState('');
   const [highlightedPossibleId, setHighlightedPossibleId] = useState<string | null>(null);
@@ -231,6 +242,7 @@ export const StrategyRoadmapsView: React.FC = () => {
       title,
       description: newPossibleDescription.trim(),
       activationCondition: newPossibleActivation.trim(),
+      priority: newPossiblePriority,
       status: newPossibleStatus,
       stages: [],
       createdAt: now,
@@ -290,7 +302,8 @@ export const StrategyRoadmapsView: React.FC = () => {
     if (promotablePlans.length > 0) {
       lines.push('## Can Promote to Active');
       promotablePlans.forEach(p => {
-        lines.push(`- **${p.title || 'Untitled'}**`);
+        const pTag = p.priority ? `[${STRATEGY_PRIORITY_META[p.priority].code}] ` : '';
+        lines.push(`- ${pTag}**${p.title || 'Untitled'}**`);
         if (p.activationCondition?.trim()) {
           lines.push(`  - Activation Parameter: ${p.activationCondition.trim()}`);
         }
@@ -303,7 +316,8 @@ export const StrategyRoadmapsView: React.FC = () => {
     if (shelvedPlans.length > 0) {
       lines.push("## Won't Activate (Shelved)");
       shelvedPlans.forEach(p => {
-        lines.push(`- **${p.title || 'Untitled'}**`);
+        const pTag = p.priority ? `[${STRATEGY_PRIORITY_META[p.priority].code}] ` : '';
+        lines.push(`- ${pTag}**${p.title || 'Untitled'}**`);
         if (p.activationCondition?.trim()) {
           lines.push(`  - Activation Parameter: ${p.activationCondition.trim()}`);
         }
@@ -564,7 +578,10 @@ export const StrategyRoadmapsView: React.FC = () => {
   const handleCopyMarkdown = () => {
     if (!activePlan) return;
     const lines: string[] = [];
-    lines.push(`# ${activePlan.title}`);
+    const pTag = activePlan.priority
+      ? `[${STRATEGY_PRIORITY_META[activePlan.priority].code} ${STRATEGY_PRIORITY_META[activePlan.priority].label}] `
+      : '';
+    lines.push(`# ${pTag}${activePlan.title}`);
     if (activePlan.description?.trim()) {
       lines.push(activePlan.description.trim());
     }
@@ -677,7 +694,34 @@ export const StrategyRoadmapsView: React.FC = () => {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <div
+              className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800"
+              title="Set priority level (P1 Primary → P4 Low)"
+            >
+              {STRATEGY_PRIORITIES.map(lvl => {
+                const meta = STRATEGY_PRIORITY_META[lvl];
+                const selected = plan.priority === lvl;
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() =>
+                      updatePlanById(plan.id, { priority: selected ? undefined : lvl })
+                    }
+                    title={`${meta.code} · ${meta.label}${selected ? ' (click to clear)' : ''}`}
+                    className={`px-2 py-1 rounded-lg font-mono text-[10px] font-extrabold border transition-colors ${
+                      selected
+                        ? meta.activeCls
+                        : 'text-slate-500 hover:text-slate-200 border-transparent'
+                    }`}
+                  >
+                    {meta.code}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
               <button
                 type="button"
@@ -852,13 +896,23 @@ export const StrategyRoadmapsView: React.FC = () => {
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`text-sm font-extrabold truncate ${
-                            isSelected ? 'text-amber-300' : 'text-slate-100'
-                          }`}
-                        >
-                          {plan.title || 'Untitled Plan'}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {plan.priority && (
+                            <span
+                              className={`shrink-0 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded border ${STRATEGY_PRIORITY_META[plan.priority].badgeCls}`}
+                              title={`${STRATEGY_PRIORITY_META[plan.priority].code} · ${STRATEGY_PRIORITY_META[plan.priority].label}`}
+                            >
+                              {STRATEGY_PRIORITY_META[plan.priority].code}
+                            </span>
+                          )}
+                          <span
+                            className={`text-sm font-extrabold truncate ${
+                              isSelected ? 'text-amber-300' : 'text-slate-100'
+                            }`}
+                          >
+                            {plan.title || 'Untitled Plan'}
+                          </span>
+                        </div>
                         <span className="shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">
                           {passedGates}/{plan.stages.length} gates
                         </span>
@@ -1005,6 +1059,13 @@ export const StrategyRoadmapsView: React.FC = () => {
                               isPromotable ? 'bg-cyan-400' : 'bg-slate-500'
                             }`}
                           />
+                          {plan.priority && (
+                            <span
+                              className={`shrink-0 font-mono text-[9px] font-extrabold px-1 py-0.5 rounded border ${STRATEGY_PRIORITY_META[plan.priority].badgeCls}`}
+                            >
+                              {STRATEGY_PRIORITY_META[plan.priority].code}
+                            </span>
+                          )}
                           <span className="text-xs font-bold text-slate-200 truncate">
                             {plan.title || 'Untitled Roadmap'}
                           </span>
@@ -1091,29 +1152,54 @@ export const StrategyRoadmapsView: React.FC = () => {
                     <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
                       Add Possible Roadmap
                     </span>
-                    <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => setNewPossibleStatus('possible')}
-                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
-                          newPossibleStatus === 'possible'
-                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/35'
-                            : 'text-slate-400 hover:text-slate-200 border border-transparent'
-                        }`}
-                      >
-                        Can Promote to Active
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setNewPossibleStatus('not_pursuing')}
-                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
-                          newPossibleStatus === 'not_pursuing'
-                            ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                            : 'text-slate-400 hover:text-slate-200 border border-transparent'
-                        }`}
-                      >
-                        Won&apos;t Activate
-                      </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
+                        <span className="px-2 text-[10px] font-bold text-slate-500">Priority:</span>
+                        {STRATEGY_PRIORITIES.map(lvl => {
+                          const meta = STRATEGY_PRIORITY_META[lvl];
+                          const selected = newPossiblePriority === lvl;
+                          return (
+                            <button
+                              key={lvl}
+                              type="button"
+                              onClick={() => setNewPossiblePriority(lvl)}
+                              title={`${meta.code} · ${meta.label}`}
+                              className={`px-2 py-1 rounded-lg font-mono text-[10px] font-extrabold border transition-colors ${
+                                selected
+                                  ? meta.activeCls
+                                  : 'text-slate-500 hover:text-slate-200 border-transparent'
+                              }`}
+                            >
+                              {meta.code}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setNewPossibleStatus('possible')}
+                          className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                            newPossibleStatus === 'possible'
+                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/35'
+                              : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                          }`}
+                        >
+                          Can Promote to Active
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewPossibleStatus('not_pursuing')}
+                          className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                            newPossibleStatus === 'not_pursuing'
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                              : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                          }`}
+                        >
+                          Won&apos;t Activate
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1291,9 +1377,38 @@ export const StrategyRoadmapsView: React.FC = () => {
               <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1 min-w-0 space-y-1.5">
-                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
-                      Active Stage-Gate Roadmap
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
+                        Active Stage-Gate Roadmap
+                      </span>
+                      <div
+                        className="inline-flex items-center p-0.5 rounded-xl bg-slate-950 border border-slate-800"
+                        title="Roadmap priority level (P1 Primary → P4 Low)"
+                      >
+                        <span className="px-1.5 text-[10px] font-bold text-slate-500">Priority:</span>
+                        {STRATEGY_PRIORITIES.map(lvl => {
+                          const meta = STRATEGY_PRIORITY_META[lvl];
+                          const selected = activePlan.priority === lvl;
+                          return (
+                            <button
+                              key={lvl}
+                              type="button"
+                              onClick={() =>
+                                updateActivePlan({ priority: selected ? undefined : lvl })
+                              }
+                              title={`${meta.code} · ${meta.label}${selected ? ' (click to clear)' : ''}`}
+                              className={`px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold border transition-colors ${
+                                selected
+                                  ? meta.activeCls
+                                  : 'text-slate-500 hover:text-slate-200 border-transparent'
+                              }`}
+                            >
+                              {selected ? `${meta.code} · ${meta.label}` : meta.code}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <input
                       type="text"
                       value={activePlan.title}

@@ -30,7 +30,11 @@ import {
   computeGwsAllocationInRange
 } from '../../lib/macroAnalytics';
 import { formatProblemsForReviewText, problemOccurredInRange } from '../../lib/problems';
-import { isActiveStrategyPlan } from '../../lib/planHierarchy';
+import {
+  STRATEGY_PRIORITY_META,
+  isActiveStrategyPlan,
+  sortStrategyPlansByPriority
+} from '../../lib/planHierarchy';
 import {
   ALIGNMENT_VERDICTS,
   PARK_REASON_META,
@@ -414,7 +418,9 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
   ]);
 
   // Pivot & Parked Memory Audit (outcomes parked + roadmaps pivoted in this period)
-  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
+  const activeStrategyPlans = sortStrategyPlansByPriority(
+    strategyPlans.filter(isActiveStrategyPlan)
+  );
   const parkedOutcomesInPeriod = currentPlan.tasks.filter(t => t.status === 'parked');
   const roadmapPivotsInPeriod = strategyPlans.flatMap(sp =>
     (sp.pivotHistory || [])
@@ -842,8 +848,9 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
       const passed = sp.stages.filter(s => s.gatePassed).length;
       const active = sp.stages.find(s => !s.gatePassed);
       const ra = roadmapAudits[sp.id];
+      const pTag = sp.priority ? `[${STRATEGY_PRIORITY_META[sp.priority].code}] ` : '';
       lines.push(
-        `  • ${sp.title} (${passed}/${sp.stages.length} gates)${ra?.verdict ? ` [${ra.verdict.toUpperCase()}]` : ''} — ${
+        `  • ${pTag}${sp.title} (${passed}/${sp.stages.length} gates)${ra?.verdict ? ` [${ra.verdict.toUpperCase()}]` : ''} — ${
           active ? `Active: ${active.title}` : 'All Gates Passed'
         }${ra?.constraintNote?.trim() ? ` | Constraint: ${ra.constraintNote.trim()}` : ''}`
       );
@@ -2044,6 +2051,13 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
+                          {sp.priority && (
+                            <span
+                              className={`px-2 py-0.5 rounded-lg border font-mono text-[10px] font-extrabold ${STRATEGY_PRIORITY_META[sp.priority].badgeCls}`}
+                            >
+                              {STRATEGY_PRIORITY_META[sp.priority].code} · {STRATEGY_PRIORITY_META[sp.priority].label}
+                            </span>
+                          )}
                           <h3 className="text-base font-extrabold text-slate-100">{sp.title}</h3>
                           <span className="px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[11px] font-bold text-amber-300">
                             {passedStages.length}/{sp.stages.length} gates passed

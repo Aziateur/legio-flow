@@ -8,7 +8,12 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
-import { getCommittedGatesForQuarter, isActiveStrategyPlan } from '../../lib/planHierarchy';
+import {
+  STRATEGY_PRIORITY_META,
+  getCommittedGatesForQuarter,
+  isActiveStrategyPlan,
+  sortStrategyPlansByPriority
+} from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
@@ -75,7 +80,9 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const linkedMonthlyPlan = monthlyPlans[planMonthKey];
   const linkedQuarterlyPlan = quarterlyPlans[planQuarterKey];
   const linkedYearlyPlan = yearlyPlans[planYearKey];
-  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
+  const activeStrategyPlans = sortStrategyPlansByPriority(
+    strategyPlans.filter(isActiveStrategyPlan)
+  );
   const committedQuarterGates = getCommittedGatesForQuarter(linkedQuarterlyPlan, strategyPlans);
 
   const weeklyParentOptions: Array<{ value: string; label: string; group: string }> = caps.modelAWeekToMonth
@@ -1069,6 +1076,14 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex flex-wrap items-center gap-2 min-w-0">
+                              {sp.priority && (
+                                <span
+                                  className={`shrink-0 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded border ${STRATEGY_PRIORITY_META[sp.priority].badgeCls}`}
+                                  title={`${STRATEGY_PRIORITY_META[sp.priority].code} · ${STRATEGY_PRIORITY_META[sp.priority].label}`}
+                                >
+                                  {STRATEGY_PRIORITY_META[sp.priority].code}
+                                </span>
+                              )}
                               <span className="text-sm font-extrabold text-amber-300 truncate">
                                 {sp.title || 'Untitled Plan'}
                               </span>

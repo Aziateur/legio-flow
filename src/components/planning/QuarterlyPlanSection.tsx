@@ -3,10 +3,12 @@ import { useStorage } from '../../context/StorageContext';
 import { TaskItem, TargetGateRef } from '../../types/schema';
 import { getMonthInfo, getQuarterInfo, shiftQuarterKey } from '../../lib/macroAnalytics';
 import {
+  STRATEGY_PRIORITY_META,
   getCommittedGatesForQuarter,
   getMonthlyChildrenOfQuarterlyTask,
   getMonthsForQuarter,
-  isActiveStrategyPlan
+  isActiveStrategyPlan,
+  sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
@@ -98,7 +100,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
 
   const caps = getLevelCapabilities(systemLevel);
   const activeStrategyPlans = useMemo(
-    () => strategyPlans.filter(isActiveStrategyPlan),
+    () => sortStrategyPlansByPriority(strategyPlans.filter(isActiveStrategyPlan)),
     [strategyPlans]
   );
   const activeOutcomes = activeQuarterPlan.tasks.filter(t => t.status !== 'parked');
@@ -650,9 +652,19 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-extrabold text-xs text-slate-100 truncate">
-                        {plan.title}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {plan.priority && (
+                          <span
+                            className={`shrink-0 font-mono text-[9px] font-extrabold px-1.5 py-0.5 rounded border ${STRATEGY_PRIORITY_META[plan.priority].badgeCls}`}
+                            title={`${STRATEGY_PRIORITY_META[plan.priority].code} · ${STRATEGY_PRIORITY_META[plan.priority].label}`}
+                          >
+                            {STRATEGY_PRIORITY_META[plan.priority].code}
+                          </span>
+                        )}
+                        <span className="font-extrabold text-xs text-slate-100 truncate">
+                          {plan.title}
+                        </span>
+                      </div>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {isTargeted && (
                           <button

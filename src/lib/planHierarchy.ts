@@ -2,6 +2,7 @@ import {
   MonthlyPlan,
   QuarterlyPlan,
   StrategyPlan,
+  StrategyPlanPriority,
   StrategyStage,
   TaskItem,
   WeeklyPlan
@@ -93,6 +94,46 @@ export interface CommittedGateDetail {
   doneGoals: number;
   totalGoals: number;
 }
+
+export const STRATEGY_PRIORITIES: StrategyPlanPriority[] = [1, 2, 3, 4];
+
+export const STRATEGY_PRIORITY_META: Record<
+  StrategyPlanPriority,
+  {
+    code: string;
+    label: string;
+    badgeCls: string;
+    activeCls: string;
+  }
+> = {
+  1: {
+    code: 'P1',
+    label: 'Primary',
+    badgeCls: 'bg-rose-500/15 text-rose-300 border-rose-500/35',
+    activeCls: 'bg-rose-500/25 text-rose-200 border-rose-500/50'
+  },
+  2: {
+    code: 'P2',
+    label: 'High',
+    badgeCls: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeCls: 'bg-amber-500/25 text-amber-200 border-amber-500/50'
+  },
+  3: {
+    code: 'P3',
+    label: 'Medium',
+    badgeCls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35',
+    activeCls: 'bg-cyan-500/25 text-cyan-200 border-cyan-500/50'
+  },
+  4: {
+    code: 'P4',
+    label: 'Low',
+    badgeCls: 'bg-slate-800/90 text-slate-400 border-slate-700',
+    activeCls: 'bg-slate-700 text-slate-200 border-slate-500'
+  }
+};
+
+export const sortStrategyPlansByPriority = (plans: StrategyPlan[]): StrategyPlan[] =>
+  [...plans].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
 
 export const isActiveStrategyPlan = (p: StrategyPlan): boolean =>
   p.status !== 'possible' && p.status !== 'not_pursuing';

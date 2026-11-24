@@ -373,12 +373,14 @@ export interface StrategyPivotLog {
 }
 
 export type StrategyPlanStatus = 'active' | 'paused' | 'pivoted' | 'possible' | 'not_pursuing';
+export type StrategyPlanPriority = 1 | 2 | 3 | 4; // 1 = P1 Primary, 2 = P2 High, 3 = P3 Medium, 4 = P4 Low
 
 export interface StrategyPlan {
   id: string;
   title: string;             // e.g. "Trading Strategy"
   description?: string;
   activationCondition?: string; // Trigger/gate parameter required before activating a possible/shelved roadmap
+  priority?: StrategyPlanPriority;
   status?: StrategyPlanStatus;
   pivotHistory?: StrategyPivotLog[];
   stages: StrategyStage[];

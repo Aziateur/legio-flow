@@ -8,7 +8,11 @@ import {
 } from '../../context/StorageContext';
 import { GWSSession, ProblemCategory } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
-import { isActiveStrategyPlan } from '../../lib/planHierarchy';
+import {
+  STRATEGY_PRIORITY_META,
+  isActiveStrategyPlan,
+  sortStrategyPlansByPriority
+} from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
@@ -89,7 +93,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
-  const activeStrategyPlans = strategyPlans.filter(isActiveStrategyPlan);
+  const activeStrategyPlans = sortStrategyPlansByPriority(
+    strategyPlans.filter(isActiveStrategyPlan)
+  );
   const currentDailyEntry = getEntryForDate(selectedDate);
   const todayPriorities = getPriorityItemsForEntry(currentDailyEntry).filter(p => p.text.trim().length > 0);
   const activeWeeklyPlan =
@@ -652,6 +658,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                             <option value="">Roadmap (optional)...</option>
                             {activeStrategyPlans.map(sp => (
                               <option key={sp.id} value={sp.id}>
+                                {sp.priority ? `[${STRATEGY_PRIORITY_META[sp.priority].code}] ` : ''}
                                 {sp.title}
                               </option>
                             ))}

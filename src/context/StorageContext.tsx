@@ -4549,6 +4549,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             primary.activationCondition !== undefined
               ? primary.activationCondition
               : secondary.activationCondition || '',
+          priority: primary.priority !== undefined ? primary.priority : secondary.priority,
           status: primary.status || secondary.status,
           ...(mergedPivotHistory.length > 0 ? { pivotHistory: mergedPivotHistory } : {}),
           stages: mergedStages
