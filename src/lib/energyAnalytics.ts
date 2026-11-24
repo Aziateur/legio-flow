@@ -1,4 +1,107 @@
-import { DailyEntry, NervousSystemState, ParkReasonTag } from '../types/schema';
+import { AlignmentVerdict, DailyEntry, NervousSystemState, ParkReasonTag } from '../types/schema';
+
+export const ALIGNMENT_VERDICTS: Array<{
+  id: AlignmentVerdict;
+  label: string;
+  shortLabel: string;
+  score: number;
+  hint: string;
+  badgeCls: string;
+  activeCls: string;
+}> = [
+  {
+    id: 'on_plan',
+    label: 'On Plan',
+    shortLabel: 'On Plan',
+    score: 10,
+    hint: 'Executed what was planned and it was the right call',
+    badgeCls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35',
+    activeCls: 'bg-emerald-500 text-slate-950 border-emerald-400'
+  },
+  {
+    id: 'better_pivot',
+    label: 'Better Pivot',
+    shortLabel: 'Better Pivot',
+    score: 10,
+    hint: 'Went off-plan for something equal or superior (zero score penalty)',
+    badgeCls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35',
+    activeCls: 'bg-cyan-500 text-slate-950 border-cyan-400'
+  },
+  {
+    id: 'mixed',
+    label: 'Mixed',
+    shortLabel: 'Mixed',
+    score: 5,
+    hint: 'Partly aligned, partly pulled off-track',
+    badgeCls: 'bg-amber-500/15 text-amber-300 border-amber-500/35',
+    activeCls: 'bg-amber-500 text-slate-950 border-amber-400'
+  },
+  {
+    id: 'unwise_drift',
+    label: 'Unwise Drift',
+    shortLabel: 'Unwise Drift',
+    score: 1,
+    hint: 'Went off-plan unwisely (distraction, avoidance, or reactive busywork)',
+    badgeCls: 'bg-rose-500/15 text-rose-300 border-rose-500/35',
+    activeCls: 'bg-rose-500 text-slate-950 border-rose-400'
+  }
+];
+
+export const alignmentVerdictToScore = (verdict?: AlignmentVerdict): number | null => {
+  if (!verdict) return null;
+  const meta = ALIGNMENT_VERDICTS.find(v => v.id === verdict);
+  return meta ? meta.score : null;
+};
+
+export interface PeriodAlignmentSummary {
+  daysLogged: number;
+  avgScore: number | null;
+  onPlanCount: number;
+  betterPivotCount: number;
+  mixedCount: number;
+  unwiseDriftCount: number;
+  planFitPct: number | null; // % strictly On Plan (neutral planning diagnostic)
+  highPivotSignal: boolean; // >= 40% Better Pivots across 3+ logged days -> plans may be too rigid
+}
+
+export const computePeriodAlignmentSummary = (entries: DailyEntry[]): PeriodAlignmentSummary => {
+  let onPlanCount = 0;
+  let betterPivotCount = 0;
+  let mixedCount = 0;
+  let unwiseDriftCount = 0;
+  const scores: number[] = [];
+
+  entries.forEach(e => {
+    const v = e.alignmentVerdict;
+    if (!v) return;
+    const sc = alignmentVerdictToScore(v);
+    if (sc === null) return;
+    scores.push(sc);
+    if (v === 'on_plan') onPlanCount++;
+    else if (v === 'better_pivot') betterPivotCount++;
+    else if (v === 'mixed') mixedCount++;
+    else if (v === 'unwise_drift') unwiseDriftCount++;
+  });
+
+  const daysLogged = scores.length;
+  const avgScore =
+    daysLogged > 0
+      ? Math.round((scores.reduce((a, b) => a + b, 0) / daysLogged) * 10) / 10
+      : null;
+  const planFitPct = daysLogged > 0 ? Math.round((onPlanCount / daysLogged) * 100) : null;
+  const highPivotSignal = daysLogged >= 3 && betterPivotCount / daysLogged >= 0.4;
+
+  return {
+    daysLogged,
+    avgScore,
+    onPlanCount,
+    betterPivotCount,
+    mixedCount,
+    unwiseDriftCount,
+    planFitPct,
+    highPivotSignal
+  };
+};
 
 export const NERVOUS_SYSTEM_STATES: Array<{
   id: NervousSystemState;

@@ -26,13 +26,18 @@ import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import { WhatWorksPlaybookView } from '../problems/WhatWorksPlaybookView';
 import { MacroReviewView } from './MacroReviewView';
 import {
+  AlignmentVerdictSelector,
   DailyEnergyReportCard,
   LowScoreFlagsBanner,
+  PeriodAlignmentSummaryStrip,
   PeriodEnergySummaryStrip
 } from './EnergyAndWarningsCard';
 import { computeGwsAllocationInRange } from '../../lib/macroAnalytics';
 import {
+  ALIGNMENT_VERDICTS,
+  alignmentVerdictToScore,
   collectLowScoreWarnings,
+  computePeriodAlignmentSummary,
   computePeriodEnergySummary
 } from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
@@ -448,15 +453,17 @@ export const ReviewHub: React.FC = () => {
     saveReview(entry);
   };
 
-  const hasDailyEnergyData = (d: { energyCheck?: any }) =>
+  const hasDailyEnergyData = (d: { energyCheck?: any; alignmentVerdict?: any; alignmentNote?: string }) =>
     Boolean(
-      d.energyCheck &&
+      (d.energyCheck &&
         (d.energyCheck.wakeUp ||
           d.energyCheck.midday ||
           d.energyCheck.night ||
           d.energyCheck.nervousSystemScore ||
           d.energyCheck.nervousSystemState ||
-          d.energyCheck.nervousSystemNote?.trim())
+          d.energyCheck.nervousSystemNote?.trim())) ||
+        d.alignmentVerdict ||
+        d.alignmentNote?.trim()
     );
 
   const computeLiveHabitStatsForDays = (periodDays: Array<{ date: string }>) => {
@@ -2127,6 +2134,21 @@ export const ReviewHub: React.FC = () => {
                 );
               })()}
 
+              {/* Daily Alignment Check (Did I follow the plan — or make a Better Pivot vs. Unwise Drift?) */}
+              <AlignmentVerdictSelector
+                title="Plan Alignment & Judgment"
+                subtitle="Did you execute what you planned — or if you pivoted, was it a Better Pivot or Unwise Drift?"
+                verdict={currentDailyEntry.alignmentVerdict}
+                note={currentDailyEntry.alignmentNote}
+                onChangeVerdict={next =>
+                  saveDailyEntry(selectedDate, { alignmentVerdict: next })
+                }
+                onChangeNote={note =>
+                  saveDailyEntry(selectedDate, { alignmentNote: note })
+                }
+                compact
+              />
+
               {/* Daily Energy (Wake-Up / Midday / Night) & Nervous System Report */}
               <DailyEnergyReportCard
                 selectedDate={selectedDate}
@@ -2844,6 +2866,8 @@ export const ReviewHub: React.FC = () => {
                 ? Math.round((scoredDays.reduce((s, d) => s + d.executionScore, 0) / scoredDays.length) * 10) / 10
                 : null;
             const weekEnergySummary = computePeriodEnergySummary(weekDays);
+            const weekAlignmentSummary = computePeriodAlignmentSummary(weekDays);
+            const weekAlignmentScore = alignmentVerdictToScore(targetPlanForReview.alignmentVerdict);
             const liveWkScore = computeWeeklyAchievedScore(targetPlanForReview.tasks);
             const isWeekFinished = targetPlanForReview.endDate < todayDate;
             const weekFlags = collectLowScoreWarnings([
@@ -2854,6 +2878,8 @@ export const ReviewHub: React.FC = () => {
                 allowZero: isWeekFinished
               },
               { label: 'Daily Discipline Avg', value: avgDaily },
+              { label: 'Week Alignment', value: weekAlignmentScore },
+              { label: 'Daily Alignment Avg', value: weekAlignmentSummary.avgScore },
               { label: 'Daily Energy Avg', value: weekEnergySummary.avgEnergy },
               { label: 'Nervous System Avg', value: weekEnergySummary.avgNervousSystem }
             ]);
@@ -2866,6 +2892,23 @@ export const ReviewHub: React.FC = () => {
                 <PeriodEnergySummaryStrip
                   summary={weekEnergySummary}
                   periodLabel={`Week ${targetPlanForReview.weekNumber}`}
+                />
+                <PeriodAlignmentSummaryStrip
+                  summary={weekAlignmentSummary}
+                  periodLabel={`Week ${targetPlanForReview.weekNumber}`}
+                />
+                <AlignmentVerdictSelector
+                  title={`Week ${targetPlanForReview.weekNumber} Overall Alignment`}
+                  subtitle="Step back: did the whole week serve what truly mattered, or did you drift from your priorities?"
+                  verdict={targetPlanForReview.alignmentVerdict}
+                  note={targetPlanForReview.alignmentNote}
+                  onChangeVerdict={next =>
+                    saveWeeklyPlan({ ...targetPlanForReview, alignmentVerdict: next })
+                  }
+                  onChangeNote={note =>
+                    saveWeeklyPlan({ ...targetPlanForReview, alignmentNote: note })
+                  }
+                  compact
                 />
               </>
             );
@@ -3330,6 +3373,18 @@ export const ReviewHub: React.FC = () => {
           text += `GWS Deep Work: ${mData.gwsHours}h across ${mData.gws.length} sprints (Avg ${mData.avgGwsTotal}/15)\n`;
 
           const mEnergy = computePeriodEnergySummary(mData.days);
+          const mAlign = computePeriodAlignmentSummary(mData.days);
+          const mAlignScore = alignmentVerdictToScore(mData.saved?.alignmentVerdict);
+          const mAlignMeta = ALIGNMENT_VERDICTS.find(v => v.id === mData.saved?.alignmentVerdict);
+          if (mAlignMeta || mAlign.daysLogged > 0) {
+            text += `Alignment & Judgment: ${
+              mAlignMeta ? `Month ${mAlignMeta.label} (${mAlignMeta.score}/10)` : 'Month Unrated'
+            }${
+              mAlign.daysLogged > 0
+                ? ` • Daily Avg ${mAlign.avgScore}/10 (Plan Fit ${mAlign.planFitPct}% · ${mAlign.onPlanCount} On Plan, ${mAlign.betterPivotCount} Better Pivot, ${mAlign.mixedCount} Mixed, ${mAlign.unwiseDriftCount} Drift)`
+                : ''
+            }${mData.saved?.alignmentNote?.trim() ? ` — ${mData.saved.alignmentNote.trim()}` : ''}\n`;
+          }
           if (mEnergy.daysLogged > 0) {
             text += `Energy & Nervous System (${mEnergy.daysLogged}d): Energy ${
               mEnergy.avgEnergy ?? '—'
@@ -3341,6 +3396,8 @@ export const ReviewHub: React.FC = () => {
             { label: 'Monthly Score', value: monthScore > 0 ? monthScore : null },
             { label: 'Weekly Avg', value: mData.weeks.length > 0 ? parseFloat(String(mData.avgWeeklyScore)) || null : null },
             { label: 'Daily Avg', value: mData.days.length > 0 ? parseFloat(String(mData.avgDailyScore)) || null : null },
+            { label: 'Monthly Alignment', value: mAlignScore },
+            { label: 'Daily Alignment Avg', value: mAlign.avgScore },
             { label: 'Energy Avg', value: mEnergy.avgEnergy },
             { label: 'Nervous System Avg', value: mEnergy.avgNervousSystem }
           ]);
@@ -3489,15 +3546,19 @@ export const ReviewHub: React.FC = () => {
               </div>
             )}
 
-            {/* Monthly Energy/NS Telemetry & Automatic < 6 Score Warning Flags */}
+            {/* Monthly Energy/NS/Alignment Telemetry & Automatic < 6 Score Warning Flags */}
             {(() => {
               const monthEnergySummary = computePeriodEnergySummary(mData.days);
+              const monthAlignmentSummary = computePeriodAlignmentSummary(mData.days);
+              const monthAlignScore = alignmentVerdictToScore(mData.saved?.alignmentVerdict);
               const avgWkNum = parseFloat(String(mData.avgWeeklyScore)) || 0;
               const avgDayNum = parseFloat(String(mData.avgDailyScore)) || 0;
               const monthFlags = collectLowScoreWarnings([
                 { label: 'Monthly Score', value: monthScore > 0 ? monthScore : null },
                 { label: 'Weekly Avg', value: mData.weeks.length > 0 && avgWkNum > 0 ? avgWkNum : null },
                 { label: 'Daily Discipline Avg', value: mData.days.length > 0 && avgDayNum > 0 ? avgDayNum : null },
+                { label: 'Monthly Alignment', value: monthAlignScore },
+                { label: 'Daily Alignment Avg', value: monthAlignmentSummary.avgScore },
                 { label: 'Daily Energy Avg', value: monthEnergySummary.avgEnergy },
                 { label: 'Nervous System Avg', value: monthEnergySummary.avgNervousSystem }
               ]);
@@ -3505,6 +3566,16 @@ export const ReviewHub: React.FC = () => {
                 <>
                   <LowScoreFlagsBanner periodLabel={mData.info.label} flags={monthFlags} />
                   <PeriodEnergySummaryStrip summary={monthEnergySummary} periodLabel={mData.info.label} />
+                  <PeriodAlignmentSummaryStrip summary={monthAlignmentSummary} periodLabel={mData.info.label} />
+                  <AlignmentVerdictSelector
+                    title={`${mData.info.label} Overall Alignment`}
+                    subtitle="Did this month stay aligned with your Quarterly priorities, make a Better Pivot, or drift?"
+                    verdict={mData.saved?.alignmentVerdict}
+                    note={mData.saved?.alignmentNote}
+                    onChangeVerdict={next => upsertMonthlyReview(selectedMonth, { alignmentVerdict: next })}
+                    onChangeNote={note => upsertMonthlyReview(selectedMonth, { alignmentNote: note })}
+                    compact
+                  />
                 </>
               );
             })()}

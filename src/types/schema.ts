@@ -130,6 +130,7 @@ export interface DailyPriorityItem {
 }
 
 export type NervousSystemState = 'calm' | 'sharp' | 'wired' | 'foggy' | 'drained';
+export type AlignmentVerdict = 'on_plan' | 'better_pivot' | 'mixed' | 'unwise_drift';
 
 export interface DailyEnergyCheck {
   wakeUp?: number; // 1–10 energy at wake-up
@@ -154,6 +155,8 @@ export interface DailyEntry {
   problemsEncountered?: string;
   reviewNotes?: string;
   energyCheck?: DailyEnergyCheck;
+  alignmentVerdict?: AlignmentVerdict;
+  alignmentNote?: string;
   customFieldValues: Record<string, any>;
   updatedAt: string;
 }
@@ -175,6 +178,8 @@ export interface WeeklyPlan {
   reviewNotes?: string;
   prevPromiseVerdict?: PromiseVerdict;
   prevPromiseNote?: string;
+  alignmentVerdict?: AlignmentVerdict;
+  alignmentNote?: string;
   outcomeAudits?: Record<string, OutcomeAuditEntry>;
   updatedAt: string;
 }
@@ -284,6 +289,8 @@ export interface ReviewEntry {
   headline?: string; // Quarter verdict headline or Yearly chapter title
   prevPromiseVerdict?: PromiseVerdict;
   prevPromiseNote?: string;
+  alignmentVerdict?: AlignmentVerdict;
+  alignmentNote?: string;
   outcomeAudits?: Record<string, OutcomeAuditEntry>;
   effortVsOutcomeNote?: string;
   roadmapAudits?: Record<string, RoadmapAuditEntry>;

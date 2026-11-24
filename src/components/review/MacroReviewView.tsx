@@ -31,12 +31,17 @@ import {
 } from '../../lib/macroAnalytics';
 import { formatProblemsForReviewText, problemOccurredInRange } from '../../lib/problems';
 import {
+  ALIGNMENT_VERDICTS,
   PARK_REASON_META,
+  alignmentVerdictToScore,
   collectLowScoreWarnings,
+  computePeriodAlignmentSummary,
   computePeriodEnergySummary
 } from '../../lib/energyAnalytics';
 import {
+  AlignmentVerdictSelector,
   LowScoreFlagsBanner,
+  PeriodAlignmentSummaryStrip,
   PeriodEnergySummaryStrip
 } from './EnergyAndWarningsCard';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
@@ -369,9 +374,11 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     currentPlan.topFocuses
   );
 
-  // Energy, Nervous System & Automatic < 6 Warning Flags for Quarter / Year
+  // Energy, Nervous System, Alignment & Automatic < 6 Warning Flags for Quarter / Year
   const periodDays = isQuarterly ? quarterData?.days || [] : yearData?.days || [];
   const periodEnergySummary = computePeriodEnergySummary(periodDays);
+  const periodAlignmentSummary = computePeriodAlignmentSummary(periodDays);
+  const periodAlignmentScore = alignmentVerdictToScore(saved?.alignmentVerdict);
   const periodAvgWeeklyNum =
     parseFloat(String(isQuarterly ? quarterData?.avgWeeklyScore : yearData?.avgWeeklyScore)) || 0;
   const periodAvgDailyNum =
@@ -396,6 +403,11 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     },
     { label: 'Weekly Avg', value: periodAvgWeeklyNum > 0 ? periodAvgWeeklyNum : null },
     { label: 'Daily Discipline Avg', value: periodAvgDailyNum > 0 ? periodAvgDailyNum : null },
+    {
+      label: `${isQuarterly ? 'Quarterly' : 'Yearly'} Alignment`,
+      value: periodAlignmentScore
+    },
+    { label: 'Daily Alignment Avg', value: periodAlignmentSummary.avgScore },
     { label: 'Energy Avg', value: periodEnergySummary.avgEnergy },
     { label: 'Nervous System Avg', value: periodEnergySummary.avgNervousSystem }
   ]);
@@ -701,6 +713,20 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     lines.push(`${periodLabel} — ${isQuarterly ? 'Quarterly Strategic Review' : 'Yearly Executive Review'}`);
     if (headline.trim()) lines.push(`Verdict / Chapter: "${headline.trim()}"`);
     lines.push(`Overall Score: ${score > 0 ? `${score}/10` : 'Unscored'}`);
+    const periodAlignMeta = ALIGNMENT_VERDICTS.find(v => v.id === saved?.alignmentVerdict);
+    if (periodAlignMeta || periodAlignmentSummary.daysLogged > 0) {
+      lines.push(
+        `Alignment & Judgment: ${
+          periodAlignMeta
+            ? `${isQuarterly ? 'Quarter' : 'Year'} ${periodAlignMeta.label} (${periodAlignMeta.score}/10)`
+            : `${isQuarterly ? 'Quarter' : 'Year'} Unrated`
+        }${
+          periodAlignmentSummary.daysLogged > 0
+            ? ` · Daily Avg ${periodAlignmentSummary.avgScore}/10 (Plan Fit ${periodAlignmentSummary.planFitPct}% · ${periodAlignmentSummary.onPlanCount} On Plan, ${periodAlignmentSummary.betterPivotCount} Better Pivot, ${periodAlignmentSummary.mixedCount} Mixed, ${periodAlignmentSummary.unwiseDriftCount} Drift)`
+            : ''
+        }${saved?.alignmentNote?.trim() ? ` — ${saved.alignmentNote.trim()}` : ''}`
+      );
+    }
     if (periodEnergySummary.daysLogged > 0) {
       lines.push(
         `Energy & Nervous System (${periodEnergySummary.daysLogged}d): Energy ${
@@ -1208,9 +1234,19 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
         )}
       </div>
 
-      {/* Automatic < 6 Warning Flags + Energy & Nervous System Period Telemetry */}
+      {/* Automatic < 6 Warning Flags + Energy/NS & Alignment Period Telemetry */}
       <LowScoreFlagsBanner periodLabel={periodLabel} flags={macroLowScoreFlags} />
       <PeriodEnergySummaryStrip summary={periodEnergySummary} periodLabel={periodLabel} />
+      <PeriodAlignmentSummaryStrip summary={periodAlignmentSummary} periodLabel={periodLabel} />
+      <AlignmentVerdictSelector
+        title={`${periodLabel} Overall Alignment`}
+        subtitle={`Zoom out: did this ${isQuarterly ? 'quarter' : 'year'} execute the plan, make a Better Pivot, or drift off course?`}
+        verdict={saved?.alignmentVerdict}
+        note={saved?.alignmentNote}
+        onChangeVerdict={next => onUpsertReview(periodKey, { alignmentVerdict: next })}
+        onChangeNote={note => onUpsertReview(periodKey, { alignmentNote: note })}
+        compact
+      />
 
       {/* ================================================================ */}
       {/* STAGE 1: PAST COMMITMENTS & REAL-WORLD REALITY                   */}

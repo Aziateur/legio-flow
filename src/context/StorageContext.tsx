@@ -4040,7 +4040,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               d.energyCheck.night ||
               d.energyCheck.nervousSystemScore ||
               d.energyCheck.nervousSystemState ||
-              d.energyCheck.nervousSystemNote?.trim()))
+              d.energyCheck.nervousSystemNote?.trim())) ||
+          Boolean(d.alignmentVerdict || d.alignmentNote?.trim())
       );
 
     allDates.forEach(date => {
@@ -4120,11 +4121,18 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               }
             : undefined;
 
+        const mergedAlignmentVerdict = chosen.alignmentVerdict || other.alignmentVerdict;
+        const mergedAlignmentNote = chosen.alignmentNote?.trim()
+          ? chosen.alignmentNote
+          : other.alignmentNote;
+
         if (
           unionGwsIds.length > (c.gwsSessionIds || []).length ||
           mergedPrios.length !== (c.priorityItems || []).length ||
           mergedReviewNotes !== (c.reviewNotes || '') ||
-          JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null)
+          JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null) ||
+          mergedAlignmentVerdict !== c.alignmentVerdict ||
+          (mergedAlignmentNote || '') !== (c.alignmentNote || '')
         ) {
           needsCloudPush = true;
         }
@@ -4137,7 +4145,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           reviewNotes: mergedReviewNotes,
           problemsEncountered: mergedProblems,
           executionScore: mergedScore,
-          ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {})
+          ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {}),
+          ...(mergedAlignmentVerdict ? { alignmentVerdict: mergedAlignmentVerdict } : {}),
+          ...(mergedAlignmentNote?.trim() ? { alignmentNote: mergedAlignmentNote } : {})
         });
       }
     });
@@ -4275,6 +4285,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           prevPromiseNote: primary.prevPromiseNote?.trim()
             ? primary.prevPromiseNote
             : secondary.prevPromiseNote,
+          alignmentVerdict: primary.alignmentVerdict || secondary.alignmentVerdict,
+          alignmentNote: primary.alignmentNote?.trim()
+            ? primary.alignmentNote
+            : secondary.alignmentNote,
           ...(mergedWeekAudits ? { outcomeAudits: mergedWeekAudits } : {}),
           tasks: mergedTasks,
           achievedScore: computeWeeklyAchievedScore(mergedTasks)
@@ -4608,6 +4622,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           prevPromiseNote: primary.prevPromiseNote?.trim()
             ? primary.prevPromiseNote
             : secondary.prevPromiseNote,
+          alignmentVerdict: primary.alignmentVerdict || secondary.alignmentVerdict,
+          alignmentNote: primary.alignmentNote?.trim()
+            ? primary.alignmentNote
+            : secondary.alignmentNote,
           effortVsOutcomeNote: primary.effortVsOutcomeNote?.trim()
             ? primary.effortVsOutcomeNote
             : secondary.effortVsOutcomeNote,

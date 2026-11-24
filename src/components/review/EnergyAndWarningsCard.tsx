@@ -1,13 +1,16 @@
 import React from 'react';
-import { DailyEnergyCheck, DailyEntry, NervousSystemState } from '../../types/schema';
+import { AlignmentVerdict, DailyEnergyCheck, DailyEntry, NervousSystemState } from '../../types/schema';
 import {
+  ALIGNMENT_VERDICTS,
   LowScoreFlag,
   NERVOUS_SYSTEM_STATES,
+  PeriodAlignmentSummary,
   PeriodEnergySummary,
+  alignmentVerdictToScore,
   computeDailyEnergyAvg,
   detectDiminishingEnergyTrend
 } from '../../lib/energyAnalytics';
-import { Activity, AlertTriangle, Battery, HeartPulse, Moon, Sun, Sunrise } from 'lucide-react';
+import { Activity, AlertTriangle, Battery, Compass, HeartPulse, Moon, Sun, Sunrise } from 'lucide-react';
 
 interface DailyEnergyReportCardProps {
   selectedDate: string;
@@ -336,6 +339,172 @@ export const PeriodEnergySummaryStrip: React.FC<PeriodEnergySummaryStripProps> =
           </span>
         )}
       </div>
+    </div>
+  );
+};
+
+interface AlignmentVerdictSelectorProps {
+  title: string;
+  subtitle?: string;
+  verdict?: AlignmentVerdict;
+  note?: string;
+  onChangeVerdict: (next?: AlignmentVerdict) => void;
+  onChangeNote: (note: string) => void;
+  compact?: boolean;
+}
+
+export const AlignmentVerdictSelector: React.FC<AlignmentVerdictSelectorProps> = ({
+  title,
+  subtitle,
+  verdict,
+  note,
+  onChangeVerdict,
+  onChangeNote,
+  compact = false
+}) => {
+  const scoreVal = alignmentVerdictToScore(verdict);
+  const showNoteInput =
+    Boolean(note?.trim()) ||
+    verdict === 'better_pivot' ||
+    verdict === 'mixed' ||
+    verdict === 'unwise_drift';
+
+  return (
+    <div
+      className={`bg-slate-900/90 border border-slate-800 rounded-3xl shadow-xl space-y-3 ${
+        compact ? 'p-4 sm:p-5' : 'p-5 sm:p-6'
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="flex items-center space-x-2">
+            <Compass className="w-4 h-4 text-cyan-400 shrink-0" />
+            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-100">
+              {title}
+            </span>
+          </div>
+          {subtitle && <p className="text-[11px] text-slate-400 mt-0.5">{subtitle}</p>}
+        </div>
+
+        {scoreVal !== null && (
+          <span
+            className={`px-2.5 py-0.5 rounded-full border font-mono text-xs font-extrabold ${
+              scoreVal < 6
+                ? 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+                : verdict === 'better_pivot'
+                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35'
+                : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+            }`}
+          >
+            {scoreVal}/10 Alignment
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {ALIGNMENT_VERDICTS.map(v => {
+          const active = verdict === v.id;
+          return (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => onChangeVerdict(active ? undefined : v.id)}
+              title={v.hint}
+              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all text-center ${
+                active
+                  ? `${v.activeCls} shadow-md`
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-slate-100'
+              }`}
+            >
+              {v.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {showNoteInput && (
+        <input
+          type="text"
+          value={note || ''}
+          onChange={e => onChangeNote(e.target.value)}
+          placeholder={
+            verdict === 'better_pivot'
+              ? 'What came up & why was it superior to the original plan?'
+              : 'What pulled you off-plan? (distraction, avoidance, unrealistic plan...)'
+          }
+          className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
+        />
+      )}
+    </div>
+  );
+};
+
+interface PeriodAlignmentSummaryStripProps {
+  summary: PeriodAlignmentSummary;
+  periodLabel: string;
+}
+
+export const PeriodAlignmentSummaryStrip: React.FC<PeriodAlignmentSummaryStripProps> = ({
+  summary,
+  periodLabel
+}) => {
+  if (summary.daysLogged === 0) return null;
+
+  return (
+    <div className="p-4 sm:p-5 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-2.5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center space-x-2.5">
+          <Compass className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div>
+            <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+              Plan Alignment &amp; Judgment · {periodLabel} ({summary.daysLogged}d checked)
+            </div>
+            <div className="text-[11px] font-mono text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="text-emerald-300">{summary.onPlanCount} On Plan</span>
+              <span>·</span>
+              <span className="text-cyan-300">{summary.betterPivotCount} Better Pivot</span>
+              <span>·</span>
+              <span className="text-amber-300">{summary.mixedCount} Mixed</span>
+              <span>·</span>
+              <span className={summary.unwiseDriftCount > 0 ? 'text-rose-400 font-bold' : 'text-slate-500'}>
+                {summary.unwiseDriftCount} Drift
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs font-mono font-bold">
+          {summary.avgScore !== null && (
+            <span
+              className={`px-3 py-1 rounded-xl border ${
+                summary.avgScore < 6
+                  ? 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+                  : summary.avgScore < 8
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                  : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+              }`}
+              title="Both On Plan and Better Pivot earn full 10/10 — only Mixed (5) and Unwise Drift (1) lower Alignment"
+            >
+              Alignment: {summary.avgScore}/10
+            </span>
+          )}
+          {summary.planFitPct !== null && (
+            <span
+              className="px-2.5 py-1 rounded-xl border bg-slate-950 text-slate-300 border-slate-800"
+              title="Neutral diagnostic: how often the original plan survived contact with reality"
+            >
+              Plan Fit: {summary.planFitPct}%
+            </span>
+          )}
+        </div>
+      </div>
+
+      {summary.highPivotSignal && (
+        <div className="px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/25 text-[11px] text-cyan-200 leading-snug">
+          <strong>Planning Calibration Signal:</strong> {summary.betterPivotCount}/{summary.daysLogged} days had a{' '}
+          <strong>Better Pivot</strong> — your in-the-moment judgment is beating your plans. Not a discipline issue; try planning lighter or recalibrating daily priorities.
+        </div>
+      )}
     </div>
   );
 };
