@@ -6,6 +6,7 @@ import {
 } from '../../context/StorageContext';
 import { StrategyPlan, StrategyStage, TaskItem } from '../../types/schema';
 import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
+import { getRoadmapStageBindings } from '../../lib/planHierarchy';
 import { daysBetweenDates, normalizeTag } from '../../lib/problems';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
@@ -101,8 +102,10 @@ export const StrategyRoadmapsView: React.FC = () => {
     selectedWeekId,
     saveWeeklyPlan,
     setSelectedWeekId,
+    monthlyPlans,
     getMonthlyPlan,
     saveMonthlyPlan,
+    quarterlyPlans,
     getQuarterlyPlan,
     saveQuarterlyPlan,
     problems,
@@ -926,6 +929,74 @@ export const StrategyRoadmapsView: React.FC = () => {
                             placeholder="Stage title..."
                             className="w-full bg-transparent text-lg sm:text-xl font-extrabold text-slate-100 focus:outline-none focus:bg-slate-900 rounded-lg px-2 -mx-2 py-0.5 transition-colors"
                           />
+
+                          {/* LIVE TIMEFRAME BINDINGS (Shows exactly where this Stage is committed & scheduled) */}
+                          {isCurrent && (() => {
+                            const bindings = getRoadmapStageBindings(
+                              activePlan.id,
+                              stage.id,
+                              quarterlyPlans,
+                              monthlyPlans,
+                              weeklyPlans
+                            );
+                            const isCommittedCurrentQ = bindings.targetQuarters.includes(activeQuarterKey);
+                            const toggleCommitCurrentQ = () => {
+                              const refs = activeQuarterPlan.targetGateRefs || [];
+                              const nextRefs = isCommittedCurrentQ
+                                ? refs.filter(r => !(r.planId === activePlan.id && r.stageId === stage.id))
+                                : [...refs, { planId: activePlan.id, stageId: stage.id }];
+                              saveQuarterlyPlan({ ...activeQuarterPlan, targetGateRefs: nextRefs });
+                            };
+                            return (
+                              <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
+                                <button
+                                  type="button"
+                                  onClick={toggleCommitCurrentQ}
+                                  className={`px-2 py-0.5 rounded-lg border font-bold font-mono text-[10px] transition-colors ${
+                                    isCommittedCurrentQ
+                                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35 hover:bg-emerald-500/25'
+                                      : 'bg-slate-900 hover:bg-cyan-500/15 text-cyan-300 border-slate-700 hover:border-cyan-500/40'
+                                  }`}
+                                  title={
+                                    isCommittedCurrentQ
+                                      ? `Committed as Target Gate in ${activeQuarterKey} (click to uncommit)`
+                                      : `Commit this Stage Gate to ${activeQuarterKey} Quarterly Plan`
+                                  }
+                                >
+                                  {isCommittedCurrentQ
+                                    ? `✓ Committed to ${activeQuarterKey}`
+                                    : `+ Commit Gate to ${activeQuarterKey}`}
+                                </button>
+
+                                {bindings.monthlySteps.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPlanningSubTab('monthly')}
+                                    className="px-2 py-0.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono text-[10px] font-bold"
+                                  >
+                                    {bindings.monthlySteps.filter(s => s.task.completed).length}/
+                                    {bindings.monthlySteps.length} Monthly steps
+                                  </button>
+                                )}
+
+                                {bindings.weeklySteps.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const latestWeekId =
+                                        bindings.weeklySteps[bindings.weeklySteps.length - 1]?.periodKey;
+                                      if (latestWeekId) setSelectedWeekId(latestWeekId);
+                                      setPlanningSubTab('weekly');
+                                    }}
+                                    className="px-2 py-0.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px] font-bold"
+                                  >
+                                    {bindings.weeklySteps.filter(s => s.task.completed).length}/
+                                    {bindings.weeklySteps.length} Weekly steps
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Stage Controls */}

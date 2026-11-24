@@ -765,6 +765,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
         notes: p?.notes || '',
         tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+        scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
         updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
       };
     });
@@ -2185,6 +2186,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }> = [];
 
     (savedPlan.tasks || []).forEach(t => {
+      // Decomposed child steps roll up progress without prematurely closing the whole parent outcome
+      if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
       if (!changed) return;
@@ -2573,6 +2576,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     topFocuses: Array.isArray(p?.topFocuses) ? p.topFocuses : undefined,
     notes: p?.notes || '',
     tasks: Array.isArray(p?.tasks) ? p.tasks : [],
+    scoreboard: Array.isArray(p?.scoreboard) ? p.scoreboard : [],
     updatedAt: p?.updatedAt || EMPTY_WEEK_TIMESTAMP
   });
 
@@ -2612,7 +2616,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const prevPlan = monthlyPlansRef.current[key];
     if (prevPlan) {
       const nextIds = new Set((plan.tasks || []).map(t => t.id));
-      const removed = (prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id);
+      const nextScoreIds = new Set((plan.scoreboard || []).map(s => s.id));
+      const removed = [
+        ...(prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id),
+        ...(prevPlan.scoreboard || []).filter(s => s.id && !nextScoreIds.has(s.id)).map(s => s.id)
+      ];
       if (removed.length > 0) recordDeletedIds(removed);
     }
     const saved = {
@@ -2624,7 +2632,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync: propagate completed monthly goal to linked quarterly, yearly & roadmap goals
+    // Upward ID-linked sync (only for 1:1 mirrored items — child steps roll up progress without closing parent)
     const prevMap = new Map<string, boolean>();
     (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
     const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
@@ -2636,6 +2644,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       completed: boolean;
     }> = [];
     saved.tasks.forEach(t => {
+      if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
       if (changed && t.quarterlyTaskId) {
@@ -2705,6 +2714,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       completed: boolean;
     }> = [];
     saved.tasks.forEach(t => {
+      if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
       if (changed && t.yearlyTaskId) {
@@ -4002,6 +4012,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         });
         return {
           ...pt,
+          kpiTarget: pt.kpiTarget?.trim() ? pt.kpiTarget : match.kpiTarget,
+          kpiActual: pt.kpiActual?.trim() ? pt.kpiActual : match.kpiActual,
+          status: pt.status || match.status,
+          parentLinkMode: pt.parentLinkMode || match.parentLinkMode,
           monthlyTaskId: pt.monthlyTaskId || match.monthlyTaskId,
           quarterlyTaskId: pt.quarterlyTaskId || match.quarterlyTaskId,
           yearlyTaskId: pt.yearlyTaskId || match.yearlyTaskId,

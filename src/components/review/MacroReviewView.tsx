@@ -668,11 +668,28 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     }
 
     if (currentPlan.tasks.length > 0) {
-      lines.push(`Contract Outcomes (${currentPlan.tasks.filter(t => t.completed).length}/${currentPlan.tasks.length} done):`);
+      const activeTasks = currentPlan.tasks.filter(t => t.status !== 'parked');
+      const parkedCount = currentPlan.tasks.length - activeTasks.length;
+      lines.push(
+        `Contract Outcomes (${activeTasks.filter(t => t.completed).length}/${activeTasks.length} active done${
+          parkedCount > 0 ? ` · ${parkedCount} parked` : ''
+        }):`
+      );
       currentPlan.tasks.forEach(t => {
         const a = outcomeAudits[t.id];
-        const tag = a?.verdict ? `[${a.verdict.toUpperCase()}${a.rootCause ? ` · ${a.rootCause}` : ''}]` : t.completed ? '[DONE]' : '[OPEN]';
-        lines.push(`  • ${tag} ${t.text}${a?.note?.trim() ? ` — ${a.note.trim()}` : ''}`);
+        const tag =
+          t.status === 'parked'
+            ? '[PARKED]'
+            : a?.verdict
+            ? `[${a.verdict.toUpperCase()}${a.rootCause ? ` · ${a.rootCause}` : ''}]`
+            : t.completed
+            ? '[DONE]'
+            : '[OPEN]';
+        const kpiSuffix =
+          t.kpiTarget?.trim() || t.kpiActual?.trim()
+            ? ` [KPI: ${t.kpiTarget?.trim() || '—'} → ${t.kpiActual?.trim() || '—'}]`
+            : '';
+        lines.push(`  • ${tag} ${t.text}${kpiSuffix}${a?.note?.trim() ? ` — ${a.note.trim()}` : ''}`);
       });
     }
 
@@ -1201,18 +1218,26 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
 
           {/* 1B. Contract Outcomes Audit (Full untruncated list) */}
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-200">
-                  {isQuarterly ? 'Quarterly' : 'Yearly'} Contract Audit ({currentPlan.tasks.filter(t => t.completed).length}/{currentPlan.tasks.length} done)
-                </span>
-                {currentPlan.focusTheme.trim() && (
-                  <p className="text-xs text-amber-400 font-semibold mt-0.5">
-                    Focus: {currentPlan.focusTheme.trim()}
-                  </p>
-                )}
-              </div>
-            </div>
+            {(() => {
+              const activeOutcomes = currentPlan.tasks.filter(t => t.status !== 'parked');
+              const parkedCount = currentPlan.tasks.length - activeOutcomes.length;
+              return (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-200">
+                      {isQuarterly ? 'Quarterly' : 'Yearly'} Contract Audit (
+                      {activeOutcomes.filter(t => t.completed).length}/{activeOutcomes.length} active done
+                      {parkedCount > 0 ? ` · ${parkedCount} parked` : ''})
+                    </span>
+                    {currentPlan.focusTheme.trim() && (
+                      <p className="text-xs text-amber-400 font-semibold mt-0.5">
+                        Focus: {currentPlan.focusTheme.trim()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {currentPlan.tasks.length === 0 ? (
               <div className="p-4 rounded-2xl bg-slate-950 border border-dashed border-slate-800 text-xs text-slate-400">
@@ -1223,11 +1248,15 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                 {currentPlan.tasks.map(task => {
                   const audit = outcomeAudits[task.id] || {};
                   const showNote = expandedOutcomeNotes[task.id] || Boolean(audit.note?.trim());
+                  const isParked = task.status === 'parked';
+                  const hasKpi = Boolean(task.kpiTarget?.trim() || task.kpiActual?.trim());
                   return (
                     <div
                       key={task.id}
                       className={`p-4 rounded-2xl border space-y-2.5 transition-colors ${
-                        audit.verdict === 'hit' || task.completed
+                        isParked
+                          ? 'bg-slate-950/60 border-slate-800/70 opacity-75'
+                          : audit.verdict === 'hit' || task.completed
                           ? 'bg-emerald-500/5 border-emerald-500/25'
                           : audit.verdict === 'missed'
                           ? 'bg-rose-500/5 border-rose-500/25'
@@ -1247,9 +1276,24 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                               <Circle className="w-4 h-4 text-slate-500 hover:text-slate-300" />
                             )}
                           </button>
-                          <span className={`text-xs sm:text-sm font-semibold leading-snug ${task.completed ? 'text-emerald-200' : 'text-slate-100'}`}>
-                            {task.text}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
+                            <span
+                              className={`text-xs sm:text-sm font-semibold leading-snug ${
+                                isParked
+                                  ? 'text-slate-400'
+                                  : task.completed
+                                  ? 'text-emerald-200'
+                                  : 'text-slate-100'
+                              }`}
+                            >
+                              {task.text}
+                            </span>
+                            {isParked && (
+                              <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                                Parked
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Verdict Pills + Root Cause Selector */}
@@ -1301,6 +1345,36 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                           )}
                         </div>
                       </div>
+
+                      {hasKpi && (
+                        <div className="pl-6 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-slate-400">
+                            KPI Proof Target:{' '}
+                            <span className="font-mono font-semibold text-amber-300">
+                              {task.kpiTarget?.trim() || '—'}
+                            </span>
+                          </span>
+                          <span className="text-slate-600">→</span>
+                          <label className="inline-flex items-center space-x-1.5 flex-1 min-w-[180px] max-w-md">
+                            <span className="text-emerald-400 font-bold uppercase text-[10px] tracking-wider shrink-0">
+                              Actual:
+                            </span>
+                            <input
+                              type="text"
+                              value={task.kpiActual || ''}
+                              onChange={e =>
+                                saveCurrentPlan({
+                                  tasks: currentPlan.tasks.map(t =>
+                                    t.id === task.id ? { ...t, kpiActual: e.target.value } : t
+                                  )
+                                })
+                              }
+                              placeholder="Did we actually hit it?"
+                              className="flex-1 min-w-0 bg-emerald-500/5 border border-emerald-500/30 rounded-lg px-2.5 py-1 font-mono text-[11px] font-semibold text-emerald-200 placeholder-slate-600 focus:outline-none focus:border-emerald-400"
+                            />
+                          </label>
+                        </div>
+                      )}
 
                       {showNote && (
                         <input

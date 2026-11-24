@@ -1,49 +1,54 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useStorage } from '../../context/StorageContext';
 import { TaskItem, TargetGateRef } from '../../types/schema';
-import { getQuarterInfo, shiftQuarterKey } from '../../lib/macroAnalytics';
+import { getMonthInfo, getQuarterInfo, shiftQuarterKey } from '../../lib/macroAnalytics';
+import {
+  getCommittedGatesForQuarter,
+  getMonthlyChildrenOfQuarterlyTask,
+  getMonthsForQuarter
+} from '../../lib/planHierarchy';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import {
+  HierarchyOutcomeCard,
+  ParentLinkOption
+} from './HierarchyOutcomeCard';
+import {
   ChevronLeft,
   ChevronRight,
-  CheckCircle2,
-  Circle,
+  ChevronDown,
+  ChevronUp,
   Plus,
-  Trash2,
-  ArrowDownToLine,
   Compass,
   ExternalLink,
   Lock,
-  Unlock
+  Unlock,
+  ArrowUpRight,
+  Calendar
 } from 'lucide-react';
 
 interface QuarterlyPlanSectionProps {
   selectedQuarterKey: string;
   setSelectedQuarterKey: (qKey: string) => void;
   selectedMonthKey: string;
-  activeWeeklyPlanId?: string;
-  activeWeeklyPlanNumber?: number;
-  isGoalInMonthlyPlan: (text: string, links?: { quarterlyTaskId?: string; yearlyTaskId?: string }) => boolean;
-  isGoalInWeeklyPlan: (text: string, links?: { monthlyTaskId?: string; quarterlyTaskId?: string; yearlyTaskId?: string }) => boolean;
-  onPullToMonth: (text: string, links?: { quarterlyTaskId?: string; yearlyTaskId?: string }) => void;
-  onPullToWeek: (text: string, links?: { monthlyTaskId?: string; quarterlyTaskId?: string; yearlyTaskId?: string }) => void;
+  onOpenMonth?: (monthKey: string) => void;
+  onOpenYear?: (yearKey: string) => void;
 }
 
 export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
   selectedQuarterKey,
   setSelectedQuarterKey,
   selectedMonthKey,
-  activeWeeklyPlanNumber,
-  isGoalInMonthlyPlan,
-  isGoalInWeeklyPlan,
-  onPullToMonth,
-  onPullToWeek
+  onOpenMonth,
+  onOpenYear
 }) => {
   const {
     quarterlyPlans,
     getQuarterlyPlan,
     saveQuarterlyPlan,
+    monthlyPlans,
+    getMonthlyPlan,
+    saveMonthlyPlan,
     getYearlyPlan,
     strategyPlans,
     todayDate,
@@ -54,11 +59,21 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
   } = useStorage();
 
   const [newOutcomeInput, setNewOutcomeInput] = useState('');
-  const [showPullFromYearly, setShowPullFromYearly] = useState(false);
+  const [newOutcomeKpi, setNewOutcomeKpi] = useState('');
+  const [newOutcomeParent, setNewOutcomeParent] = useState('');
+  const [showParentYear, setShowParentYear] = useState(true);
+  const [stepNotice, setStepNotice] = useState<string | null>(null);
+  const [gateStepTargetId, setGateStepTargetId] = useState<string | null>(null);
+  const [gateStepMonth, setGateStepMonth] = useState<string>('');
+  const [gateStepDraft, setGateStepDraft] = useState('');
 
   const qInfo = getQuarterInfo(selectedQuarterKey);
   const activeQuarterPlan = getQuarterlyPlan(selectedQuarterKey);
   const linkedYearPlan = getYearlyPlan(String(qInfo.year));
+  const quarterMonths = getMonthsForQuarter(qInfo.quarterKey);
+  const defaultChildMonth = quarterMonths.includes(selectedMonthKey)
+    ? selectedMonthKey
+    : quarterMonths[0];
 
   const todayQKey = getQuarterInfo(
     `${todayDate.slice(0, 4)}-Q${Math.ceil((parseInt(todayDate.slice(5, 7), 10) || 1) / 3)}`
@@ -78,35 +93,106 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     ])
   ).sort();
 
-  const doneCount = activeQuarterPlan.tasks.filter(t => t.completed).length;
+  const activeOutcomes = activeQuarterPlan.tasks.filter(t => t.status !== 'parked');
+  const doneCount = activeOutcomes.filter(t => t.completed).length;
   const targetGateRefs = activeQuarterPlan.targetGateRefs || [];
+  const committedGates = useMemo(
+    () => getCommittedGatesForQuarter(activeQuarterPlan, strategyPlans),
+    [activeQuarterPlan, strategyPlans]
+  );
+
+  // Parent link options for Quarterly Outcomes (Yearly Outcomes + Committed Roadmap Gates)
+  const parentOptions = useMemo<ParentLinkOption[]>(() => {
+    const opts: ParentLinkOption[] = [];
+    linkedYearPlan.tasks
+      .filter(t => t.status !== 'parked')
+      .forEach(yt => {
+        opts.push({
+          value: `yearly:${yt.id}`,
+          label: yt.text,
+          group: `${qInfo.year} Yearly Objectives`
+        });
+      });
+    committedGates.forEach(cg => {
+      opts.push({
+        value: `gate:${cg.plan.id}|${cg.stage.id}`,
+        label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
+        group: 'Committed Roadmap Gates'
+      });
+    });
+    return opts;
+  }, [linkedYearPlan.tasks, committedGates, qInfo.year]);
+
+  const encodeTaskParent = (t: TaskItem): string => {
+    if (t.yearlyTaskId) return `yearly:${t.yearlyTaskId}`;
+    if (t.strategyPlanId && t.strategyStageId) return `gate:${t.strategyPlanId}|${t.strategyStageId}`;
+    return '';
+  };
+
+  const decodeParentPatch = (encoded: string): Partial<TaskItem> => {
+    if (!encoded) {
+      return {
+        yearlyTaskId: undefined,
+        strategyPlanId: undefined,
+        strategyStageId: undefined,
+        sourceLabel: undefined
+      };
+    }
+    if (encoded.startsWith('yearly:')) {
+      return {
+        yearlyTaskId: encoded.slice(7),
+        strategyPlanId: undefined,
+        strategyStageId: undefined,
+        parentLinkMode: 'step'
+      };
+    }
+    if (encoded.startsWith('gate:')) {
+      const [planId, stageId] = encoded.slice(5).split('|');
+      const plan = strategyPlans.find(p => p.id === planId);
+      return {
+        yearlyTaskId: undefined,
+        strategyPlanId: planId,
+        strategyStageId: stageId,
+        sourceLabel: plan ? `${plan.title}` : undefined,
+        parentLinkMode: 'step'
+      };
+    }
+    return {};
+  };
+
+  const childMonthOptions = useMemo(
+    () =>
+      quarterMonths.map(mk => ({
+        key: mk,
+        label: getMonthInfo(mk).label
+      })),
+    [quarterMonths]
+  );
 
   const handleAddOutcome = () => {
     const trimmed = newOutcomeInput.trim();
     if (!trimmed) return;
+    const parentPatch = decodeParentPatch(newOutcomeParent);
     const nextTask: TaskItem = {
       id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       text: trimmed,
-      completed: false
+      completed: false,
+      ...(newOutcomeKpi.trim() ? { kpiTarget: newOutcomeKpi.trim() } : {}),
+      ...parentPatch
     };
     saveQuarterlyPlan({
       ...activeQuarterPlan,
       tasks: [...activeQuarterPlan.tasks, nextTask]
     });
     setNewOutcomeInput('');
+    setNewOutcomeKpi('');
+    setNewOutcomeParent('');
   };
 
-  const handleToggleOutcome = (id: string) => {
+  const handleUpdateOutcome = (id: string, patch: Partial<TaskItem>) => {
     saveQuarterlyPlan({
       ...activeQuarterPlan,
-      tasks: activeQuarterPlan.tasks.map(t => (t.id === id ? { ...t, completed: !t.completed } : t))
-    });
-  };
-
-  const handleEditOutcome = (id: string, text: string) => {
-    saveQuarterlyPlan({
-      ...activeQuarterPlan,
-      tasks: activeQuarterPlan.tasks.map(t => (t.id === id ? { ...t, text } : t))
+      tasks: activeQuarterPlan.tasks.map(t => (t.id === id ? { ...t, ...patch } : t))
     });
   };
 
@@ -117,26 +203,56 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     });
   };
 
-  const isYearlyGoalInQuarter = (text: string, yearlyTaskId: string) => {
-    if (activeQuarterPlan.tasks.some(t => t.yearlyTaskId === yearlyTaskId)) return true;
-    const norm = text.trim().toLowerCase();
-    return !!norm && activeQuarterPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+  const handleSpawnMonthlyStep = (
+    parentTask: TaskItem,
+    monthKey: string,
+    text: string,
+    kpiTarget?: string
+  ) => {
+    const targetMonth = getMonthlyPlan(monthKey);
+    const newStep: TaskItem = {
+      id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      text,
+      completed: false,
+      parentLinkMode: 'step',
+      quarterlyTaskId: parentTask.id,
+      ...(parentTask.yearlyTaskId ? { yearlyTaskId: parentTask.yearlyTaskId } : {}),
+      ...(parentTask.strategyPlanId ? { strategyPlanId: parentTask.strategyPlanId } : {}),
+      ...(parentTask.strategyStageId ? { strategyStageId: parentTask.strategyStageId } : {}),
+      ...(kpiTarget ? { kpiTarget } : {})
+    };
+    saveMonthlyPlan({
+      ...targetMonth,
+      tasks: [...targetMonth.tasks, newStep]
+    });
+    setStepNotice(`Added step to ${getMonthInfo(monthKey).label}`);
+    setTimeout(() => setStepNotice(null), 2400);
   };
 
-  const handlePullFromYearly = (text: string, yearlyTaskId: string) => {
-    if (isYearlyGoalInQuarter(text, yearlyTaskId)) return;
-    saveQuarterlyPlan({
-      ...activeQuarterPlan,
+  const handleSpawnGateMonthlyStep = (planId: string, stageId: string, planTitle: string) => {
+    const clean = gateStepDraft.trim();
+    if (!clean) return;
+    const mKey = gateStepMonth || defaultChildMonth;
+    const targetMonth = getMonthlyPlan(mKey);
+    saveMonthlyPlan({
+      ...targetMonth,
       tasks: [
-        ...activeQuarterPlan.tasks,
+        ...targetMonth.tasks,
         {
-          id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          text: text.trim(),
+          id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          text: clean,
           completed: false,
-          yearlyTaskId
+          parentLinkMode: 'step',
+          strategyPlanId: planId,
+          strategyStageId: stageId,
+          sourceLabel: planTitle
         }
       ]
     });
+    setGateStepDraft('');
+    setGateStepTargetId(null);
+    setStepNotice(`Scheduled Roadmap step in ${getMonthInfo(mKey).label}`);
+    setTimeout(() => setStepNotice(null), 2400);
   };
 
   const toggleTargetGate = (ref: TargetGateRef) => {
@@ -150,8 +266,22 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     });
   };
 
+  const jumpToMonth = (mKey: string) => {
+    if (onOpenMonth) {
+      onOpenMonth(mKey);
+    } else {
+      setPlanningSubTab('monthly');
+    }
+  };
+
+  const yearHasContext = Boolean(
+    linkedYearPlan.focusTheme.trim() ||
+      (linkedYearPlan.topFocuses || []).some(f => f.trim()) ||
+      linkedYearPlan.tasks.length > 0
+  );
+
   return (
-    <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+    <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-5">
       {/* Quarter Selector & Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
         <div className="flex items-center space-x-2">
@@ -222,6 +352,106 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
         </div>
       </div>
 
+      {/* LOOKING UP: Parent Year Compass Bar */}
+      {yearHasContext && (
+        <div className="rounded-2xl bg-slate-900/80 border border-rose-500/25 overflow-hidden shadow-md">
+          <div className="px-4 py-2.5 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setShowParentYear(v => !v)}
+              className="flex items-center space-x-2 text-left min-w-0"
+            >
+              <ArrowUpRight className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-400 shrink-0">
+                Serving {qInfo.year} Yearly Plan
+              </span>
+              {linkedYearPlan.focusTheme.trim() && (
+                <span className="text-xs font-semibold text-slate-300 truncate">
+                  · {linkedYearPlan.focusTheme.trim()}
+                </span>
+              )}
+            </button>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenYear ? onOpenYear(String(qInfo.year)) : setPlanningSubTab('yearly')
+                }
+                className="text-[11px] font-bold text-rose-300 hover:text-rose-200"
+              >
+                Open {qInfo.year} →
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowParentYear(v => !v)}
+                className="p-1 text-slate-400 hover:text-slate-200"
+              >
+                {showParentYear ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {showParentYear && (
+            <div className="px-4 pb-3.5 pt-2 border-t border-slate-800/80 space-y-2.5 text-xs">
+              {(linkedYearPlan.topFocuses || []).some(f => f.trim()) && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                    {qInfo.year} Top Focuses:
+                  </span>
+                  {(linkedYearPlan.topFocuses || [])
+                    .map(f => f.trim())
+                    .filter(Boolean)
+                    .map((f, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 rounded-lg bg-rose-500/10 text-rose-200 border border-rose-500/25 text-[11px] font-semibold"
+                      >
+                        #{idx + 1} {f}
+                      </span>
+                    ))}
+                </div>
+              )}
+
+              {linkedYearPlan.tasks.filter(t => !t.completed && t.status !== 'parked').length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                    Active {qInfo.year} Objectives:
+                  </span>
+                  {linkedYearPlan.tasks
+                    .filter(t => !t.completed && t.status !== 'parked')
+                    .map(yt => {
+                      const hasQChild = activeQuarterPlan.tasks.some(qt => qt.yearlyTaskId === yt.id);
+                      return (
+                        <button
+                          key={yt.id}
+                          type="button"
+                          onClick={() => setNewOutcomeParent(`yearly:${yt.id}`)}
+                          title="Select as parent for your next Quarterly outcome below"
+                          className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-colors ${
+                            newOutcomeParent === `yearly:${yt.id}`
+                              ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/50'
+                              : hasQChild
+                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
+                              : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          <span>{hasQChild ? '✓' : '○'}</span>
+                          <span>{yt.text}</span>
+                          {yt.kpiTarget?.trim() && (
+                            <span className="text-[10px] font-mono text-slate-500">
+                              ({yt.kpiTarget.trim()})
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Quarterly Plan Sheet */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-7">
         {/* Focus Theme */}
@@ -240,7 +470,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
           </div>
 
           <span className="self-start sm:self-center px-3 py-1 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-xs font-mono font-bold shrink-0">
-            {doneCount} / {activeQuarterPlan.tasks.length} outcomes
+            {doneCount} / {activeOutcomes.length} outcomes
           </span>
         </div>
 
@@ -254,184 +484,110 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
           />
         </div>
 
-        {/* Quarterly Outcomes Checklist */}
+        {/* Quarterly Outcomes (Model A: Parent Link + KPI Proof + Monthly Step Decomposition & Roll-up) */}
         <div className="space-y-3 pt-4 border-t border-slate-800/80">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-bold text-slate-300">
-              Quarterly Outcomes ({activeQuarterPlan.tasks.length})
-            </span>
-
-            <div className="flex items-center space-x-2">
-              {linkedYearPlan.tasks.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowPullFromYearly(v => !v)}
-                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[11px] font-bold transition-colors"
-                >
-                  <ArrowDownToLine className="w-3 h-3" />
-                  <span>
-                    {showPullFromYearly
-                      ? 'Hide Yearly Goals'
-                      : `Pull from ${qInfo.year} Yearly Plan (${linkedYearPlan.tasks.length})`}
-                  </span>
-                </button>
-              )}
+            <div>
+              <span className="text-xs font-bold text-slate-200">
+                Quarterly Outcomes ({activeQuarterPlan.tasks.length})
+              </span>
+              <p className="text-[11px] text-slate-400">
+                Give each outcome a measurable KPI proof check and break it into concrete Monthly steps — never tracked daily, verified at review.
+              </p>
             </div>
+            {stepNotice && (
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold">
+                ✓ {stepNotice}
+              </span>
+            )}
           </div>
-
-          {showPullFromYearly && linkedYearPlan.tasks.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-slate-950 border border-rose-500/25 space-y-2">
-              <div className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
-                {qInfo.year} Yearly Objectives — click to commit to {qInfo.quarterKey}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {linkedYearPlan.tasks.map(yt => {
-                  const alreadyIn = isYearlyGoalInQuarter(yt.text, yt.id);
-                  return (
-                    <button
-                      key={yt.id}
-                      type="button"
-                      disabled={alreadyIn}
-                      onClick={() => handlePullFromYearly(yt.text, yt.id)}
-                      className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
-                        alreadyIn
-                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-default'
-                          : 'bg-slate-900 hover:bg-rose-500/15 text-slate-200 border-slate-800 hover:border-rose-500/40'
-                      }`}
-                    >
-                      <span>{alreadyIn ? '✓' : '+'}</span>
-                      <span>{yt.text}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {activeQuarterPlan.tasks.length === 0 ? (
             <div className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
-              No quarterly outcomes defined yet for {qInfo.quarterKey}. Add 3–5 concrete outcomes below so your end-of-quarter review has a real contract to audit against.
+              No quarterly outcomes defined yet for {qInfo.quarterKey}. Add 3–5 concrete outcomes below.
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {activeQuarterPlan.tasks.map(task => {
-                const inMonth = isGoalInMonthlyPlan(task.text, {
-                  quarterlyTaskId: task.id,
-                  yearlyTaskId: task.yearlyTaskId
-                });
-                const inWeek = isGoalInWeeklyPlan(task.text, {
-                  quarterlyTaskId: task.id,
-                  yearlyTaskId: task.yearlyTaskId
-                });
+                const monthlySteps = getMonthlyChildrenOfQuarterlyTask(
+                  task.id,
+                  qInfo.quarterKey,
+                  monthlyPlans
+                );
                 return (
-                  <div
+                  <HierarchyOutcomeCard
                     key={task.id}
-                    className={`group flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3.5 rounded-2xl border transition-all ${
-                      task.completed
-                        ? 'bg-emerald-500/5 border-emerald-500/25'
-                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3 flex-1 min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleOutcome(task.id)}
-                        className="shrink-0 transition-transform active:scale-90"
-                      >
-                        {task.completed ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                        ) : (
-                          <Circle className="w-5 h-5 text-slate-600 hover:text-cyan-400" />
-                        )}
-                      </button>
-
-                      <input
-                        type="text"
-                        value={task.text}
-                        onChange={e => handleEditOutcome(task.id, e.target.value)}
-                        className={`w-full bg-transparent text-xs sm:text-sm font-medium focus:outline-none ${
-                          task.completed ? 'line-through text-slate-500' : 'text-slate-100'
-                        }`}
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onPullToMonth(task.text, {
-                            quarterlyTaskId: task.id,
-                            yearlyTaskId: task.yearlyTaskId
-                          })
-                        }
-                        className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                          inMonth
-                            ? 'bg-purple-500/20 text-purple-300 border-purple-500/35 hover:bg-purple-500/30'
-                            : 'bg-slate-900 hover:bg-slate-800 text-purple-300 border-slate-800'
-                        }`}
-                      >
-                        {!inMonth && <ArrowDownToLine className="w-3 h-3" />}
-                        <span>{inMonth ? `✓ In ${selectedMonthKey}` : `+ Month (${selectedMonthKey.slice(5)})`}</span>
-                      </button>
-
-                      {activeWeeklyPlanNumber !== undefined && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onPullToWeek(task.text, {
-                              quarterlyTaskId: task.id,
-                              yearlyTaskId: task.yearlyTaskId
-                            })
-                          }
-                          className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                            inWeek
-                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25'
-                              : 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-800'
-                          }`}
-                        >
-                          {!inWeek && <ArrowDownToLine className="w-3 h-3" />}
-                          <span>{inWeek ? `✓ In W${activeWeeklyPlanNumber}` : `+ Week ${activeWeeklyPlanNumber}`}</span>
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteOutcome(task.id)}
-                        className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete outcome"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                    task={task}
+                    accent="cyan"
+                    parentOptions={parentOptions}
+                    selectedParentValue={encodeTaskParent(task)}
+                    onChangeParent={val => handleUpdateOutcome(task.id, decodeParentPatch(val))}
+                    childrenSteps={monthlySteps}
+                    childUnitLabel="Monthly"
+                    childPeriodOptions={childMonthOptions}
+                    defaultChildPeriodKey={defaultChildMonth}
+                    onSpawnChildStep={(mKey, text, kpi) =>
+                      handleSpawnMonthlyStep(task, mKey, text, kpi)
+                    }
+                    onJumpToChildPeriod={jumpToMonth}
+                    onToggleComplete={() =>
+                      handleUpdateOutcome(task.id, { completed: !task.completed })
+                    }
+                    onEditText={text => handleUpdateOutcome(task.id, { text })}
+                    onUpdateFields={patch => handleUpdateOutcome(task.id, patch)}
+                    onDelete={() => handleDeleteOutcome(task.id)}
+                  />
                 );
               })}
             </div>
           )}
 
-          {/* Add Quarterly Outcome */}
+          {/* Add Quarterly Outcome (with optional Parent Link + KPI Proof) */}
           <form
             onSubmit={e => {
               e.preventDefault();
               handleAddOutcome();
             }}
-            className="flex items-center space-x-2 p-3 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-cyan-500/50 transition-colors"
+            className="p-3 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-cyan-500/50 transition-colors space-y-2"
           >
-            <Plus className="w-4 h-4 text-slate-500 shrink-0" />
+            <div className="flex flex-wrap items-center gap-2">
+              <Plus className="w-4 h-4 text-slate-500 shrink-0" />
+              <input
+                type="text"
+                value={newOutcomeInput}
+                onChange={e => setNewOutcomeInput(e.target.value)}
+                placeholder="Add a concrete 90-day outcome and press Enter..."
+                className="flex-1 min-w-[200px] bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+              />
+              {parentOptions.length > 0 && (
+                <select
+                  value={newOutcomeParent}
+                  onChange={e => setNewOutcomeParent(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1 text-[11px] font-semibold text-cyan-300 focus:outline-none max-w-[200px]"
+                >
+                  <option value="">Parent (optional)...</option>
+                  {parentOptions.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      ↑ {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="submit"
+                disabled={!newOutcomeInput.trim()}
+                className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-40 text-cyan-300 border border-cyan-500/30 text-xs font-bold shrink-0"
+              >
+                + Add
+              </button>
+            </div>
             <input
               type="text"
-              value={newOutcomeInput}
-              onChange={e => setNewOutcomeInput(e.target.value)}
-              placeholder="Add a concrete 90-day outcome and press Enter..."
-              className="flex-1 bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+              value={newOutcomeKpi}
+              onChange={e => setNewOutcomeKpi(e.target.value)}
+              placeholder="Optional measurable KPI proof (e.g. 60 green demo days, 5 clients signed)..."
+              className="w-full pl-6 bg-transparent text-[11px] text-emerald-300/90 placeholder-slate-600 focus:outline-none"
             />
-            <button
-              type="submit"
-              disabled={!newOutcomeInput.trim()}
-              className="px-3 py-1 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-40 text-cyan-300 border border-cyan-500/30 text-xs font-bold"
-            >
-              + Add
-            </button>
           </form>
         </div>
 
@@ -444,7 +600,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                 <span>Target Roadmap Gates ({targetGateRefs.length} committed)</span>
               </span>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                Select which active Stage-Gate(s) from your Written Roadmaps you intend to pass during {qInfo.quarterKey}.
+                Committed gates automatically appear inside {qInfo.quarterKey}&apos;s Monthly Plans and Weekly Plans so Roadmaps stay locked to your calendar.
               </p>
             </div>
             <button
@@ -469,12 +625,13 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                   r => r.planId === plan.id && r.stageId === activeStage.id
                 );
                 const passedCount = plan.stages.filter(s => s.gatePassed).length;
+                const doneProximal = activeStage.proximalGoals.filter(g => g.completed).length;
+                const isSchedulingHere = gateStepTargetId === `${plan.id}|${activeStage.id}`;
+
                 return (
-                  <button
+                  <div
                     key={plan.id}
-                    type="button"
-                    onClick={() => toggleTargetGate({ planId: plan.id, stageId: activeStage.id })}
-                    className={`p-3.5 rounded-2xl border text-left transition-all space-y-1.5 ${
+                    className={`p-3.5 rounded-2xl border transition-all space-y-2 ${
                       isTargeted
                         ? 'bg-emerald-500/10 border-emerald-500/40'
                         : 'bg-slate-950 border-slate-800 hover:border-slate-700'
@@ -484,34 +641,140 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                       <span className="font-extrabold text-xs text-slate-100 truncate">
                         {plan.title}
                       </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-lg text-[10px] font-bold font-mono shrink-0 ${
-                          isTargeted
-                            ? 'bg-emerald-500 text-slate-950'
-                            : 'bg-slate-900 text-slate-400 border border-slate-800'
-                        }`}
-                      >
-                        {isTargeted ? '✓ Target Gate' : `${passedCount}/${plan.stages.length} gates`}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isTargeted && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGateStepMonth(defaultChildMonth);
+                              setGateStepTargetId(
+                                isSchedulingHere ? null : `${plan.id}|${activeStage.id}`
+                              );
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/35 text-[10px] font-bold"
+                          >
+                            + Month Step
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggleTargetGate({ planId: plan.id, stageId: activeStage.id })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold font-mono transition-colors ${
+                            isTargeted
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
+                          }`}
+                        >
+                          {isTargeted ? '✓ Target Gate' : `Commit (${passedCount}/${plan.stages.length})`}
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-1.5 text-[11px] font-semibold text-amber-300">
-                      {activeStage.gatePassed ? (
-                        <Unlock className="w-3 h-3 text-emerald-400 shrink-0" />
-                      ) : (
-                        <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-amber-300">
+                      <div className="flex items-center space-x-1.5 min-w-0">
+                        {activeStage.gatePassed ? (
+                          <Unlock className="w-3 h-3 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                        )}
+                        <span className="truncate">{activeStage.title}</span>
+                      </div>
+                      {activeStage.proximalGoals.length > 0 && (
+                        <span className="font-mono text-[10px] text-slate-400 shrink-0">
+                          {doneProximal}/{activeStage.proximalGoals.length} proximal
+                        </span>
                       )}
-                      <span className="truncate">{activeStage.title}</span>
                     </div>
+
                     {activeStage.gateCriterion.trim() && (
                       <p className="text-[11px] text-slate-400 leading-relaxed">
-                        Gate: {activeStage.gateCriterion.trim()}
+                        Gate Proof: {activeStage.gateCriterion.trim()}
                       </p>
                     )}
-                  </button>
+
+                    {isSchedulingHere && (
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center gap-1.5">
+                        <select
+                          value={gateStepMonth || defaultChildMonth}
+                          onChange={e => setGateStepMonth(e.target.value)}
+                          className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] font-mono font-bold text-purple-300 focus:outline-none"
+                        >
+                          {childMonthOptions.map(m => (
+                            <option key={m.key} value={m.key}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={gateStepDraft}
+                          onChange={e => setGateStepDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSpawnGateMonthlyStep(plan.id, activeStage.id, plan.title);
+                            }
+                          }}
+                          placeholder="Concrete step for this month..."
+                          className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSpawnGateMonthlyStep(plan.id, activeStage.id, plan.title)}
+                          disabled={!gateStepDraft.trim()}
+                          className="px-2.5 py-1 rounded-lg bg-purple-500 text-slate-950 disabled:opacity-40 text-[10px] font-extrabold"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
           )}
+        </div>
+
+        {/* LOOKING DOWN: Live 3-Month Strip Inside This Quarter */}
+        <div className="space-y-3 pt-4 border-t border-slate-800/80">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center space-x-1.5">
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Months Executing {qInfo.quarterKey}</span>
+            </span>
+            <span className="text-[11px] text-slate-500">Click any month to zoom in</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {quarterMonths.map(mKey => {
+              const mInfo = getMonthInfo(mKey);
+              const mp = monthlyPlans[mKey];
+              const tasks = (mp?.tasks || []).filter(t => t.status !== 'parked');
+              const done = tasks.filter(t => t.completed).length;
+              const linkedToQ = tasks.filter(t => Boolean(t.quarterlyTaskId || t.strategyPlanId)).length;
+              return (
+                <button
+                  key={mKey}
+                  type="button"
+                  onClick={() => jumpToMonth(mKey)}
+                  className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-purple-500/40 text-left transition-all space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold text-purple-300">{mInfo.label}</span>
+                    <span className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 font-mono text-[10px] font-bold text-slate-300">
+                      {done}/{tasks.length} done
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 truncate">
+                    {mp?.focusTheme?.trim() || 'No focus theme set yet'}
+                  </p>
+                  <div className="text-[10px] font-mono text-slate-500">
+                    {linkedToQ > 0 ? `${linkedToQ} linked to ${qInfo.quarterKey}/Roadmaps` : 'Open Monthly Plan →'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Real-World Scoreboard (Start Baseline -> 90-Day Target) */}
@@ -521,8 +784,8 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
             onChange={next => saveQuarterlyPlan({ ...activeQuarterPlan, scoreboard: next })}
             showActual={false}
             accent="cyan"
-            title={`Real-World Scoreboard (${qInfo.quarterKey} Baseline → Target)`}
-            subtitle="Set your starting numbers today so your end-of-quarter review compares effort against actual external reality."
+            title={`Real-World KPIs (${qInfo.quarterKey} Baseline → Target)`}
+            subtitle="Period-level proof checks — set once at start, check Actual at end-of-quarter review (never measured daily)."
           />
         </div>
 

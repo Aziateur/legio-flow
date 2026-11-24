@@ -60,6 +60,10 @@ export interface TaskItem {
   score?: number; // Weight in points (for weekly goal crusher)
   notes?: string;
   subTasks?: SubTaskItem[];
+  kpiTarget?: string; // Optional measurable proof check ("What proves this is done?")
+  kpiActual?: string; // Optional actual result verified at review time (never tracked daily)
+  status?: 'active' | 'parked'; // Lightweight fluid-reality pause (does not delete or fail)
+  parentLinkMode?: 'step' | 'mirror'; // 'step' rolls up progress without auto-closing parent; 'mirror' syncs completion 1:1
   monthlyTaskId?: string;
   quarterlyTaskId?: string;
   yearlyTaskId?: string;
@@ -221,6 +225,7 @@ export interface MonthlyPlan {
   topFocuses?: string[]; // Mirrored Top 3 Focuses (customizable slot count)
   notes: string;
   tasks: TaskItem[];
+  scoreboard?: ScoreboardMetric[]; // Optional Monthly KPI / Proof Checks (checked at review time)
   updatedAt: string;
 }
 

@@ -8,6 +8,7 @@ import {
   computeWeeklyAchievedScore
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
+import { getCommittedGatesForQuarter } from '../../lib/planHierarchy';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
   Target, 
@@ -20,6 +21,7 @@ import {
   Flame, 
   ChevronRight,
   ArrowDownToLine,
+  ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Layers,
@@ -27,7 +29,8 @@ import {
   Crosshair,
   Eye,
   Lock,
-  Calendar
+  Calendar,
+  Compass
 } from 'lucide-react';
 
 export const WeeklyGoalCrusherView: React.FC = () => {
@@ -53,6 +56,8 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const weekDaysRange = getCurrentWeekRange(plan.startDate || selectedDate);
 
   const [newGoalInput, setNewGoalInput] = useState('');
+  const [newGoalParent, setNewGoalParent] = useState('');
+  const [showParentMonthBar, setShowParentMonthBar] = useState(true);
   const [newSubGoalInputs, setNewSubGoalInputs] = useState<Record<string, string>>({});
   const [showRewardLadder, setShowRewardLadder] = useState(false);
   const [showPlanPuller, setShowPlanPuller] = useState(false);
@@ -67,6 +72,76 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const linkedMonthlyPlan = monthlyPlans[planMonthKey];
   const linkedQuarterlyPlan = quarterlyPlans[planQuarterKey];
   const linkedYearlyPlan = yearlyPlans[planYearKey];
+  const committedQuarterGates = getCommittedGatesForQuarter(linkedQuarterlyPlan, strategyPlans);
+
+  const weeklyParentOptions: Array<{ value: string; label: string; group: string }> = [
+    ...(linkedMonthlyPlan?.tasks || [])
+      .filter(mt => mt.status !== 'parked')
+      .map(mt => ({
+        value: `monthly:${mt.id}`,
+        label: mt.text,
+        group: `${planMonthKey} Monthly Deliverables`
+      })),
+    ...committedQuarterGates.map(cg => ({
+      value: `gate:${cg.plan.id}|${cg.stage.id}`,
+      label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
+      group: `${planQuarterKey} Target Roadmap Gates`
+    }))
+  ];
+
+  const encodeWeeklyParent = (t: TaskItem): string => {
+    if (t.monthlyTaskId) return `monthly:${t.monthlyTaskId}`;
+    if (t.strategyPlanId && t.strategyStageId) return `gate:${t.strategyPlanId}|${t.strategyStageId}`;
+    return '';
+  };
+
+  const decodeWeeklyParentPatch = (encoded: string): Partial<TaskItem> => {
+    if (!encoded) {
+      return {
+        monthlyTaskId: undefined,
+        quarterlyTaskId: undefined,
+        yearlyTaskId: undefined,
+        strategyPlanId: undefined,
+        strategyStageId: undefined,
+        strategyGoalId: undefined,
+        sourceLabel: undefined,
+        parentLinkMode: undefined
+      };
+    }
+    if (encoded.startsWith('monthly:')) {
+      const mId = encoded.slice(8);
+      const mt = linkedMonthlyPlan?.tasks.find(x => x.id === mId);
+      return {
+        monthlyTaskId: mId,
+        quarterlyTaskId: mt?.quarterlyTaskId,
+        yearlyTaskId: mt?.yearlyTaskId,
+        strategyPlanId: mt?.strategyPlanId,
+        strategyStageId: mt?.strategyStageId,
+        parentLinkMode: 'step',
+        sourceLabel: mt ? `${planMonthKey} · ${mt.text.slice(0, 28)}` : `Monthly ${planMonthKey}`
+      };
+    }
+    if (encoded.startsWith('gate:')) {
+      const [planId, stageId] = encoded.slice(5).split('|');
+      const sp = strategyPlans.find(p => p.id === planId);
+      return {
+        monthlyTaskId: undefined,
+        strategyPlanId: planId,
+        strategyStageId: stageId,
+        parentLinkMode: 'step',
+        sourceLabel: sp ? `${sp.title}` : undefined
+      };
+    }
+    return {};
+  };
+
+  const handleLinkWeeklyGoalParent = (taskId: string, encodedParent: string) => {
+    const patch = decodeWeeklyParentPatch(encodedParent);
+    saveWeeklyPlan({
+      ...plan,
+      tasks: plan.tasks.map(t => (t.id === taskId ? { ...t, ...patch } : t))
+    });
+  };
 
   const isInThisWeek = (
     text: string,
@@ -357,11 +432,13 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const handleKeyDownNew = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && newGoalInput.trim()) {
       e.preventDefault();
+      const parentPatch = decodeWeeklyParentPatch(newGoalParent);
       const newTask: TaskItem = {
         id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: newGoalInput.trim(),
         score: 2, // default 2 points
-        completed: false
+        completed: false,
+        ...parentPatch
       };
       saveWeeklyPlan({
         ...plan,
@@ -675,6 +752,111 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                   + Carry to Week {plan.weekNumber}: {task.text} ({task.score || 2}p)
                 </button>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* LOOKING UP: Serving Monthly Plan & Committed Quarterly Roadmap Gates */}
+      {(linkedMonthlyPlan?.focusTheme?.trim() ||
+        (linkedMonthlyPlan?.tasks || []).some(t => !t.completed && t.status !== 'parked') ||
+        committedQuarterGates.length > 0) && (
+        <div className="rounded-2xl bg-slate-900/80 border border-purple-500/25 overflow-hidden shadow-md">
+          <div className="px-4 py-2.5 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setShowParentMonthBar(v => !v)}
+              className="flex items-center space-x-2 text-left min-w-0"
+            >
+              <ArrowUpRight className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-purple-400 shrink-0">
+                Serving {planMonthKey} Monthly Plan
+              </span>
+              {linkedMonthlyPlan?.focusTheme?.trim() && (
+                <span className="text-xs font-semibold text-slate-300 truncate">
+                  · {linkedMonthlyPlan.focusTheme.trim()}
+                </span>
+              )}
+            </button>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setPlanningSubTab('monthly')}
+                className="text-[11px] font-bold text-purple-300 hover:text-purple-200"
+              >
+                Open {planMonthKey} →
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowParentMonthBar(v => !v)}
+                className="p-1 text-slate-400 hover:text-slate-200"
+              >
+                {showParentMonthBar ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {showParentMonthBar && (
+            <div className="px-4 pb-3.5 pt-2 border-t border-slate-800/80 space-y-2 text-xs">
+              {(linkedMonthlyPlan?.tasks || []).filter(t => !t.completed && t.status !== 'parked')
+                .length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                    Active {planMonthKey} Deliverables (click to link new task):
+                  </span>
+                  {(linkedMonthlyPlan?.tasks || [])
+                    .filter(t => !t.completed && t.status !== 'parked')
+                    .map(mt => {
+                      const enc = `monthly:${mt.id}`;
+                      const stepCount = plan.tasks.filter(wt => wt.monthlyTaskId === mt.id).length;
+                      return (
+                        <button
+                          key={mt.id}
+                          type="button"
+                          onClick={() => setNewGoalParent(prev => (prev === enc ? '' : enc))}
+                          className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-colors ${
+                            newGoalParent === enc
+                              ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                              : stepCount > 0
+                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
+                              : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          <span>{stepCount > 0 ? `✓ ${stepCount}` : '○'}</span>
+                          <span>{mt.text}</span>
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+
+              {committedQuarterGates.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 mr-1">
+                    {planQuarterKey} Target Gates:
+                  </span>
+                  {committedQuarterGates.map(cg => {
+                    const enc = `gate:${cg.plan.id}|${cg.stage.id}`;
+                    return (
+                      <button
+                        key={enc}
+                        type="button"
+                        onClick={() => setNewGoalParent(prev => (prev === enc ? '' : enc))}
+                        className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-colors ${
+                          newGoalParent === enc
+                            ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                            : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 border-emerald-500/30'
+                        }`}
+                      >
+                        <Compass className="w-3 h-3 shrink-0" />
+                        <span>
+                          {cg.plan.title} · {cg.stage.title}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1241,12 +1423,34 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                           task.completed ? 'line-through text-slate-500' : 'text-slate-100'
                         }`}
                       />
-                      {task.sourceLabel && (
-                        <span className="inline-flex items-center space-x-1 mt-0.5 text-[10px] font-bold text-amber-400/80">
-                          <MapIcon className="w-2.5 h-2.5 shrink-0" />
-                          <span className="truncate">{task.sourceLabel}</span>
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                        {weeklyParentOptions.length > 0 ? (
+                          <select
+                            value={encodeWeeklyParent(task)}
+                            onChange={e => handleLinkWeeklyGoalParent(task.id, e.target.value)}
+                            className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold focus:outline-none max-w-[240px] ${
+                              encodeWeeklyParent(task)
+                                ? 'bg-slate-900 text-purple-300 border-purple-500/30'
+                                : 'bg-transparent text-slate-500 border-slate-800/80 hover:text-slate-300'
+                            }`}
+                            title="Link this weekly deliverable as a step under a Monthly goal or Roadmap Gate"
+                          >
+                            <option value="">↑ Link to Month / Gate (optional)</option>
+                            {weeklyParentOptions.map(opt => (
+                              <option key={opt.value} value={opt.value}>
+                                ↑ {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          task.sourceLabel && (
+                            <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-400/80">
+                              <MapIcon className="w-2.5 h-2.5 shrink-0" />
+                              <span className="truncate">{task.sourceLabel}</span>
+                            </span>
+                          )
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -1374,16 +1578,30 @@ export const WeeklyGoalCrusherView: React.FC = () => {
           })}
 
           {/* Effortless Inline Goal Input (Like Notion - Type & hit Enter) */}
-          <div className="flex items-center space-x-3 p-3.5 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-amber-500/50 transition-colors">
+          <div className="flex flex-wrap items-center gap-2 p-3.5 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 focus-within:border-amber-500/50 transition-colors">
             <Plus className="w-4 h-4 text-slate-500 shrink-0" />
             <input
               type="text"
               value={newGoalInput}
               onChange={(e) => setNewGoalInput(e.target.value)}
               onKeyDown={handleKeyDownNew}
-              placeholder="Type a goal and press Enter to add..."
-              className="w-full bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
+              placeholder="Type a weekly deliverable and press Enter to add..."
+              className="flex-1 min-w-[200px] bg-transparent text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none"
             />
+            {weeklyParentOptions.length > 0 && (
+              <select
+                value={newGoalParent}
+                onChange={e => setNewGoalParent(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1 text-[11px] font-semibold text-purple-300 focus:outline-none max-w-[200px]"
+              >
+                <option value="">Serves (optional)...</option>
+                {weeklyParentOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>
+                    ↑ {opt.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <span className="text-[10px] text-slate-600 font-mono hidden sm:inline shrink-0">
               Press Enter ↵
             </span>

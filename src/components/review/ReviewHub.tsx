@@ -19,6 +19,7 @@ import {
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { GwsAllocationCard } from '../common/GwsAllocationCard';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
+import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import { MacroReviewView } from './MacroReviewView';
@@ -3151,6 +3152,13 @@ export const ReviewHub: React.FC = () => {
           saveMonthlyPlan({ ...mData.monthPlan, tasks: updatedTasks });
         };
 
+        const handleUpdateMonthlyGoalKpiActual = (goalId: string, kpiActual: string) => {
+          const updatedTasks = mData.monthGoals.map(g =>
+            g.id === goalId ? { ...g, kpiActual } : g
+          );
+          saveMonthlyPlan({ ...mData.monthPlan, tasks: updatedTasks });
+        };
+
         const handleCopyMonthlyPlain = () => {
           let text = `${mData.info.label} (${mData.info.monthKey}) — Monthly Review\n\n`;
           text += `Monthly Focus: ${mData.monthPlan.focusTheme || 'Not set'}\n`;
@@ -3159,6 +3167,25 @@ export const ReviewHub: React.FC = () => {
           text += `Weekly Points: ${mData.weeklyPointsAchieved}/${mData.weeklyPointsPossible} pts across ${mData.weeks.length} weeks (Avg ${mData.avgWeeklyScore}/10)\n`;
           text += `Daily Execution: ${mData.days.length} days logged • Avg Discipline ${mData.avgDailyScore}/10 • Tasks ${mData.dailyTasksDone}/${mData.dailyTasksTotal} • Habits ${mData.habitRatePct}%\n`;
           text += `GWS Deep Work: ${mData.gwsHours}h across ${mData.gws.length} sprints (Avg ${mData.avgGwsTotal}/15)\n`;
+
+          if (mData.monthGoals.length > 0) {
+            text += `\nMonthly Deliverables:\n`;
+            mData.monthGoals.forEach(g => {
+              const statusTag = g.status === 'parked' ? '[PARKED]' : g.completed ? '[DONE]' : '[OPEN]';
+              const kpiSuffix =
+                g.kpiTarget?.trim() || g.kpiActual?.trim()
+                  ? ` [KPI: ${g.kpiTarget?.trim() || '—'} → ${g.kpiActual?.trim() || '—'}]`
+                  : '';
+              text += `  • ${statusTag} ${g.text}${kpiSuffix}\n`;
+            });
+          }
+
+          if ((mData.monthPlan.scoreboard || []).length > 0) {
+            text += `\nMonthly KPIs Proof Check:\n`;
+            (mData.monthPlan.scoreboard || []).forEach(m => {
+              text += `  • ${m.name}${m.domain ? ` (${m.domain})` : ''}: Start ${m.startValue || '—'} → Target ${m.targetValue || '—'} → Actual ${m.actualValue || '—'}\n`;
+            });
+          }
 
           if (monthWins.trim()) {
             text += `\n1. Monthly Wins & Shipped:\n${monthWins.trim()}\n`;
@@ -3428,27 +3455,81 @@ export const ReviewHub: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {mData.monthGoals.map(goal => (
-                    <button
-                      key={goal.id}
-                      type="button"
-                      onClick={() => handleToggleMonthlyGoalInReview(goal.id)}
-                      className={`w-full flex items-start space-x-2.5 p-3 rounded-2xl border text-left text-xs transition-colors ${
-                        goal.completed
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
-                          : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-purple-500/40'
-                      }`}
-                    >
-                      {goal.completed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                      ) : (
-                        <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                      )}
-                      <span className={goal.completed ? 'line-through text-slate-400' : ''}>
-                        {goal.text}
-                      </span>
-                    </button>
-                  ))}
+                  {mData.monthGoals.map(goal => {
+                    const isParked = goal.status === 'parked';
+                    const hasKpi = Boolean(goal.kpiTarget?.trim() || goal.kpiActual?.trim());
+                    return (
+                      <div
+                        key={goal.id}
+                        className={`w-full p-3 rounded-2xl border text-left text-xs space-y-2 transition-colors ${
+                          isParked
+                            ? 'bg-slate-950/60 border-slate-800/70 text-slate-400 opacity-75'
+                            : goal.completed
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                            : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-purple-500/40'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMonthlyGoalInReview(goal.id)}
+                          className="w-full flex items-start space-x-2.5 text-left"
+                        >
+                          {goal.completed ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <Circle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                          )}
+                          <span className="flex-1 flex flex-wrap items-center gap-1.5">
+                            <span className={goal.completed ? 'line-through text-slate-400' : ''}>
+                              {goal.text}
+                            </span>
+                            {isParked && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                                Parked
+                              </span>
+                            )}
+                          </span>
+                        </button>
+
+                        {hasKpi && (
+                          <div className="pl-6 flex flex-wrap items-center gap-2 text-[11px]">
+                            <span className="text-slate-400">
+                              KPI Target:{' '}
+                              <span className="font-mono font-semibold text-amber-300">
+                                {goal.kpiTarget?.trim() || '—'}
+                              </span>
+                            </span>
+                            <span className="text-slate-600">→</span>
+                            <label className="inline-flex items-center space-x-1.5 flex-1 min-w-[140px]">
+                              <span className="text-emerald-400 font-bold uppercase text-[10px] tracking-wider shrink-0">
+                                Actual:
+                              </span>
+                              <input
+                                type="text"
+                                value={goal.kpiActual || ''}
+                                onChange={e => handleUpdateMonthlyGoalKpiActual(goal.id, e.target.value)}
+                                placeholder="Did we hit it?"
+                                className="flex-1 min-w-0 bg-emerald-500/5 border border-emerald-500/30 rounded-lg px-2 py-0.5 font-mono text-[11px] font-semibold text-emerald-200 placeholder-slate-600 focus:outline-none focus:border-emerald-400"
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {(mData.monthPlan.scoreboard || []).length > 0 && (
+                <div className="pt-4 border-t border-slate-800/80">
+                  <ScoreboardEditor
+                    metrics={mData.monthPlan.scoreboard || []}
+                    onChange={next => saveMonthlyPlan({ ...mData.monthPlan, scoreboard: next })}
+                    showActual={true}
+                    accent="purple"
+                    title={`Monthly KPIs Proof Check (${mData.info.label})`}
+                    subtitle="Check Actuals once at month-end — did we actually hit the targets?"
+                  />
                 </div>
               )}
             </div>

@@ -6,7 +6,7 @@ interface ScoreboardEditorProps {
   metrics: ScoreboardMetric[];
   onChange: (next: ScoreboardMetric[]) => void;
   showActual?: boolean;
-  accent?: 'cyan' | 'rose' | 'amber';
+  accent?: 'cyan' | 'rose' | 'amber' | 'purple';
   title?: string;
   subtitle?: string;
   headerAction?: React.ReactNode;
@@ -32,6 +32,8 @@ export const ScoreboardEditor: React.FC<ScoreboardEditorProps> = ({
       ? 'text-rose-400'
       : accent === 'amber'
       ? 'text-amber-400'
+      : accent === 'purple'
+      ? 'text-purple-400'
       : 'text-cyan-400';
 
   const accentBorderFocus =
@@ -39,6 +41,8 @@ export const ScoreboardEditor: React.FC<ScoreboardEditorProps> = ({
       ? 'focus:border-rose-500/50'
       : accent === 'amber'
       ? 'focus:border-amber-500/50'
+      : accent === 'purple'
+      ? 'focus:border-purple-500/50'
       : 'focus:border-cyan-500/50';
 
   const handleAdd = (e: React.FormEvent) => {

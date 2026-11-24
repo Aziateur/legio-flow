@@ -1,0 +1,396 @@
+import React, { useState } from 'react';
+import { TaskItem } from '../../types/schema';
+import { LinkedChildStep } from '../../lib/planHierarchy';
+import {
+  CheckCircle2,
+  Circle,
+  CornerDownRight,
+  Gauge,
+  PauseCircle,
+  PlayCircle,
+  Plus,
+  Trash2,
+  ArrowUpRight
+} from 'lucide-react';
+
+export interface ParentLinkOption {
+  value: string; // Encoded link key e.g. "yearly:id" | "quarterly:id" | "gate:planId|stageId"
+  label: string;
+  group: string;
+}
+
+export interface ChildPeriodOption {
+  key: string;
+  label: string;
+}
+
+interface HierarchyOutcomeCardProps {
+  task: TaskItem;
+  accent: 'rose' | 'cyan' | 'purple';
+  parentOptions?: ParentLinkOption[];
+  selectedParentValue?: string;
+  onChangeParent?: (encodedValue: string) => void;
+  childrenSteps: LinkedChildStep[];
+  childUnitLabel: string; // e.g. 'Quarterly', 'Monthly', 'Weekly'
+  childPeriodOptions: ChildPeriodOption[];
+  defaultChildPeriodKey: string;
+  onSpawnChildStep: (childPeriodKey: string, text: string, kpiTarget?: string) => void;
+  onJumpToChildPeriod?: (childPeriodKey: string) => void;
+  onToggleComplete: () => void;
+  onEditText: (nextText: string) => void;
+  onUpdateFields: (patch: Partial<TaskItem>) => void;
+  onDelete: () => void;
+}
+
+export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
+  task,
+  accent,
+  parentOptions = [],
+  selectedParentValue = '',
+  onChangeParent,
+  childrenSteps,
+  childUnitLabel,
+  childPeriodOptions,
+  defaultChildPeriodKey,
+  onSpawnChildStep,
+  onJumpToChildPeriod,
+  onToggleComplete,
+  onEditText,
+  onUpdateFields,
+  onDelete
+}) => {
+  const [showKpiEditor, setShowKpiEditor] = useState(Boolean(task.kpiTarget?.trim()));
+  const [showDecompose, setShowDecompose] = useState(false);
+  const [targetChildKey, setTargetChildKey] = useState(defaultChildPeriodKey);
+  const [stepDraft, setStepDraft] = useState('');
+  const [stepKpiDraft, setStepKpiDraft] = useState('');
+
+  const isParked = task.status === 'parked';
+  const activeChildren = childrenSteps.filter(c => c.task.status !== 'parked');
+  const doneChildren = activeChildren.filter(c => c.task.completed).length;
+  const totalChildren = activeChildren.length;
+  const rollupPct = totalChildren > 0 ? Math.round((doneChildren / totalChildren) * 100) : 0;
+
+  const accentHoverCheck =
+    accent === 'rose'
+      ? 'hover:text-rose-400'
+      : accent === 'cyan'
+      ? 'hover:text-cyan-400'
+      : 'hover:text-purple-400';
+
+  const accentBtn =
+    accent === 'rose'
+      ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+      : accent === 'cyan'
+      ? 'bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border-purple-500/30'
+      : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30';
+
+  const accentBar =
+    accent === 'rose'
+      ? 'bg-cyan-400'
+      : accent === 'cyan'
+      ? 'bg-purple-400'
+      : 'bg-amber-400';
+
+  const handleCreateStep = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = stepDraft.trim();
+    if (!clean) return;
+    const periodKey = targetChildKey || defaultChildPeriodKey || childPeriodOptions[0]?.key;
+    if (!periodKey) return;
+    onSpawnChildStep(periodKey, clean, stepKpiDraft.trim() || undefined);
+    setStepDraft('');
+    setStepKpiDraft('');
+    setShowDecompose(false);
+  };
+
+  // Group parent options cleanly for <optgroup>
+  const groupedParents = parentOptions.reduce<Record<string, ParentLinkOption[]>>((acc, opt) => {
+    if (!acc[opt.group]) acc[opt.group] = [];
+    acc[opt.group].push(opt);
+    return acc;
+  }, {});
+
+  return (
+    <div
+      className={`group rounded-2xl border p-3.5 sm:p-4 space-y-2.5 transition-all ${
+        task.completed
+          ? 'bg-emerald-500/5 border-emerald-500/25'
+          : isParked
+          ? 'bg-slate-950/40 border-slate-800/70 opacity-70'
+          : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+      }`}
+    >
+      {/* Top Row: Complete + Title + Controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center space-x-3 flex-1 min-w-0">
+          <button
+            type="button"
+            onClick={onToggleComplete}
+            className="shrink-0 transition-transform active:scale-90"
+            title={task.completed ? 'Mark incomplete' : 'Verify outcome done'}
+          >
+            {task.completed ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            ) : (
+              <Circle className={`w-5 h-5 text-slate-600 ${accentHoverCheck}`} />
+            )}
+          </button>
+
+          <input
+            type="text"
+            value={task.text}
+            onChange={e => onEditText(e.target.value)}
+            className={`w-full bg-transparent text-xs sm:text-sm font-semibold focus:outline-none ${
+              task.completed
+                ? 'line-through text-slate-500'
+                : isParked
+                ? 'italic text-slate-400'
+                : 'text-slate-100'
+            }`}
+          />
+
+          {isParked && (
+            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase shrink-0">
+              Parked
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
+          <button
+            type="button"
+            onClick={() => setShowKpiEditor(v => !v)}
+            className={`inline-flex items-center space-x-1 px-2 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+              task.kpiTarget?.trim()
+                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-800'
+            }`}
+            title="Set measurable KPI / proof check (verified at review time — never tracked daily)"
+          >
+            <Gauge className="w-3 h-3" />
+            <span>{task.kpiTarget?.trim() ? 'KPI' : '+ KPI'}</span>
+          </button>
+
+          {childPeriodOptions.length > 0 && !isParked && (
+            <button
+              type="button"
+              onClick={() => {
+                setTargetChildKey(defaultChildPeriodKey);
+                setShowDecompose(v => !v);
+              }}
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${accentBtn}`}
+              title={`Break this down into a smaller ${childUnitLabel.toLowerCase()} step`}
+            >
+              <Plus className="w-3 h-3" />
+              <span>{childUnitLabel} Step</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateFields({ status: isParked ? 'active' : 'parked' })
+            }
+            className={`p-1.5 rounded-lg border transition-colors ${
+              isParked
+                ? 'bg-amber-500/15 text-amber-300 border-amber-500/35 hover:bg-amber-500/25'
+                : 'bg-slate-900 text-slate-500 hover:text-amber-300 border-slate-800'
+            }`}
+            title={
+              isParked
+                ? 'Resume outcome'
+                : 'Park outcome (paused due to energy/money/priority shift — keeps history, stops gap warnings)'
+            }
+          >
+            {isParked ? <PlayCircle className="w-3.5 h-3.5" /> : <PauseCircle className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            className="p-1 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Delete outcome"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Parent Alignment Selector + KPI Proof Check */}
+      {(parentOptions.length > 0 || showKpiEditor || task.kpiTarget?.trim()) && (
+        <div className="pl-8 flex flex-wrap items-center gap-2 text-[11px]">
+          {parentOptions.length > 0 && onChangeParent && (
+            <div className="inline-flex items-center space-x-1">
+              <ArrowUpRight className="w-3 h-3 text-slate-500 shrink-0" />
+              <select
+                value={selectedParentValue}
+                onChange={e => onChangeParent(e.target.value)}
+                className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold focus:outline-none max-w-[260px] ${
+                  selectedParentValue
+                    ? 'bg-slate-900 text-cyan-300 border-cyan-500/30'
+                    : 'bg-slate-900/60 text-slate-500 border-slate-800 hover:text-slate-300'
+                }`}
+                title="Link to parent outcome or Roadmap Gate"
+              >
+                <option value="">Standalone (no parent link)</option>
+                {Object.entries(groupedParents).map(([group, opts]) => (
+                  <optgroup key={group} label={group}>
+                    {opts.map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        ↑ {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {(showKpiEditor || task.kpiTarget?.trim()) && (
+            <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[220px]">
+              <div className="inline-flex items-center space-x-1.5 bg-slate-900/90 border border-slate-800 focus-within:border-emerald-500/40 rounded-lg px-2 py-0.5 flex-1 min-w-[180px] max-w-md">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 shrink-0">
+                  KPI Proof:
+                </span>
+                <input
+                  type="text"
+                  value={task.kpiTarget || ''}
+                  onChange={e => onUpdateFields({ kpiTarget: e.target.value })}
+                  placeholder="e.g. 100 backtests, 5 paying clients, 12% BF..."
+                  className="flex-1 min-w-0 bg-transparent text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
+                />
+              </div>
+
+              {(task.completed || task.kpiActual?.trim()) && (
+                <div className="inline-flex items-center space-x-1.5 bg-slate-900/90 border border-emerald-500/30 rounded-lg px-2 py-0.5 min-w-[140px]">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 shrink-0">
+                    Actual:
+                  </span>
+                  <input
+                    type="text"
+                    value={task.kpiActual || ''}
+                    onChange={e => onUpdateFields({ kpiActual: e.target.value })}
+                    placeholder="Verified result..."
+                    className="w-28 bg-transparent text-[11px] font-mono text-emerald-200 placeholder-slate-600 focus:outline-none"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Live Child Steps Roll-Up (True Parent -> Child Progress, NEVER auto-closes parent) */}
+      <div className="pl-8 space-y-1.5">
+        {childrenSteps.length > 0 ? (
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="inline-flex items-center space-x-1 font-mono font-bold text-slate-300">
+                <CornerDownRight className="w-3 h-3 text-slate-500" />
+                <span>
+                  {doneChildren}/{totalChildren} {childUnitLabel.toLowerCase()} steps done ({rollupPct}%)
+                </span>
+              </span>
+              <div className="w-24 h-1.5 rounded-full bg-slate-900 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    rollupPct === 100 ? 'bg-emerald-400' : accentBar
+                  }`}
+                  style={{ width: `${rollupPct}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {childrenSteps.map(ch => (
+                <button
+                  key={`${ch.periodKey}_${ch.task.id}`}
+                  type="button"
+                  onClick={() => onJumpToChildPeriod && onJumpToChildPeriod(ch.periodKey)}
+                  className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg border text-[11px] transition-colors ${
+                    ch.task.completed
+                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25 line-through'
+                      : ch.task.status === 'parked'
+                      ? 'bg-slate-900/50 text-slate-500 border-slate-800 italic'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
+                  }`}
+                  title={`Open ${ch.periodLabel}: ${ch.task.text}`}
+                >
+                  <span className="font-mono text-[10px] font-extrabold text-amber-400">
+                    {ch.periodLabel}
+                  </span>
+                  <span className="truncate max-w-[200px]">{ch.task.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          !task.completed &&
+          !isParked &&
+          childPeriodOptions.length > 0 && (
+            <div className="text-[11px] text-slate-500 flex items-center space-x-1.5">
+              <CornerDownRight className="w-3 h-3 text-slate-600" />
+              <span>No {childUnitLabel.toLowerCase()} steps planned yet</span>
+            </div>
+          )
+        )}
+      </div>
+
+      {/* Inline Break-Down Composer (Creates a true smaller step in the child timeframe!) */}
+      {showDecompose && childPeriodOptions.length > 0 && (
+        <form
+          onSubmit={handleCreateStep}
+          className="ml-8 p-3 rounded-xl bg-slate-900/90 border border-slate-700/80 space-y-2"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={targetChildKey}
+              onChange={e => setTargetChildKey(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-bold font-mono text-amber-300 focus:outline-none"
+            >
+              {childPeriodOptions.map(opt => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+
+            <input
+              type="text"
+              autoFocus
+              value={stepDraft}
+              onChange={e => setStepDraft(e.target.value)}
+              placeholder={`Write concrete ${childUnitLabel.toLowerCase()} step that moves "${task.text.slice(0, 36)}" forward...`}
+              className="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-lg px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+            />
+
+            <button
+              type="submit"
+              disabled={!stepDraft.trim()}
+              className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 text-xs font-extrabold"
+            >
+              + Add Step
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowDecompose(false)}
+              className="px-2 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <input
+            type="text"
+            value={stepKpiDraft}
+            onChange={e => setStepKpiDraft(e.target.value)}
+            placeholder="Optional KPI proof for this step (e.g. 50 backtests, 10 demos booked)..."
+            className="w-full bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-1 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none"
+          />
+        </form>
+      )}
+    </div>
+  );
+};
