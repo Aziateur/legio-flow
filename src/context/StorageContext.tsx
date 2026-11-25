@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, startTransition, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import {
   Template,
   DailyEntry,
@@ -176,6 +176,37 @@ const writeStorageSafe = (key: string, value: unknown): void => {
     }
     console.error(`Failed to persist ${key}`, e);
   }
+};
+
+// Coalesce high-frequency localStorage writes (250ms per key) so typing bursts never block the main thread with repeated JSON.stringify calls.
+// Always flushed synchronously on visibilitychange (hidden), pagehide, and beforeunload so zero edits are ever lost.
+const pendingStorageWrites = new Map<string, unknown>();
+const pendingStorageTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const writeStorageCoalesced = (key: string, value: unknown): void => {
+  pendingStorageWrites.set(key, value);
+  const existingTimer = pendingStorageTimers.get(key);
+  if (existingTimer) clearTimeout(existingTimer);
+  pendingStorageTimers.set(
+    key,
+    setTimeout(() => {
+      pendingStorageTimers.delete(key);
+      if (pendingStorageWrites.has(key)) {
+        const latest = pendingStorageWrites.get(key);
+        pendingStorageWrites.delete(key);
+        writeStorageSafe(key, latest);
+      }
+    }, 250)
+  );
+};
+
+const flushPendingStorageWrites = (): void => {
+  pendingStorageTimers.forEach(timer => clearTimeout(timer));
+  pendingStorageTimers.clear();
+  pendingStorageWrites.forEach((value, key) => {
+    writeStorageSafe(key, value);
+  });
+  pendingStorageWrites.clear();
 };
 
 export const getEffectiveEpochMonday = (plans?: Record<string, WeeklyPlan>): string => {
@@ -1175,119 +1206,119 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAuthUserState(user);
   };
 
-  // --- SYNCHRONOUS COMMIT HELPERS ---
+  // --- SYNCHRONOUS MEMORY + COALESCED LOCALSTORAGE COMMIT HELPERS ---
   const commitTemplates = (next: Template[]) => {
     templatesRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.TEMPLATES, next);
+    writeStorageCoalesced(STORAGE_KEYS.TEMPLATES, next);
     setTemplates(next);
   };
 
   const commitDailyEntries = (next: Record<string, DailyEntry>) => {
     dailyEntriesRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.DAILY, next);
+    writeStorageCoalesced(STORAGE_KEYS.DAILY, next);
     setDailyEntries(next);
   };
 
   const commitGwsSessions = (next: GWSSession[]) => {
     gwsSessionsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.GWS, next);
+    writeStorageCoalesced(STORAGE_KEYS.GWS, next);
     setGwsSessions(next);
   };
 
   const commitWeeklyPlans = (next: Record<string, WeeklyPlan>) => {
     weeklyPlansRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.WEEKLY, next);
+    writeStorageCoalesced(STORAGE_KEYS.WEEKLY, next);
     setWeeklyPlans(next);
   };
 
   const commitMonthlyPlans = (next: Record<string, MonthlyPlan>) => {
     monthlyPlansRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.MONTHLY, next);
+    writeStorageCoalesced(STORAGE_KEYS.MONTHLY, next);
     setMonthlyPlans(next);
   };
 
   const commitQuarterlyPlans = (next: Record<string, QuarterlyPlan>) => {
     quarterlyPlansRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.QUARTERLY, next);
+    writeStorageCoalesced(STORAGE_KEYS.QUARTERLY, next);
     setQuarterlyPlans(next);
   };
 
   const commitYearlyPlans = (next: Record<string, YearlyPlan>) => {
     yearlyPlansRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.YEARLY, next);
+    writeStorageCoalesced(STORAGE_KEYS.YEARLY, next);
     setYearlyPlans(next);
   };
 
   const commitLifePillars = (next: LifePillar[]) => {
     lifePillarsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.LIFE_PILLARS, next);
+    writeStorageCoalesced(STORAGE_KEYS.LIFE_PILLARS, next);
     setLifePillars(next);
   };
 
   const commitCustomReviewPrompts = (next: CustomReviewPrompt[]) => {
     customReviewPromptsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.CUSTOM_PROMPTS, next);
+    writeStorageCoalesced(STORAGE_KEYS.CUSTOM_PROMPTS, next);
     setCustomReviewPrompts(next);
   };
 
   const commitMacroReviewSettings = (next: MacroReviewSettings) => {
     macroReviewSettingsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.MACRO_SETTINGS, next);
+    writeStorageCoalesced(STORAGE_KEYS.MACRO_SETTINGS, next);
     setMacroReviewSettings(next);
   };
 
   const commitProblemCategories = (next: CustomProblemCategory[]) => {
     problemCategoriesRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.PROBLEM_CATEGORIES, next);
+    writeStorageCoalesced(STORAGE_KEYS.PROBLEM_CATEGORIES, next);
     setProblemCategories(next);
   };
 
   const commitProblemSettings = (next: ProblemSettings) => {
     const merged = { ...DEFAULT_PROBLEM_SETTINGS, ...next };
     problemSettingsRef.current = merged;
-    writeStorageSafe(STORAGE_KEYS.PROBLEM_SETTINGS, merged);
+    writeStorageCoalesced(STORAGE_KEYS.PROBLEM_SETTINGS, merged);
     setProblemSettings(merged);
   };
 
   const commitStrategyPlans = (next: StrategyPlan[]) => {
     strategyPlansRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.STRATEGY_PLANS, next);
+    writeStorageCoalesced(STORAGE_KEYS.STRATEGY_PLANS, next);
     setStrategyPlans(next);
   };
 
   const commitProblems = (next: ProblemEntry[]) => {
     problemsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.PROBLEMS, next);
+    writeStorageCoalesced(STORAGE_KEYS.PROBLEMS, next);
     setProblems(next);
   };
 
   const commitReviews = (next: ReviewEntry[]) => {
     reviewsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.REVIEWS, next);
+    writeStorageCoalesced(STORAGE_KEYS.REVIEWS, next);
     setReviews(next);
   };
 
   const commitChecklistCategories = (next: ChecklistCategory[]) => {
     checklistCategoriesRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.CHECKLIST_CATEGORIES, next);
+    writeStorageCoalesced(STORAGE_KEYS.CHECKLIST_CATEGORIES, next);
     setChecklistCategories(next);
   };
 
   const commitChecklistItems = (next: ChecklistItem[]) => {
     checklistItemsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.CHECKLIST_ITEMS, next);
+    writeStorageCoalesced(STORAGE_KEYS.CHECKLIST_ITEMS, next);
     setChecklistItems(next);
   };
 
   const commitAllowanceItems = (next: AllowanceItem[]) => {
     allowanceItemsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.ALLOWANCES, next);
+    writeStorageCoalesced(STORAGE_KEYS.ALLOWANCES, next);
     setAllowanceItems(next);
   };
 
   const commitPlaybookItems = (next: PlaybookEntry[]) => {
     playbookItemsRef.current = next;
-    writeStorageSafe(STORAGE_KEYS.PLAYBOOK, next);
+    writeStorageCoalesced(STORAGE_KEYS.PLAYBOOK, next);
     setPlaybookItems(next);
   };
 
@@ -1659,6 +1690,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (document.visibilityState === 'visible') {
         void checkAndPullCloudOnResume();
       } else if (document.visibilityState === 'hidden') {
+        flushPendingStorageWrites();
         // Use pull-before-push guarded flush if any mutation is pending
         let hasPending = false;
         try {
@@ -1675,6 +1707,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       void checkAndPullCloudOnResume();
     };
     const handleUnload = () => {
+      flushPendingStorageWrites();
       flushCloudPushKeepalive();
     };
     // Cross-tab live sync on the same browser so two open tabs never push stale in-memory refs over each other
@@ -2039,14 +2072,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const safeTab = coerceActiveTabForLevel(tab, systemLevelRef.current);
     const safePlan = coercePlanningSubTabForLevel(planningSubTab, systemLevelRef.current);
     const safeRev = coerceReviewSubTabForLevel(reviewSubTab, systemLevelRef.current);
-    setActiveTabState(safeTab);
+    startTransition(() => {
+      setActiveTabState(safeTab);
+      if (safeTab === 'planning' && safePlan !== planningSubTab) {
+        setPlanningSubTabState(safePlan);
+      } else if (safeTab === 'review' && safeRev !== reviewSubTab) {
+        setReviewSubTabState(safeRev);
+      }
+    });
     if (safeTab === 'planning') {
-      if (safePlan !== planningSubTab) setPlanningSubTabState(safePlan);
       window.location.hash = `planning/${safePlan}`;
     } else if (safeTab === 'matrix') {
       window.location.hash = 'matrix';
     } else if (safeTab === 'review') {
-      if (safeRev !== reviewSubTab) setReviewSubTabState(safeRev);
       window.location.hash = `review/${safeRev}`;
     } else {
       window.location.hash = safeTab;
@@ -2055,15 +2093,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const setPlanningSubTab = (sub: PlanningSubTab) => {
     const safeSub = coercePlanningSubTabForLevel(sub, systemLevelRef.current);
-    setPlanningSubTabState(safeSub);
-    setActiveTabState('planning');
+    startTransition(() => {
+      setPlanningSubTabState(safeSub);
+      setActiveTabState('planning');
+    });
     window.location.hash = `planning/${safeSub}`;
   };
 
   const setReviewSubTab = (sub: ReviewSubTab) => {
     const safeSub = coerceReviewSubTabForLevel(sub, systemLevelRef.current);
-    setReviewSubTabState(safeSub);
-    setActiveTabState('review');
+    startTransition(() => {
+      setReviewSubTabState(safeSub);
+      setActiveTabState('review');
+    });
     window.location.hash = `review/${safeSub}`;
   };
 
@@ -3785,25 +3827,36 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     (currentWeekPlanForAlerts.tasks.length > 0 || currentWeekPlanForAlerts.focusTheme.trim().length > 0)
   );
 
-  const missingPlanAlerts: MissingPlanAlert[] = [];
-  if (systemLevel >= 1 && !hasTodayPlan) {
-    missingPlanAlerts.push({
-      id: 'missing_daily',
-      title: "Today's Plan Isn't Made",
-      message: `No priorities set yet for today (${todayDate}). Lock in your Day Mission.`,
-      actionLabel: 'Plan Today',
-      targetSubTab: 'daily'
-    });
-  }
-  if (systemLevel >= 3 && !hasCurrentWeekPlan) {
-    missingPlanAlerts.push({
-      id: 'missing_weekly',
-      title: `Week ${currentWeekNumForAlerts} Plan Isn't Made`,
-      message: `Set your weekly focus & deliverables for ${currentWeekRangeForAlerts.startDate} → ${currentWeekRangeForAlerts.endDate}.`,
-      actionLabel: `Plan Week ${currentWeekNumForAlerts}`,
-      targetSubTab: 'weekly'
-    });
-  }
+  const missingPlanAlerts = useMemo<MissingPlanAlert[]>(() => {
+    const alerts: MissingPlanAlert[] = [];
+    if (systemLevel >= 1 && !hasTodayPlan) {
+      alerts.push({
+        id: 'missing_daily',
+        title: "Today's Plan Isn't Made",
+        message: `No priorities set yet for today (${todayDate}). Lock in your Day Mission.`,
+        actionLabel: 'Plan Today',
+        targetSubTab: 'daily'
+      });
+    }
+    if (systemLevel >= 3 && !hasCurrentWeekPlan) {
+      alerts.push({
+        id: 'missing_weekly',
+        title: `Week ${currentWeekNumForAlerts} Plan Isn't Made`,
+        message: `Set your weekly focus & deliverables for ${currentWeekRangeForAlerts.startDate} → ${currentWeekRangeForAlerts.endDate}.`,
+        actionLabel: `Plan Week ${currentWeekNumForAlerts}`,
+        targetSubTab: 'weekly'
+      });
+    }
+    return alerts;
+  }, [
+    systemLevel,
+    hasTodayPlan,
+    todayDate,
+    hasCurrentWeekPlan,
+    currentWeekNumForAlerts,
+    currentWeekRangeForAlerts.startDate,
+    currentWeekRangeForAlerts.endDate
+  ]);
 
   const enableBrowserNotifications = async (): Promise<boolean> => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -3847,70 +3900,156 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     options?: { skipSnapshot?: boolean; snapshotReason?: string }
   ) => {
     if (!state || typeof state !== 'object') return;
-    if (!options?.skipSnapshot) {
-      saveAutoLocalSnapshot(options?.snapshotReason || 'Before cloud sync');
-    }
+    const sliceDiffers = (cur: unknown, next: unknown): boolean => {
+      if (cur === next) return false;
+      try {
+        return JSON.stringify(cur) !== JSON.stringify(next);
+      } catch {
+        return true;
+      }
+    };
+
     const cloudEpoch = state.onboardingStartDate || state.weeklyPlans?.['week_1']?.startDate || '2026-10-12';
+    const nextDaily = state.dailyEntries
+      ? Object.fromEntries(
+          Object.entries(state.dailyEntries).map(([d, entry]) => [
+            d,
+            normalizeDailyEntryFields(d, entry as DailyEntry)
+          ])
+        )
+      : null;
+    const nextWeekly = state.weeklyPlans
+      ? ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch)
+      : null;
+    const nextMonthly =
+      state.monthlyPlans && typeof state.monthlyPlans === 'object'
+        ? Object.fromEntries(
+            Object.entries(state.monthlyPlans).map(([k, p]) => [
+              k,
+              normalizeMonthlyPlanEntry(k, p as MonthlyPlan)
+            ])
+          )
+        : null;
+    const nextQuarterly =
+      state.quarterlyPlans && typeof state.quarterlyPlans === 'object'
+        ? Object.fromEntries(
+            Object.entries(state.quarterlyPlans).map(([k, p]) => [
+              k,
+              normalizeQuarterlyPlanEntry(k, p as QuarterlyPlan)
+            ])
+          )
+        : null;
+    const nextYearly =
+      state.yearlyPlans && typeof state.yearlyPlans === 'object'
+        ? Object.fromEntries(
+            Object.entries(state.yearlyPlans).map(([k, p]) => [
+              k,
+              normalizeYearlyPlanEntry(k, p as YearlyPlan)
+            ])
+          )
+        : null;
+
+    const changedTemplates = Array.isArray(state.templates) && sliceDiffers(templatesRef.current, state.templates);
+    const changedDaily = nextDaily !== null && sliceDiffers(dailyEntriesRef.current, nextDaily);
+    const changedGws = Array.isArray(state.gwsSessions) && sliceDiffers(gwsSessionsRef.current, state.gwsSessions);
+    const changedWeekly = nextWeekly !== null && sliceDiffers(weeklyPlansRef.current, nextWeekly);
+    const changedMonthly = nextMonthly !== null && sliceDiffers(monthlyPlansRef.current, nextMonthly);
+    const changedQuarterly = nextQuarterly !== null && sliceDiffers(quarterlyPlansRef.current, nextQuarterly);
+    const changedYearly = nextYearly !== null && sliceDiffers(yearlyPlansRef.current, nextYearly);
+    const changedPillars = Array.isArray(state.lifePillars) && sliceDiffers(lifePillarsRef.current, state.lifePillars);
+    const changedPrompts =
+      Array.isArray(state.customReviewPrompts) &&
+      sliceDiffers(customReviewPromptsRef.current, state.customReviewPrompts);
+    const changedMacroSettings =
+      state.macroReviewSettings &&
+      typeof state.macroReviewSettings === 'object' &&
+      sliceDiffers(macroReviewSettingsRef.current, state.macroReviewSettings);
+    const changedProbCats =
+      Array.isArray(state.problemCategories) &&
+      state.problemCategories.length > 0 &&
+      sliceDiffers(problemCategoriesRef.current, state.problemCategories);
+    const changedProbSettings =
+      state.problemSettings &&
+      typeof state.problemSettings === 'object' &&
+      sliceDiffers(problemSettingsRef.current, { ...DEFAULT_PROBLEM_SETTINGS, ...state.problemSettings });
+    const changedStrategy =
+      Array.isArray(state.strategyPlans) && sliceDiffers(strategyPlansRef.current, state.strategyPlans);
+    const changedProblems = Array.isArray(state.problems) && sliceDiffers(problemsRef.current, state.problems);
+    const changedReviews = Array.isArray(state.reviews) && sliceDiffers(reviewsRef.current, state.reviews);
+    const changedCheckCats =
+      Array.isArray(state.checklistCategories) &&
+      sliceDiffers(checklistCategoriesRef.current, state.checklistCategories);
+    const changedCheckItems =
+      Array.isArray(state.checklistItems) && sliceDiffers(checklistItemsRef.current, state.checklistItems);
+    const changedAllowances =
+      Array.isArray(state.allowanceItems) && sliceDiffers(allowanceItemsRef.current, state.allowanceItems);
+    const changedPlaybook =
+      Array.isArray(state.playbookItems) && sliceDiffers(playbookItemsRef.current, state.playbookItems);
+    const changedDeleted =
+      state.deletedIds &&
+      typeof state.deletedIds === 'object' &&
+      sliceDiffers(deletedIdsRef.current, state.deletedIds);
+    const changedLevel =
+      typeof state.systemLevel === 'number' &&
+      state.systemLevel >= 0 &&
+      state.systemLevel <= 5 &&
+      state.systemLevel !== systemLevelRef.current;
+
+    const anySliceChanged =
+      changedTemplates ||
+      changedDaily ||
+      changedGws ||
+      changedWeekly ||
+      changedMonthly ||
+      changedQuarterly ||
+      changedYearly ||
+      changedPillars ||
+      changedPrompts ||
+      changedMacroSettings ||
+      changedProbCats ||
+      changedProbSettings ||
+      changedStrategy ||
+      changedProblems ||
+      changedReviews ||
+      changedCheckCats ||
+      changedCheckItems ||
+      changedAllowances ||
+      changedPlaybook ||
+      changedDeleted ||
+      changedLevel;
+
     try {
       localStorage.setItem(ONBOARDING_EPOCH_KEY, cloudEpoch);
     } catch {
       // ignore
     }
-    if (Array.isArray(state.templates)) commitTemplates(state.templates);
-    if (state.dailyEntries) {
-      const cleanedDaily: Record<string, DailyEntry> = {};
-      Object.entries(state.dailyEntries).forEach(([d, entry]) => {
-        cleanedDaily[d] = normalizeDailyEntryFields(d, entry as DailyEntry);
-      });
-      commitDailyEntries(cleanedDaily);
+
+    if (!anySliceChanged) return;
+
+    if (!options?.skipSnapshot) {
+      saveAutoLocalSnapshot(options?.snapshotReason || 'Before cloud sync');
     }
-    if (Array.isArray(state.gwsSessions)) commitGwsSessions(state.gwsSessions);
-    if (state.weeklyPlans) {
-      commitWeeklyPlans(ensureContinuousWeeks(state.weeklyPlans, getTodayDateString(), cloudEpoch));
-    }
-    if (state.monthlyPlans && typeof state.monthlyPlans === 'object') {
-      const cleanedM: Record<string, MonthlyPlan> = {};
-      Object.entries(state.monthlyPlans).forEach(([k, p]) => {
-        cleanedM[k] = normalizeMonthlyPlanEntry(k, p as MonthlyPlan);
-      });
-      commitMonthlyPlans(cleanedM);
-    }
-    if (state.quarterlyPlans && typeof state.quarterlyPlans === 'object') {
-      const cleanedQ: Record<string, QuarterlyPlan> = {};
-      Object.entries(state.quarterlyPlans).forEach(([k, p]) => {
-        cleanedQ[k] = normalizeQuarterlyPlanEntry(k, p as QuarterlyPlan);
-      });
-      commitQuarterlyPlans(cleanedQ);
-    }
-    if (state.yearlyPlans && typeof state.yearlyPlans === 'object') {
-      const cleanedY: Record<string, YearlyPlan> = {};
-      Object.entries(state.yearlyPlans).forEach(([k, p]) => {
-        cleanedY[k] = normalizeYearlyPlanEntry(k, p as YearlyPlan);
-      });
-      commitYearlyPlans(cleanedY);
-    }
-    if (Array.isArray(state.lifePillars)) commitLifePillars(state.lifePillars);
-    if (Array.isArray(state.customReviewPrompts)) commitCustomReviewPrompts(state.customReviewPrompts);
-    if (state.macroReviewSettings && typeof state.macroReviewSettings === 'object') {
-      commitMacroReviewSettings(state.macroReviewSettings);
-    }
-    if (Array.isArray(state.problemCategories) && state.problemCategories.length > 0) {
-      commitProblemCategories(state.problemCategories);
-    }
-    if (state.problemSettings && typeof state.problemSettings === 'object') {
-      commitProblemSettings(state.problemSettings);
-    }
-    if (Array.isArray(state.strategyPlans)) commitStrategyPlans(state.strategyPlans);
-    if (Array.isArray(state.problems)) commitProblems(state.problems);
-    if (Array.isArray(state.reviews)) commitReviews(state.reviews);
-    if (Array.isArray(state.checklistCategories)) commitChecklistCategories(state.checklistCategories);
-    if (Array.isArray(state.checklistItems)) commitChecklistItems(state.checklistItems);
-    if (Array.isArray(state.allowanceItems)) commitAllowanceItems(state.allowanceItems);
-    if (Array.isArray(state.playbookItems)) commitPlaybookItems(state.playbookItems);
-    if (state.deletedIds && typeof state.deletedIds === 'object') {
-      commitDeletedIds(state.deletedIds);
-    }
-    if (typeof state.systemLevel === 'number' && state.systemLevel >= 0 && state.systemLevel <= 5) {
+    if (changedTemplates) commitTemplates(state.templates);
+    if (changedDaily && nextDaily) commitDailyEntries(nextDaily);
+    if (changedGws) commitGwsSessions(state.gwsSessions);
+    if (changedWeekly && nextWeekly) commitWeeklyPlans(nextWeekly);
+    if (changedMonthly && nextMonthly) commitMonthlyPlans(nextMonthly);
+    if (changedQuarterly && nextQuarterly) commitQuarterlyPlans(nextQuarterly);
+    if (changedYearly && nextYearly) commitYearlyPlans(nextYearly);
+    if (changedPillars) commitLifePillars(state.lifePillars);
+    if (changedPrompts) commitCustomReviewPrompts(state.customReviewPrompts);
+    if (changedMacroSettings) commitMacroReviewSettings(state.macroReviewSettings);
+    if (changedProbCats) commitProblemCategories(state.problemCategories);
+    if (changedProbSettings) commitProblemSettings(state.problemSettings);
+    if (changedStrategy) commitStrategyPlans(state.strategyPlans);
+    if (changedProblems) commitProblems(state.problems);
+    if (changedReviews) commitReviews(state.reviews);
+    if (changedCheckCats) commitChecklistCategories(state.checklistCategories);
+    if (changedCheckItems) commitChecklistItems(state.checklistItems);
+    if (changedAllowances) commitAllowanceItems(state.allowanceItems);
+    if (changedPlaybook) commitPlaybookItems(state.playbookItems);
+    if (changedDeleted) commitDeletedIds(state.deletedIds);
+    if (changedLevel) {
       if (state.systemLevel >= 1) rememberNormalLevel(state.systemLevel as SystemLevel);
       commitSystemLevel(state.systemLevel as SystemLevel);
     }
@@ -4877,6 +5016,45 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSyncStatus('syncing');
     setSyncError(null);
     try {
+      let prevCloudUserId: string | null = null;
+      let hasPendingLocalPush = false;
+      try {
+        prevCloudUserId = localStorage.getItem(LAST_CLOUD_USER_ID_KEY);
+        hasPendingLocalPush = localStorage.getItem(PENDING_CLOUD_PUSH_KEY) === 'true';
+      } catch {
+        // ignore
+      }
+      const sameUserCache = prevCloudUserId === userId;
+
+      // Lightweight 60-byte head check before downloading the full JSONB state blob:
+      // On normal page reloads when cloud updated_at already matches our local cache and no local push is pending,
+      // skip downloading the full database blob + full merge + snapshot + 21-slice overwrite completely!
+      if (
+        !options?.initialPayloadOverride &&
+        !options?.preferCloudDirectly &&
+        sameUserCache &&
+        !hasPendingLocalPush &&
+        !queuedPushRef.current &&
+        lastSyncedCloudUpdatedAtRef.current
+      ) {
+        const { data: headRow, error: headError } = await supabase
+          .from('legio_user_state')
+          .select('updated_at')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (headError) {
+          setSyncStatus('error');
+          setSyncError(headError.message);
+          return;
+        }
+        if (headRow?.updated_at && headRow.updated_at === lastSyncedCloudUpdatedAtRef.current) {
+          hasCompletedInitialCloudSyncRef.current = true;
+          setSyncStatus('synced');
+          return;
+        }
+      }
+
       const { data, error } = await supabase
         .from('legio_user_state')
         .select('state, display_name, updated_at')
@@ -4903,6 +5081,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       if (data && data.state) {
+        // Secondary fast-path guard if full fetch returned an unchanged timestamp
+        if (
+          !options?.preferCloudDirectly &&
+          sameUserCache &&
+          !hasPendingLocalPush &&
+          !queuedPushRef.current &&
+          data.updated_at &&
+          data.updated_at === lastSyncedCloudUpdatedAtRef.current
+        ) {
+          hasCompletedInitialCloudSyncRef.current = true;
+          setSyncStatus('synced');
+          return;
+        }
+
         setLastSyncedCloudUpdatedAt(data.updated_at || null);
         if (options?.preferCloudDirectly) {
           applyCloudPayload(data.state, { snapshotReason: 'Before sign-in cloud load' });
@@ -5275,107 +5467,146 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const contextValue = useMemo<StorageContextType>(
+    () => ({
+      templates,
+      dailyEntries,
+      gwsSessions,
+      weeklyPlans,
+      monthlyPlans,
+      quarterlyPlans,
+      yearlyPlans,
+      lifePillars,
+      customReviewPrompts,
+      macroReviewSettings,
+      problemCategories,
+      problemSettings,
+      strategyPlans,
+      problems,
+      reviews,
+      checklistCategories,
+      checklistItems,
+      allowanceItems,
+      playbookItems,
+      todayDate,
+      selectedDate,
+      selectedWeekId,
+      activeTab,
+      planningSubTab,
+      reviewSubTab,
+      systemLevel,
+      setSystemLevel,
+      missingPlanAlerts,
+      browserNotificationsEnabled,
+      enableBrowserNotifications,
+      authUser,
+      isAdmin,
+      rememberDevice,
+      setRememberDevice,
+      syncStatus,
+      syncError,
+      signIn,
+      signUp,
+      signOut,
+      syncNow,
+      startFreshWorkspace,
+      adminListAllUsers,
+      adminRestoreUserState,
+      setSelectedDate,
+      setSelectedWeekId,
+      setActiveTab,
+      setPlanningSubTab,
+      setReviewSubTab,
+      goToPreviousDay,
+      goToNextDay,
+      goToToday,
+      getEntryForDate,
+      saveDailyEntry,
+      activeGwsTimer,
+      updateActiveGwsTimer,
+      clearActiveGwsTimer,
+      addGWSSession,
+      updateGWSSession,
+      deleteGWSSession,
+      getWeeklyPlan,
+      saveWeeklyPlan,
+      getMonthlyPlan,
+      saveMonthlyPlan,
+      getQuarterlyPlan,
+      saveQuarterlyPlan,
+      getYearlyPlan,
+      saveYearlyPlan,
+      saveLifePillars,
+      saveCustomReviewPrompts,
+      saveMacroReviewSettings,
+      saveProblemCategories,
+      saveProblemSettings,
+      saveStrategyPlan,
+      deleteStrategyPlan,
+      addProblem,
+      updateProblem,
+      recordProblemRecurrence,
+      clusterIntoNewParent,
+      deleteProblem,
+      dispatchProblemFix,
+      saveTemplate,
+      deleteTemplate,
+      resetTemplatesToDefault,
+      saveReview,
+      deleteReview,
+      saveChecklistCategories,
+      saveChecklistItems,
+      saveAllowanceItems,
+      addPlaybookItem,
+      updatePlaybookItem,
+      deletePlaybookItem,
+      localSnapshots,
+      restoreLocalSnapshot,
+      exportData,
+      importData,
+      resetAllData
+    }),
+    [
+      templates,
+      dailyEntries,
+      gwsSessions,
+      weeklyPlans,
+      monthlyPlans,
+      quarterlyPlans,
+      yearlyPlans,
+      lifePillars,
+      customReviewPrompts,
+      macroReviewSettings,
+      problemCategories,
+      problemSettings,
+      strategyPlans,
+      problems,
+      reviews,
+      checklistCategories,
+      checklistItems,
+      allowanceItems,
+      playbookItems,
+      todayDate,
+      selectedDate,
+      selectedWeekId,
+      activeTab,
+      planningSubTab,
+      reviewSubTab,
+      systemLevel,
+      missingPlanAlerts,
+      browserNotificationsEnabled,
+      authUser,
+      isAdmin,
+      rememberDevice,
+      syncStatus,
+      syncError,
+      activeGwsTimer,
+      localSnapshots
+    ]
+  );
+
   return (
-    <StorageContext.Provider
-      value={{
-        templates,
-        dailyEntries,
-        gwsSessions,
-        weeklyPlans,
-        monthlyPlans,
-        quarterlyPlans,
-        yearlyPlans,
-        lifePillars,
-        customReviewPrompts,
-        macroReviewSettings,
-        problemCategories,
-        problemSettings,
-        strategyPlans,
-        problems,
-        reviews,
-        checklistCategories,
-        checklistItems,
-        allowanceItems,
-        playbookItems,
-        todayDate,
-        selectedDate,
-        selectedWeekId,
-        activeTab,
-        planningSubTab,
-        reviewSubTab,
-        systemLevel,
-        setSystemLevel,
-        missingPlanAlerts,
-        browserNotificationsEnabled,
-        enableBrowserNotifications,
-        authUser,
-        isAdmin,
-        rememberDevice,
-        setRememberDevice,
-        syncStatus,
-        syncError,
-        signIn,
-        signUp,
-        signOut,
-        syncNow,
-        startFreshWorkspace,
-        adminListAllUsers,
-        adminRestoreUserState,
-        setSelectedDate,
-        setSelectedWeekId,
-        setActiveTab,
-        setPlanningSubTab,
-        setReviewSubTab,
-        goToPreviousDay,
-        goToNextDay,
-        goToToday,
-        getEntryForDate,
-        saveDailyEntry,
-        activeGwsTimer,
-        updateActiveGwsTimer,
-        clearActiveGwsTimer,
-        addGWSSession,
-        updateGWSSession,
-        deleteGWSSession,
-        getWeeklyPlan,
-        saveWeeklyPlan,
-        getMonthlyPlan,
-        saveMonthlyPlan,
-        getQuarterlyPlan,
-        saveQuarterlyPlan,
-        getYearlyPlan,
-        saveYearlyPlan,
-        saveLifePillars,
-        saveCustomReviewPrompts,
-        saveMacroReviewSettings,
-        saveProblemCategories,
-        saveProblemSettings,
-        saveStrategyPlan,
-        deleteStrategyPlan,
-        addProblem,
-        updateProblem,
-        recordProblemRecurrence,
-        clusterIntoNewParent,
-        deleteProblem,
-        dispatchProblemFix,
-        saveTemplate,
-        deleteTemplate,
-        resetTemplatesToDefault,
-        saveReview,
-        deleteReview,
-        saveChecklistCategories,
-        saveChecklistItems,
-        saveAllowanceItems,
-        addPlaybookItem,
-        updatePlaybookItem,
-        deletePlaybookItem,
-        localSnapshots,
-        restoreLocalSnapshot,
-        exportData,
-        importData,
-        resetAllData
-      }}
-    >
+    <StorageContext.Provider value={contextValue}>
       {children}
     </StorageContext.Provider>
   );

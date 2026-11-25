@@ -9,7 +9,8 @@ export default defineConfig({
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom'],
-          'supabase-vendor': ['@supabase/supabase-js']
+          'supabase-vendor': ['@supabase/supabase-js'],
+          'icons-vendor': ['lucide-react']
         }
       }
     }

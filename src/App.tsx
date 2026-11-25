@@ -1,25 +1,23 @@
-import React, { Suspense, lazy, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { StorageProvider, useStorage } from './context/StorageContext';
 import { Navbar } from './components/common/Navbar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { PlanningHub } from './components/planning/PlanningHub';
+import {
+  loadChecklistView,
+  loadGWSStudio,
+  loadReviewHub,
+  loadSpreadsheetMatrixView,
+  loadTemplateManager,
+  scheduleIdlePrefetchForLevel
+} from './lib/chunkPrefetch';
 import { X, Shield } from 'lucide-react';
 
-const GWSStudio = lazy(() =>
-  import('./components/gws/GWSStudio').then(m => ({ default: m.GWSStudio }))
-);
-const ReviewHub = lazy(() =>
-  import('./components/review/ReviewHub').then(m => ({ default: m.ReviewHub }))
-);
-const TemplateManager = lazy(() =>
-  import('./components/templates/TemplateManager').then(m => ({ default: m.TemplateManager }))
-);
-const SpreadsheetMatrixView = lazy(() =>
-  import('./components/matrix/SpreadsheetMatrixView').then(m => ({ default: m.SpreadsheetMatrixView }))
-);
-const ChecklistView = lazy(() =>
-  import('./components/checklist/ChecklistView').then(m => ({ default: m.ChecklistView }))
-);
+const GWSStudio = lazy(loadGWSStudio);
+const ReviewHub = lazy(loadReviewHub);
+const TemplateManager = lazy(loadTemplateManager);
+const SpreadsheetMatrixView = lazy(loadSpreadsheetMatrixView);
+const ChecklistView = lazy(loadChecklistView);
 
 const TabLoadingFallback: React.FC = () => (
   <div className="max-w-3xl mx-auto px-6 py-20 flex flex-col items-center justify-center space-y-3 text-slate-500">
@@ -29,8 +27,11 @@ const TabLoadingFallback: React.FC = () => (
 );
 
 const MainContent: React.FC = () => {
-  const { activeTab, setActiveTab, setPlanningSubTab, isAdmin } = useStorage();
+  const { activeTab, setActiveTab, setPlanningSubTab, systemLevel, isAdmin } = useStorage();
   const [isQuickGWSOpen, setIsQuickGWSOpen] = useState(false);
+
+  // Warm unlocked view bundles during browser idle time right after first paint so tab switching is instant
+  useEffect(() => scheduleIdlePrefetchForLevel(systemLevel), [systemLevel]);
 
   const recoverToDaily = () => {
     setPlanningSubTab('daily');

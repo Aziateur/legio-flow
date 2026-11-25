@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import {
   useStorage,
   ReviewSubTab,
@@ -25,10 +25,24 @@ import { GwsAllocationCard } from '../common/GwsAllocationCard';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
-import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
-import { WhatWorksPlaybookView } from '../problems/WhatWorksPlaybookView';
-import { MacroReviewView } from './MacroReviewView';
 import { FastDailyReviewCard } from './FastDailyReviewCard';
+import {
+  loadMacroReviewView,
+  loadProblemsLedgerView,
+  loadWhatWorksPlaybookView,
+  prefetchReviewSubTab
+} from '../../lib/chunkPrefetch';
+
+const ProblemsLedgerView = lazy(loadProblemsLedgerView);
+const WhatWorksPlaybookView = lazy(loadWhatWorksPlaybookView);
+const MacroReviewView = lazy(loadMacroReviewView);
+
+const ReviewSubViewFallback: React.FC = () => (
+  <div className="max-w-3xl mx-auto px-6 py-16 flex flex-col items-center justify-center space-y-2.5 text-slate-500">
+    <div className="w-6 h-6 rounded-full border-2 border-amber-500/30 border-t-amber-400 animate-spin" />
+    <span className="text-[11px] font-mono uppercase tracking-wider">Loading view...</span>
+  </div>
+);
 import {
   AlignmentVerdictSelector,
   DailyEnergyReportCard,
@@ -276,9 +290,10 @@ export const ReviewHub: React.FC = () => {
   const [nextMonthGoalDraft, setNextMonthGoalDraft] = useState('');
   const [modalProblemTags, setModalProblemTags] = useState<string[]>([]);
 
-  const activeProblemCount = problems.filter(
-    p => p.status !== 'solved' && !hasExistingParent(problems, p)
-  ).length;
+  const activeProblemCount = useMemo(
+    () => problems.filter(p => p.status !== 'solved' && !hasExistingParent(problems, p)).length,
+    [problems]
+  );
 
   // Create Review Modal state
   const [showCreateReviewModal, setShowCreateReviewModal] = useState(false);
@@ -359,25 +374,51 @@ export const ReviewHub: React.FC = () => {
     targetPlanForReview.reviewNotes
   ]);
 
-  // Computed GWS metrics
-  const totalGwsHours = (gwsSessions.reduce((acc, s) => acc + (s.actualMinutes || 0), 0) / 60).toFixed(1);
-  const avgGwsScore = (gwsSessions.reduce((acc, s) => acc + s.ratings.total, 0) / Math.max(1, gwsSessions.length)).toFixed(1);
-  const avgFocus = (gwsSessions.reduce((acc, s) => acc + s.ratings.focus, 0) / Math.max(1, gwsSessions.length)).toFixed(1);
-  const avgExecution = (gwsSessions.reduce((acc, s) => acc + s.ratings.execution, 0) / Math.max(1, gwsSessions.length)).toFixed(1);
-  const avgOutput = (gwsSessions.reduce((acc, s) => acc + s.ratings.output, 0) / Math.max(1, gwsSessions.length)).toFixed(1);
+  // Computed GWS metrics (memoized so typing in Daily/Weekly/Monthly reviews never re-scans all sessions)
+  const { totalGwsHours, avgGwsScore, avgFocus, avgExecution, avgOutput } = useMemo(() => {
+    let mins = 0;
+    let total = 0;
+    let focus = 0;
+    let execution = 0;
+    let output = 0;
+    for (const s of gwsSessions) {
+      mins += s.actualMinutes || 0;
+      total += s.ratings.total;
+      focus += s.ratings.focus;
+      execution += s.ratings.execution;
+      output += s.ratings.output;
+    }
+    const denom = Math.max(1, gwsSessions.length);
+    return {
+      totalGwsHours: (mins / 60).toFixed(1),
+      avgGwsScore: (total / denom).toFixed(1),
+      avgFocus: (focus / denom).toFixed(1),
+      avgExecution: (execution / denom).toFixed(1),
+      avgOutput: (output / denom).toFixed(1)
+    };
+  }, [gwsSessions]);
 
-  // Filtered GWS
-  const filteredGwsSessions = gwsSessions.filter(s =>
-    s.taskName.toLowerCase().includes(gwsSearchQuery.toLowerCase()) ||
-    s.reflexions.accomplished.toLowerCase().includes(gwsSearchQuery.toLowerCase()) ||
-    s.reflexions.heldBack.toLowerCase().includes(gwsSearchQuery.toLowerCase()) ||
-    s.date.includes(gwsSearchQuery)
-  );
+  // Filtered GWS & improvements (only computed when GWS review tab is active)
+  const isGwsTabOpen = reviewSubTab === 'gws';
+  const filteredGwsSessions = useMemo(() => {
+    if (!isGwsTabOpen) return [];
+    const q = gwsSearchQuery.toLowerCase();
+    if (!q) return gwsSessions;
+    return gwsSessions.filter(
+      s =>
+        s.taskName.toLowerCase().includes(q) ||
+        s.reflexions.accomplished.toLowerCase().includes(q) ||
+        s.reflexions.heldBack.toLowerCase().includes(q) ||
+        s.date.includes(gwsSearchQuery)
+    );
+  }, [isGwsTabOpen, gwsSessions, gwsSearchQuery]);
 
-  // Extract all improvements
-  const allImprovements = gwsSessions
-    .filter(s => s.reflexions.improveNext.trim().length > 0)
-    .map(s => ({ date: s.date, task: s.taskName, text: s.reflexions.improveNext }));
+  const allImprovements = useMemo(() => {
+    if (!isGwsTabOpen) return [];
+    return gwsSessions
+      .filter(s => s.reflexions.improveNext.trim().length > 0)
+      .map(s => ({ date: s.date, task: s.taskName, text: s.reflexions.improveNext }));
+  }, [isGwsTabOpen, gwsSessions]);
 
   // --- MACRO ROLLUP HELPERS (MONTHLY & QUARTERLY AGGREGATION OF SMALLER SCALES) ---
   const getSavedMonthlyReview = (monthKey: string): ReviewEntry | undefined => {
@@ -1588,6 +1629,8 @@ export const ReviewHub: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setReviewSubTab('quarterly')}
+                  onMouseEnter={() => prefetchReviewSubTab('quarterly')}
+                  onFocus={() => prefetchReviewSubTab('quarterly')}
                   className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'quarterly'
                       ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
@@ -1603,6 +1646,8 @@ export const ReviewHub: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setReviewSubTab('yearly')}
+                  onMouseEnter={() => prefetchReviewSubTab('yearly')}
+                  onFocus={() => prefetchReviewSubTab('yearly')}
                   className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     reviewSubTab === 'yearly'
                       ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
@@ -1622,6 +1667,8 @@ export const ReviewHub: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setReviewSubTab('problems')}
+                    onMouseEnter={() => prefetchReviewSubTab('problems')}
+                    onFocus={() => prefetchReviewSubTab('problems')}
                     className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                       reviewSubTab === 'problems'
                         ? 'bg-orange-500 text-slate-950 shadow-sm shadow-orange-500/20'
@@ -1640,6 +1687,8 @@ export const ReviewHub: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setReviewSubTab('playbook')}
+                    onMouseEnter={() => prefetchReviewSubTab('playbook')}
+                    onFocus={() => prefetchReviewSubTab('playbook')}
                     className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                       reviewSubTab === 'playbook'
                         ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
@@ -1708,7 +1757,9 @@ export const ReviewHub: React.FC = () => {
       {/* ========================================================================= */}
       {reviewSubTab === 'problems' && (
         <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
-          <ProblemsLedgerView />
+          <Suspense fallback={<ReviewSubViewFallback />}>
+            <ProblemsLedgerView />
+          </Suspense>
         </div>
       )}
 
@@ -1717,7 +1768,9 @@ export const ReviewHub: React.FC = () => {
       {/* ========================================================================= */}
       {reviewSubTab === 'playbook' && caps.whatWorksPlaybook && (
         <div className="w-full max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
-          <WhatWorksPlaybookView />
+          <Suspense fallback={<ReviewSubViewFallback />}>
+            <WhatWorksPlaybookView />
+          </Suspense>
         </div>
       )}
 
@@ -4850,56 +4903,60 @@ export const ReviewHub: React.FC = () => {
       {/* SUB-TAB 5: QUARTERLY REVIEW (5-STAGE 90-DAY STRATEGIC CONTROL LOOP)       */}
       {/* ========================================================================= */}
       {reviewSubTab === 'quarterly' && (
-        <MacroReviewView
-          mode="quarterly"
-          periodKey={selectedQuarter}
-          setPeriodKey={setSelectedQuarter}
-          allKnownPeriods={allKnownQuarters}
-          quarterData={compileQuarterData(selectedQuarter)}
-          prevSavedReview={getSavedQuarterlyReview(shiftQuarterKey(selectedQuarter, -1))}
-          onUpsertReview={upsertQuarterlyReview}
-          onOpenMonth={mKey => {
-            setSelectedMonth(mKey);
-            setReviewSubTab('monthly');
-          }}
-          onOpenQuarter={qKey => {
-            setSelectedQuarter(qKey);
-            setReviewSubTab('quarterly');
-          }}
-          onOpenWeek={weekId => {
-            selectWeekGlobal(weekId);
-            setReviewSubTab('weekly');
-          }}
-          onOpenVault={() => setReviewSubTab('vault')}
-        />
+        <Suspense fallback={<ReviewSubViewFallback />}>
+          <MacroReviewView
+            mode="quarterly"
+            periodKey={selectedQuarter}
+            setPeriodKey={setSelectedQuarter}
+            allKnownPeriods={allKnownQuarters}
+            quarterData={compileQuarterData(selectedQuarter)}
+            prevSavedReview={getSavedQuarterlyReview(shiftQuarterKey(selectedQuarter, -1))}
+            onUpsertReview={upsertQuarterlyReview}
+            onOpenMonth={mKey => {
+              setSelectedMonth(mKey);
+              setReviewSubTab('monthly');
+            }}
+            onOpenQuarter={qKey => {
+              setSelectedQuarter(qKey);
+              setReviewSubTab('quarterly');
+            }}
+            onOpenWeek={weekId => {
+              selectWeekGlobal(weekId);
+              setReviewSubTab('weekly');
+            }}
+            onOpenVault={() => setReviewSubTab('vault')}
+          />
+        </Suspense>
       )}
 
       {/* ========================================================================= */}
       {/* SUB-TAB 6: YEARLY REVIEW (5-STAGE 12-MONTH EXECUTIVE CONTROL LOOP)        */}
       {/* ========================================================================= */}
       {reviewSubTab === 'yearly' && (
-        <MacroReviewView
-          mode="yearly"
-          periodKey={selectedYear}
-          setPeriodKey={setSelectedYear}
-          allKnownPeriods={allKnownYears}
-          yearData={compileYearData(selectedYear)}
-          prevSavedReview={getSavedYearlyReview(shiftYearKey(selectedYear, -1))}
-          onUpsertReview={upsertYearlyReview}
-          onOpenMonth={mKey => {
-            setSelectedMonth(mKey);
-            setReviewSubTab('monthly');
-          }}
-          onOpenQuarter={qKey => {
-            setSelectedQuarter(qKey);
-            setReviewSubTab('quarterly');
-          }}
-          onOpenWeek={weekId => {
-            selectWeekGlobal(weekId);
-            setReviewSubTab('weekly');
-          }}
-          onOpenVault={() => setReviewSubTab('vault')}
-        />
+        <Suspense fallback={<ReviewSubViewFallback />}>
+          <MacroReviewView
+            mode="yearly"
+            periodKey={selectedYear}
+            setPeriodKey={setSelectedYear}
+            allKnownPeriods={allKnownYears}
+            yearData={compileYearData(selectedYear)}
+            prevSavedReview={getSavedYearlyReview(shiftYearKey(selectedYear, -1))}
+            onUpsertReview={upsertYearlyReview}
+            onOpenMonth={mKey => {
+              setSelectedMonth(mKey);
+              setReviewSubTab('monthly');
+            }}
+            onOpenQuarter={qKey => {
+              setSelectedQuarter(qKey);
+              setReviewSubTab('quarterly');
+            }}
+            onOpenWeek={weekId => {
+              selectWeekGlobal(weekId);
+              setReviewSubTab('weekly');
+            }}
+            onOpenVault={() => setReviewSubTab('vault')}
+          />
+        </Suspense>
       )}
 
       {/* ========================================================================= */}

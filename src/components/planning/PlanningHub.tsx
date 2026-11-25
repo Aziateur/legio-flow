@@ -8,19 +8,18 @@ import {
 import { DailyTrackerView } from '../daily/DailyTrackerView';
 import { ScoreboardEditor } from '../common/ScoreboardEditor';
 import { TopFocusesEditor } from '../common/TopFocusesEditor';
+import {
+  loadQuarterlyPlanSection,
+  loadSpreadsheetMatrixView,
+  loadStrategyRoadmapsView,
+  loadWeeklyGoalCrusherView,
+  prefetchPlanningSubTab
+} from '../../lib/chunkPrefetch';
 
-const WeeklyGoalCrusherView = lazy(() =>
-  import('../weekly/WeeklyGoalCrusherView').then(m => ({ default: m.WeeklyGoalCrusherView }))
-);
-const SpreadsheetMatrixView = lazy(() =>
-  import('../matrix/SpreadsheetMatrixView').then(m => ({ default: m.SpreadsheetMatrixView }))
-);
-const StrategyRoadmapsView = lazy(() =>
-  import('./StrategyRoadmapsView').then(m => ({ default: m.StrategyRoadmapsView }))
-);
-const QuarterlyPlanSection = lazy(() =>
-  import('./QuarterlyPlanSection').then(m => ({ default: m.QuarterlyPlanSection }))
-);
+const WeeklyGoalCrusherView = lazy(loadWeeklyGoalCrusherView);
+const SpreadsheetMatrixView = lazy(loadSpreadsheetMatrixView);
+const StrategyRoadmapsView = lazy(loadStrategyRoadmapsView);
+const QuarterlyPlanSection = lazy(loadQuarterlyPlanSection);
 
 const SubViewFallback: React.FC = () => (
   <div className="max-w-3xl mx-auto px-6 py-16 flex flex-col items-center justify-center space-y-2.5 text-slate-500">
@@ -616,6 +615,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('weekly')}
+                  onMouseEnter={() => prefetchPlanningSubTab('weekly')}
+                  onFocus={() => prefetchPlanningSubTab('weekly')}
                   className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'weekly'
                       ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
@@ -646,6 +647,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                 <button
                   type="button"
                   onClick={() => setPlanningSubTab('quarterly')}
+                  onMouseEnter={() => prefetchPlanningSubTab('quarterly')}
+                  onFocus={() => prefetchPlanningSubTab('quarterly')}
                   className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                     planningSubTab === 'quarterly'
                       ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
@@ -680,6 +683,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   <button
                     type="button"
                     onClick={() => setPlanningSubTab('roadmaps')}
+                    onMouseEnter={() => prefetchPlanningSubTab('roadmaps')}
+                    onFocus={() => prefetchPlanningSubTab('roadmaps')}
                     className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                       planningSubTab === 'roadmaps'
                         ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
@@ -695,6 +700,8 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                   <button
                     type="button"
                     onClick={() => setPlanningSubTab('matrix')}
+                    onMouseEnter={() => prefetchPlanningSubTab('matrix')}
+                    onFocus={() => prefetchPlanningSubTab('matrix')}
                     className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                       planningSubTab === 'matrix'
                         ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'

@@ -20,6 +20,7 @@ import { SupabaseSyncModal } from './SupabaseSyncModal';
 import { AuthModal } from './AuthModal';
 import { AdminModal } from './AdminModal';
 import { LEVEL_META, SYSTEM_LEVELS, getLevelCapabilities } from '../../lib/levelFeatures';
+import { loadGWSStudio, prefetchMainTab } from '../../lib/chunkPrefetch';
 
 export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGWS }) => {
   const { 
@@ -191,6 +192,8 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
+                    onMouseEnter={() => prefetchMainTab(item.id)}
+                    onFocus={() => prefetchMainTab(item.id)}
                     className={`flex items-center space-x-1.5 px-2.5 xl:px-3 py-2 rounded-lg text-xs xl:text-sm font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
                       isActive
                         ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
@@ -334,6 +337,7 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               ) : caps.gwsStudio ? (
                 <button
                   onClick={onOpenQuickGWS}
+                  onMouseEnter={() => void loadGWSStudio().catch(() => {})}
                   title="Start a GWS deep work sprint"
                   className="flex items-center space-x-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 whitespace-nowrap bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20"
                 >
