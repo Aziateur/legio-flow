@@ -49,7 +49,8 @@ import {
 import {
   coerceActiveTabForLevel,
   coercePlanningSubTabForLevel,
-  coerceReviewSubTabForLevel
+  coerceReviewSubTabForLevel,
+  rememberNormalLevel
 } from '../lib/levelFeatures';
 import {
   DEFAULT_TEMPLATES,
@@ -385,7 +386,7 @@ const normalizeDailyEntryFields = (date: string, entry: DailyEntry): DailyEntry 
     priorityItems: [],
     planNotes: '',
     mainTasksCompleted: entry.mainTasksCompleted || 0,
-    mainTasksTotal: Math.max(3, entry.mainTasksTotal || 3)
+    mainTasksTotal: entry.mainTasksTotal && entry.mainTasksTotal >= 1 ? entry.mainTasksTotal : 3
   };
 };
 
@@ -1018,13 +1019,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return `week_${getWeekNumberForDate(selectedDate, getEffectiveEpochMonday(weeklyPlans))}`;
   });
 
-  // Progressive System Level (1 to 5): preserve existing users, start brand-new blank browsers at LVL 1
+  // Progressive System Level (0 to 5): preserve existing users, start brand-new blank browsers at LVL 1
   const [systemLevel, setSystemLevelState] = useState<SystemLevel>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SYSTEM_LEVEL);
-      if (saved) {
+      if (saved !== null && saved !== '') {
         const parsed = parseInt(saved, 10);
-        if (parsed >= 1 && parsed <= 5) return parsed as SystemLevel;
+        if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 5) {
+          if (parsed >= 1) rememberNormalLevel(parsed as SystemLevel);
+          return parsed as SystemLevel;
+        }
       }
       const hasExistingLocalData = Boolean(
         localStorage.getItem(STORAGE_KEYS.DAILY) ||
@@ -1032,7 +1036,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           localStorage.getItem(STORAGE_KEYS.GWS) ||
           localStorage.getItem(STORAGE_KEYS.STRATEGY_PLANS)
       );
-      return hasExistingLocalData ? 5 : 1;
+      const fallback: SystemLevel = hasExistingLocalData ? 5 : 1;
+      rememberNormalLevel(fallback);
+      return fallback;
     } catch {
       return 1;
     }
@@ -1795,9 +1801,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (parsed && typeof parsed === 'object') {
             deletedIdsRef.current = pruneTombstones(parsed);
           }
-        } else if (e.key === STORAGE_KEYS.SYSTEM_LEVEL) {
+        } else if (e.key === STORAGE_KEYS.SYSTEM_LEVEL && e.newValue !== null) {
           const parsed = parseInt(e.newValue, 10);
-          if (parsed >= 1 && parsed <= 5) {
+          if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 5) {
+            if (parsed >= 1) rememberNormalLevel(parsed as SystemLevel);
             systemLevelRef.current = parsed as SystemLevel;
             setSystemLevelState(parsed as SystemLevel);
           }
@@ -1948,6 +1955,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [todayDate]);
 
   const setSystemLevel = (lvl: SystemLevel) => {
+    if (lvl >= 1) rememberNormalLevel(lvl);
     commitSystemLevel(lvl);
     markLocalMutation();
   };
@@ -2119,6 +2127,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const prevItems = getPriorityItemsForEntry(prevEntry);
 
     let normalizedUpdates = { ...updates };
+    if (Array.isArray(updates.restBlocks) && Array.isArray(prevEntry.restBlocks)) {
+      const nextRestIds = new Set(updates.restBlocks.map(r => r.id));
+      const removedRestIds = prevEntry.restBlocks
+        .map(r => r.id)
+        .filter(id => id && !nextRestIds.has(id));
+      if (removedRestIds.length > 0) recordDeletedIds(removedRestIds);
+    }
+    const minDailyTarget = systemLevelRef.current === 0 ? 1 : 3;
     if (Array.isArray(updates.priorityItems)) {
       const cleanItems = updates.priorityItems
         .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 0)
@@ -2128,7 +2144,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         priorityItems: cleanItems,
         planNotes: formatPriorityItemsToPlanNotes(cleanItems),
         mainTasksCompleted: cleanItems.filter(i => i.completed).length,
-        mainTasksTotal: Math.max(3, cleanItems.length)
+        mainTasksTotal: Math.max(minDailyTarget, cleanItems.length)
       };
     } else if (updates.planNotes !== undefined) {
       const cleanItems = parsePlanNotesToPriorityItems(date, updates.planNotes, prevItems);
@@ -2137,7 +2153,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         priorityItems: cleanItems,
         planNotes: updates.planNotes.trim().length === 0 ? '' : formatPriorityItemsToPlanNotes(cleanItems),
         mainTasksCompleted: cleanItems.filter(i => i.completed).length,
-        mainTasksTotal: Math.max(3, cleanItems.length)
+        mainTasksTotal: Math.max(minDailyTarget, cleanItems.length)
       };
     }
 
@@ -3605,7 +3621,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (src.deletedIds && typeof src.deletedIds === 'object') {
         commitDeletedIds(src.deletedIds);
       }
-      if (src.systemLevel >= 1 && src.systemLevel <= 5) {
+      if (typeof src.systemLevel === 'number' && src.systemLevel >= 0 && src.systemLevel <= 5) {
+        if (src.systemLevel >= 1) rememberNormalLevel(src.systemLevel as SystemLevel);
         commitSystemLevel(src.systemLevel as SystemLevel);
       }
       markLocalMutation();
@@ -3769,7 +3786,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 
   const missingPlanAlerts: MissingPlanAlert[] = [];
-  if (!hasTodayPlan) {
+  if (systemLevel >= 1 && !hasTodayPlan) {
     missingPlanAlerts.push({
       id: 'missing_daily',
       title: "Today's Plan Isn't Made",
@@ -3893,7 +3910,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (state.deletedIds && typeof state.deletedIds === 'object') {
       commitDeletedIds(state.deletedIds);
     }
-    if (state.systemLevel >= 1 && state.systemLevel <= 5) {
+    if (typeof state.systemLevel === 'number' && state.systemLevel >= 0 && state.systemLevel <= 5) {
+      if (state.systemLevel >= 1) rememberNormalLevel(state.systemLevel as SystemLevel);
       commitSystemLevel(state.systemLevel as SystemLevel);
     }
   };
@@ -4044,7 +4062,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               d.energyCheck.nervousSystemState ||
               d.energyCheck.nervousSystemNote?.trim())) ||
           Boolean(d.alignmentVerdict || d.alignmentNote?.trim()) ||
-          Boolean(d.priorityAudits && Object.keys(d.priorityAudits).length > 0)
+          Boolean(d.priorityAudits && Object.keys(d.priorityAudits).length > 0) ||
+          Boolean(d.restBlocks && d.restBlocks.length > 0)
       );
 
     allDates.forEach(date => {
@@ -4116,6 +4135,21 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             ? { ...(other.priorityAudits || {}), ...(chosen.priorityAudits || {}) }
             : undefined;
 
+        const primaryRest = chosen.restBlocks || [];
+        const secondaryRest = other.restBlocks || [];
+        const mergedRestBlocks = [...primaryRest];
+        const restIds = new Set(primaryRest.map(r => r.id));
+        secondaryRest.forEach(rb => {
+          const delMs = Date.parse(mergedDeletedIds[rb.id] || '') || 0;
+          const otherT = Date.parse(other.updatedAt || '') || 0;
+          if (delMs > 0 && delMs >= otherT) return;
+          if (!restIds.has(rb.id)) {
+            mergedRestBlocks.push(rb);
+            restIds.add(rb.id);
+            needsCloudPush = true;
+          }
+        });
+
         const mergedReviewNotes = chosen.reviewNotes?.trim() ? chosen.reviewNotes : other.reviewNotes || '';
         const mergedProblems = chosen.problemsEncountered?.trim()
           ? chosen.problemsEncountered
@@ -4149,7 +4183,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null) ||
           mergedAlignmentVerdict !== c.alignmentVerdict ||
           (mergedAlignmentNote || '') !== (c.alignmentNote || '') ||
-          JSON.stringify(mergedPriorityAudits || null) !== JSON.stringify(c.priorityAudits || null)
+          JSON.stringify(mergedPriorityAudits || null) !== JSON.stringify(c.priorityAudits || null) ||
+          JSON.stringify(mergedRestBlocks) !== JSON.stringify(c.restBlocks || [])
         ) {
           needsCloudPush = true;
         }
@@ -4165,7 +4200,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {}),
           ...(mergedAlignmentVerdict ? { alignmentVerdict: mergedAlignmentVerdict } : {}),
           ...(mergedAlignmentNote?.trim() ? { alignmentNote: mergedAlignmentNote } : {}),
-          ...(mergedPriorityAudits ? { priorityAudits: mergedPriorityAudits } : {})
+          ...(mergedPriorityAudits ? { priorityAudits: mergedPriorityAudits } : {}),
+          ...(mergedRestBlocks.length > 0 ? { restBlocks: mergedRestBlocks } : {})
         });
       }
     });
@@ -4820,7 +4856,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       allowanceItems: mergedAllowanceItems,
       playbookItems: mergedPlaybookItems,
       deletedIds: mergedDeletedIds,
-      systemLevel: localIsNewer || !cloudState?.systemLevel ? local.systemLevel : cloudState.systemLevel,
+      systemLevel:
+        localIsNewer || typeof cloudState?.systemLevel !== 'number'
+          ? local.systemLevel
+          : cloudState.systemLevel,
       clientUpdatedAt: new Date(Math.max(localMs, cloudMs, Date.now())).toISOString()
     };
 

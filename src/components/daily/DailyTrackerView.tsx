@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { ChecklistItem } from '../../types/schema';
 import { shiftDateString } from '../../lib/energyAnalytics';
+import { getLevelCapabilities } from '../../lib/levelFeatures';
+import { LowEnergyDayView } from './LowEnergyDayView';
 import {
   getChecklistDueStatus,
   getChecklistScheduleLabel,
@@ -63,6 +65,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
   const [quickWeekGoalInput, setQuickWeekGoalInput] = useState('');
   const [showChecklistPuller, setShowChecklistPuller] = useState(false);
   const [pushNotice, setPushNotice] = useState<{ message: string; targetDate: string } | null>(null);
+  const caps = getLevelCapabilities(systemLevel);
 
   // Resolve the exact calendar week for selectedDate so Daily & Weekly are always synchronized
   const currentWeekRange = getCurrentWeekRange(selectedDate);
@@ -617,54 +620,97 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         </div>
       </div>
 
-      {/* Unified Today's Context Brief (Macro Compass + Guardrails + Course Correction + Carry-Forward + Scheduled Due) */}
-      <DailyContextBrief
-        selectedDate={selectedDate}
-        selectedDayShortName={selectedDayShortName}
-        activeWeeklyPlanId={activeWeeklyPlan.id}
-        latestPreviousReview={latestPreviousReview}
-        latestGwsCommitment={latestGwsCommitment}
-        unfinishedFromPrevDay={unfinishedFromPrevDay}
-        prevDayWithUnfinished={prevDayWithUnfinished}
-        scheduledDueForDay={scheduledDueForDay}
-        onPullGoalToDay={handlePullGoalToDay}
-        onCarryAllPrevUnfinished={handleCarryAllPrevUnfinished}
-        onPullAllScheduledDue={handlePullAllScheduledDue}
-      />
+      {caps.lowEnergyMode ? (
+        <LowEnergyDayView selectedDate={selectedDate} />
+      ) : (
+        <>
+          {/* Unified Today's Context Brief (Macro Compass + Guardrails + Course Correction + Carry-Forward + Scheduled Due) */}
+          <DailyContextBrief
+            selectedDate={selectedDate}
+            selectedDayShortName={selectedDayShortName}
+            activeWeeklyPlanId={activeWeeklyPlan.id}
+            latestPreviousReview={latestPreviousReview}
+            latestGwsCommitment={latestGwsCommitment}
+            unfinishedFromPrevDay={unfinishedFromPrevDay}
+            prevDayWithUnfinished={prevDayWithUnfinished}
+            scheduledDueForDay={scheduledDueForDay}
+            onPullGoalToDay={handlePullGoalToDay}
+            onCarryAllPrevUnfinished={handleCarryAllPrevUnfinished}
+            onPullAllScheduledDue={handlePullAllScheduledDue}
+          />
 
-      {/* Push-to-Next-Day confirmation banner */}
-      {pushNotice && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/35 text-xs font-bold text-rose-200 shadow-lg">
-          <span>→ {pushNotice.message}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('review');
-              }}
-              className="underline text-amber-300 hover:text-amber-200"
-            >
-              Diagnose in Review
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedDate(pushNotice.targetDate)}
-              className="underline text-rose-200 hover:text-white"
-            >
-              Open {pushNotice.targetDate.slice(5)} →
-            </button>
-          </div>
-        </div>
-      )}
+          {/* Preserve Scheduled Rest blocks if any were set on this date */}
+          {(currentEntry.restBlocks || []).length > 0 && (
+            <div className="bg-slate-900/85 border border-teal-500/30 rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-2.5">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-teal-300">
+                Scheduled Rest Today
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {(currentEntry.restBlocks || []).map(rb => (
+                  <button
+                    key={rb.id}
+                    type="button"
+                    onClick={() =>
+                      saveDailyEntry(selectedDate, {
+                        restBlocks: (currentEntry.restBlocks || []).map(item =>
+                          item.id === rb.id ? { ...item, completed: !item.completed } : item
+                        )
+                      })
+                    }
+                    className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
+                      rb.completed
+                        ? 'bg-teal-500/15 border-teal-500/40 text-teal-200 line-through'
+                        : 'bg-slate-950 border-slate-800 text-slate-200 hover:border-teal-500/40'
+                    }`}
+                  >
+                    {rb.completed ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                    ) : (
+                      <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    )}
+                    <span className="font-mono text-[10px] text-teal-300">{rb.timeWindow}</span>
+                    <span>{rb.activity}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-      {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
-      {dailyTemplate && (
-        <ModularCardGrid
-          template={dailyTemplate}
-          values={dynamicValues}
-          onChange={handleFieldChange}
-          onAction={handleAction}
-        />
+          {/* Push-to-Next-Day confirmation banner */}
+          {pushNotice && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/35 text-xs font-bold text-rose-200 shadow-lg">
+              <span>→ {pushNotice.message}</span>
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('review');
+                  }}
+                  className="underline text-amber-300 hover:text-amber-200"
+                >
+                  Diagnose in Review
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(pushNotice.targetDate)}
+                  className="underline text-rose-200 hover:text-white"
+                >
+                  Open {pushNotice.targetDate.slice(5)} →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
+          {dailyTemplate && (
+            <ModularCardGrid
+              template={dailyTemplate}
+              values={dynamicValues}
+              onChange={handleFieldChange}
+              onAction={handleAction}
+            />
+          )}
+        </>
       )}
 
       {/* 2. Synchronized Week Goals Bridge (Two-Way Sync with Weekly Plan) */}
@@ -828,7 +874,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       )}
 
       {/* 2.5 Pull from Checklist (Weekly, Monthly & One-Off Tasks) */}
-      {pullableChecklistItems.length > 0 && (
+      {!caps.lowEnergyMode && pullableChecklistItems.length > 0 && (
         <div className="bg-slate-900/75 border border-slate-800 rounded-3xl overflow-hidden shadow-lg">
           <div className="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center space-x-2 text-xs">
@@ -967,11 +1013,13 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
       )}
 
       {/* 3. Quick Copy / Paste Bar (Discord / Notion export) */}
-      <QuickCopyPasteBar
-        currentEntry={currentEntry}
-        gwsSessions={gwsSessions}
-        onApplyParsedPlan={handleApplyParsedPlan}
-      />
+      {!caps.lowEnergyMode && (
+        <QuickCopyPasteBar
+          currentEntry={currentEntry}
+          gwsSessions={gwsSessions}
+          onApplyParsedPlan={handleApplyParsedPlan}
+        />
+      )}
 
     </div>
   );

@@ -67,6 +67,13 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
       });
     }
 
+    if (currentEntry.restBlocks && currentEntry.restBlocks.length > 0) {
+      text += `\nScheduled Rest:\n`;
+      currentEntry.restBlocks.forEach(rb => {
+        text += `- [${rb.completed ? 'RESTED' : 'PENDING'}] (${rb.timeWindow}) ${rb.activity}\n`;
+      });
+    }
+
     if (todaySessions.length > 0) {
       text += `\nGWS Deep Work (${todaySessions.length}):\n`;
       todaySessions.forEach((s) => {

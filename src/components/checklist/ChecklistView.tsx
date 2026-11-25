@@ -280,7 +280,11 @@ export const ChecklistView: React.FC = () => {
 
   const caps = getLevelCapabilities(systemLevel);
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
-  const effectiveViewFilter: ViewFilter = !caps.repsBoard && viewFilter === 'tally' ? 'all' : viewFilter;
+  const effectiveViewFilter: ViewFilter =
+    (!caps.repsBoard && viewFilter === 'tally') ||
+    (!caps.allowances && viewFilter === 'allowances')
+      ? 'all'
+      : viewFilter;
   const [drafts, setDrafts] = useState<Record<ChecklistRecurrence, string>>({
     daily: '',
     weekly: '',
@@ -1017,7 +1021,11 @@ export const ChecklistView: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2.5">
             <ListChecks className="h-5 w-5 text-amber-400" />
             <h1 className="text-lg font-bold tracking-tight text-slate-100">
-              {caps.repsBoard ? 'Checklist & Reps Board' : 'Checklist & Allowances'}
+              {caps.repsBoard
+                ? 'Checklist & Reps Board'
+                : caps.allowances
+                ? 'Checklist & Allowances'
+                : 'Daily Baseline Habits (LVL 0 · Allowances Off)'}
             </h1>
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
               {doneCount} / {totalCount} Done
@@ -1055,7 +1063,7 @@ export const ChecklistView: React.FC = () => {
                 { id: 'recurring', label: 'Recurring' },
                 { id: 'none', label: 'One-Off' },
                 ...(caps.repsBoard ? [{ id: 'tally' as const, label: 'Reps Board' }] : []),
-                { id: 'allowances', label: 'Allowances' }
+                ...(caps.allowances ? [{ id: 'allowances' as const, label: 'Allowances' }] : [])
               ] as { id: ViewFilter; label: string }[]
             ).map((tab) => (
               <button
@@ -1579,8 +1587,8 @@ export const ChecklistView: React.FC = () => {
         </section>
       )}
 
-      {/* 4. ALLOWANCES & QUOTAS BOARD — Daily / Weekly / Monthly Countdown Budgets (Available from LVL 1+) */}
-      {(effectiveViewFilter === 'all' || effectiveViewFilter === 'allowances') && (
+      {/* 4. ALLOWANCES & QUOTAS BOARD — Daily / Weekly / Monthly Countdown Budgets (Available from LVL 1+; hidden in LVL 0 Low-Energy Mode) */}
+      {caps.allowances && (effectiveViewFilter === 'all' || effectiveViewFilter === 'allowances') && (
         <AllowancesBoard
           selectedDate={selectedDate}
           selectedWeekId={selectedWeekId}

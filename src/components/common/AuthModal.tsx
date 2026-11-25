@@ -288,11 +288,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-300 font-semibold">App Complexity Level</span>
-                      <span className="font-mono text-amber-400 font-bold">LVL {systemLevel}</span>
+                      <span className="text-slate-300 font-semibold">App Complexity / Fuel Level</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          systemLevel === 0 ? 'text-teal-400' : 'text-amber-400'
+                        }`}
+                      >
+                        LVL {systemLevel}
+                      </span>
                     </div>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {([1, 2, 3, 4, 5] as const).map(lvl => (
+                    <div className="grid grid-cols-6 gap-1.5">
+                      {([0, 1, 2, 3, 4, 5] as const).map(lvl => (
                         <button
                           key={lvl}
                           type="button"
@@ -300,7 +306,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           title={LEVEL_META[lvl].desc}
                           className={`py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
                             systemLevel === lvl
-                              ? 'bg-amber-500 text-slate-950 shadow-sm'
+                              ? lvl === 0
+                                ? 'bg-teal-500 text-slate-950 shadow-sm'
+                                : 'bg-amber-500 text-slate-950 shadow-sm'
+                              : lvl === 0
+                              ? 'bg-teal-500/10 text-teal-300 border border-teal-500/30 hover:bg-teal-500/20'
                               : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
                           }`}
                         >

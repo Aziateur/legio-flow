@@ -28,6 +28,7 @@ import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { ProblemsLedgerView } from '../problems/ProblemsLedgerView';
 import { WhatWorksPlaybookView } from '../problems/WhatWorksPlaybookView';
 import { MacroReviewView } from './MacroReviewView';
+import { FastDailyReviewCard } from './FastDailyReviewCard';
 import {
   AlignmentVerdictSelector,
   DailyEnergyReportCard,
@@ -82,7 +83,8 @@ import {
   X, 
   FilePlus,
   Compass,
-  ArrowRight
+  ArrowRight,
+  Zap
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -253,6 +255,7 @@ export const ReviewHub: React.FC = () => {
     recordProblemRecurrence,
     reviews,
     systemLevel,
+    setSystemLevel,
     saveReview,
     deleteReview,
     setActiveTab,
@@ -262,6 +265,7 @@ export const ReviewHub: React.FC = () => {
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
+  const [preferFastDailyReview, setPreferFastDailyReview] = useState(false);
   const currentDailyEntry = getEntryForDate(selectedDate);
   const currentWeeklyPlan = weeklyPlans[selectedWeekId] || weeklyPlans['week_1'] || Object.values(weeklyPlans)[0];
 
@@ -2041,8 +2045,23 @@ export const ReviewHub: React.FC = () => {
               </button>
             </div>
 
-            {/* Quick Metrics for the selected date */}
-            <div className="flex items-center space-x-2 sm:space-x-4">
+            {/* Quick Metrics + Fast/Full Review Mode Toggle */}
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              {!caps.fastReviewOnly && (
+                <button
+                  type="button"
+                  onClick={() => setPreferFastDailyReview(v => !v)}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition-all ${
+                    preferFastDailyReview
+                      ? 'bg-teal-500 text-slate-950 border-teal-400 shadow-sm'
+                      : 'bg-slate-950 hover:bg-slate-800 text-teal-300 border-teal-500/30'
+                  }`}
+                  title="Switch between 60-Second Fast Review and Full Review"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>{preferFastDailyReview ? 'Fast Review On' : 'Fast Review'}</span>
+                </button>
+              )}
               <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
                 <span className="text-slate-500">Tasks: </span>
                 <strong className="text-slate-200 font-mono">{currentDailyEntry.mainTasksCompleted}/{currentDailyEntry.mainTasksTotal}</strong>
@@ -2060,7 +2079,18 @@ export const ReviewHub: React.FC = () => {
             </div>
           </div>
 
-          {/* Fast Data I/O Bar (Copy Plan / Copy Review separately) */}
+          {caps.fastReviewOnly || preferFastDailyReview ? (
+            <FastDailyReviewCard
+              selectedDate={selectedDate}
+              entry={currentDailyEntry}
+              isLowEnergyLevel={caps.fastReviewOnly}
+              onSwitchToFullReview={
+                !caps.fastReviewOnly ? () => setPreferFastDailyReview(false) : undefined
+              }
+            />
+          ) : (
+            <>
+              {/* Fast Data I/O Bar (Copy Plan / Copy Review separately) */}
           <QuickCopyPasteBar
             currentEntry={currentDailyEntry}
             gwsSessions={gwsSessions}
@@ -2170,6 +2200,7 @@ export const ReviewHub: React.FC = () => {
                     }
                   })
                 }
+                onEnterLowEnergyMode={systemLevel > 0 ? () => setSystemLevel(0) : undefined}
               />
 
               {/* Automatic Habits / Daily Checklist Card (Single Source of Truth) */}
@@ -2640,6 +2671,8 @@ export const ReviewHub: React.FC = () => {
             </div>
 
           </div>
+            </>
+          )}
 
         </div>
       )}

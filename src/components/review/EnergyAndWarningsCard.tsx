@@ -17,13 +17,15 @@ interface DailyEnergyReportCardProps {
   entry: DailyEntry;
   dailyEntries: Record<string, DailyEntry>;
   onChangeEnergyCheck: (patch: Partial<DailyEnergyCheck>) => void;
+  onEnterLowEnergyMode?: () => void;
 }
 
 export const DailyEnergyReportCard: React.FC<DailyEnergyReportCardProps> = ({
   selectedDate,
   entry,
   dailyEntries,
-  onChangeEnergyCheck
+  onChangeEnergyCheck,
+  onEnterLowEnergyMode
 }) => {
   const ec = entry.energyCheck || {};
   const dailyEnergyAvg = computeDailyEnergyAvg(entry);
@@ -88,24 +90,40 @@ export const DailyEnergyReportCard: React.FC<DailyEnergyReportCardProps> = ({
         </div>
       </div>
 
-      {/* Diminishing Trend / Below-6 Warning */}
-      {trendWarning && (
+      {/* Diminishing Trend / Below-6 Warning + 1-Click LVL 0 Emergency Escape Hatch */}
+      {(trendWarning ||
+        (dailyEnergyAvg !== null && dailyEnergyAvg < 6) ||
+        (typeof nsScore === 'number' && nsScore > 0 && nsScore < 6)) && (
         <div
-          className={`p-3 rounded-2xl border flex items-start space-x-2.5 text-xs ${
-            trendWarning.severity === 'critical'
+          className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs ${
+            trendWarning?.severity === 'critical' ||
+            (dailyEnergyAvg !== null && dailyEnergyAvg < 6) ||
+            (typeof nsScore === 'number' && nsScore < 6)
               ? 'bg-rose-500/10 border-rose-500/35 text-rose-200'
               : 'bg-amber-500/10 border-amber-500/35 text-amber-200'
           }`}
         >
-          <AlertTriangle
-            className={`w-4 h-4 shrink-0 mt-0.5 ${
-              trendWarning.severity === 'critical' ? 'text-rose-400' : 'text-amber-400'
-            }`}
-          />
-          <div className="space-y-0.5">
-            <div className="font-extrabold">{trendWarning.headline}</div>
-            <p className="text-[11px] opacity-90 leading-snug">{trendWarning.detail}</p>
+          <div className="flex items-start space-x-2.5">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+            <div className="space-y-0.5">
+              <div className="font-extrabold">
+                {trendWarning?.headline || 'Fuel / Nervous System Below 6'}
+              </div>
+              <p className="text-[11px] opacity-90 leading-snug">
+                {trendWarning?.detail ||
+                  'Energy or nervous system dropped below 6. Downshift ambition and schedule deliberate rest instead of forcing output.'}
+              </p>
+            </div>
           </div>
+          {onEnterLowEnergyMode && (
+            <button
+              type="button"
+              onClick={onEnterLowEnergyMode}
+              className="self-end sm:self-center shrink-0 px-3 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-[11px] transition-colors"
+            >
+              Enter LVL 0 Low-Energy Mode
+            </button>
+          )}
         </div>
       )}
 

@@ -13,12 +13,13 @@ import {
   Bell,
   User,
   ArrowRight,
-  FileJson
+  FileJson,
+  BatteryLow
 } from 'lucide-react';
 import { SupabaseSyncModal } from './SupabaseSyncModal';
 import { AuthModal } from './AuthModal';
 import { AdminModal } from './AdminModal';
-import { LEVEL_META, getLevelCapabilities } from '../../lib/levelFeatures';
+import { LEVEL_META, SYSTEM_LEVELS, getLevelCapabilities } from '../../lib/levelFeatures';
 
 export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGWS }) => {
   const { 
@@ -210,37 +211,57 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
               <div className="relative hidden lg:block">
                 <button
                   onClick={() => setLevelDropdownOpen(!levelDropdownOpen)}
-                  className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold transition-all shadow-sm whitespace-nowrap"
-                  title="Switch Experience Level"
+                  className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm whitespace-nowrap ${
+                    systemLevel === 0
+                      ? 'bg-teal-500/15 hover:bg-teal-500/25 text-teal-300 border-teal-500/40'
+                      : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  }`}
+                  title="Switch Experience Level (LVL 0 = Low-Energy Emergency Mode)"
                 >
-                  <Target className="w-3.5 h-3.5 shrink-0" />
-                  <span>LVL {systemLevel}</span>
+                  {systemLevel === 0 ? (
+                    <BatteryLow className="w-3.5 h-3.5 shrink-0" />
+                  ) : (
+                    <Target className="w-3.5 h-3.5 shrink-0" />
+                  )}
+                  <span>{systemLevel === 0 ? 'LVL 0 · Low Energy' : `LVL ${systemLevel}`}</span>
                 </button>
 
                 {levelDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl p-2 shadow-2xl z-50 space-y-1">
+                  <div className="absolute right-0 mt-2 w-72 bg-slate-900 border border-slate-800 rounded-2xl p-2 shadow-2xl z-50 space-y-1">
                     <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
-                      Select App Complexity Level
+                      Select App Complexity / Fuel Level
                     </div>
-                    {([1, 2, 3, 4, 5] as const).map((lvl) => (
-                      <button
-                        key={lvl}
-                        onClick={() => {
-                          setSystemLevel(lvl);
-                          setLevelDropdownOpen(false);
-                        }}
-                        className={`w-full text-left p-2 rounded-xl text-xs transition-all flex flex-col ${
-                          systemLevel === lvl
-                            ? 'bg-amber-500 text-slate-950 font-bold'
-                            : 'text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <span className="font-extrabold">{levelDescriptions[lvl].name}</span>
-                        <span className={`text-[10px] mt-0.5 ${systemLevel === lvl ? 'text-slate-900' : 'text-slate-500'}`}>
-                          {levelDescriptions[lvl].desc}
-                        </span>
-                      </button>
-                    ))}
+                    {SYSTEM_LEVELS.map((lvl) => {
+                      const isLowEnergy = lvl === 0;
+                      const isSelected = systemLevel === lvl;
+                      return (
+                        <button
+                          key={lvl}
+                          onClick={() => {
+                            setSystemLevel(lvl);
+                            setLevelDropdownOpen(false);
+                          }}
+                          className={`w-full text-left p-2 rounded-xl text-xs transition-all flex flex-col ${
+                            isSelected
+                              ? isLowEnergy
+                                ? 'bg-teal-500 text-slate-950 font-bold'
+                                : 'bg-amber-500 text-slate-950 font-bold'
+                              : isLowEnergy
+                              ? 'bg-teal-500/5 hover:bg-teal-500/15 text-teal-200 border border-teal-500/20'
+                              : 'text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <span className="font-extrabold">{levelDescriptions[lvl].name}</span>
+                          <span
+                            className={`text-[10px] mt-0.5 ${
+                              isSelected ? 'text-slate-900' : isLowEnergy ? 'text-teal-300/75' : 'text-slate-500'
+                            }`}
+                          >
+                            {levelDescriptions[lvl].desc}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -533,7 +554,35 @@ export const Navbar: React.FC<{ onOpenQuickGWS: () => void }> = ({ onOpenQuickGW
                 </button>
               );
             })}
-            <div className="pt-2 border-t border-slate-800">
+            <div className="pt-2 border-t border-slate-800 space-y-2">
+              <div className="px-3 pt-1">
+                <div className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 mb-1.5">
+                  Level (L0 = Low Energy Mode)
+                </div>
+                <div className="grid grid-cols-6 gap-1">
+                  {SYSTEM_LEVELS.map(lvl => (
+                    <button
+                      key={lvl}
+                      type="button"
+                      onClick={() => {
+                        setSystemLevel(lvl);
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`py-1.5 rounded-lg font-mono text-xs font-bold transition-colors ${
+                        systemLevel === lvl
+                          ? lvl === 0
+                            ? 'bg-teal-500 text-slate-950'
+                            : 'bg-amber-500 text-slate-950'
+                          : lvl === 0
+                          ? 'bg-teal-500/10 text-teal-300 border border-teal-500/30'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      L{lvl}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);

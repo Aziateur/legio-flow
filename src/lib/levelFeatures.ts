@@ -15,6 +15,9 @@ export type AppReviewSubTab =
 
 export interface LevelCapabilities {
   level: SystemLevel;
+  // LVL 0 — Low-Energy / Emergency Recovery Mode
+  lowEnergyMode: boolean;
+  fastReviewOnly: boolean;
   // LVL 1 — Daily Flow
   dailyPlan: boolean;
   dailyChecklist: boolean;
@@ -48,12 +51,41 @@ export interface LevelCapabilities {
   modelAQuarterToYear: boolean;
 }
 
+export const SYSTEM_LEVELS: SystemLevel[] = [0, 1, 2, 3, 4, 5];
+
+const LAST_NORMAL_LEVEL_KEY = 'legio_last_normal_level_v1';
+
+export const rememberNormalLevel = (lvl: SystemLevel): void => {
+  if (lvl < 1) return;
+  try {
+    localStorage.setItem(LAST_NORMAL_LEVEL_KEY, String(lvl));
+  } catch {
+    // Ignore storage quota errors
+  }
+};
+
+export const getLastNormalLevel = (): Exclude<SystemLevel, 0> => {
+  try {
+    const raw = localStorage.getItem(LAST_NORMAL_LEVEL_KEY);
+    if (raw) {
+      const parsed = parseInt(raw, 10);
+      if (parsed >= 1 && parsed <= 5) return parsed as Exclude<SystemLevel, 0>;
+    }
+  } catch {
+    // Fallback
+  }
+  return 1;
+};
+
 export const getLevelCapabilities = (level: SystemLevel): LevelCapabilities => ({
   level,
-  // LVL 1
+  // LVL 0
+  lowEnergyMode: level === 0,
+  fastReviewOnly: level === 0,
+  // LVL 0+ core survival surfaces (No Allowances at LVL 0!)
   dailyPlan: true,
   dailyChecklist: true,
-  allowances: true,
+  allowances: level >= 1,
   dailyReview: true,
   // LVL 2
   gwsStudio: level >= 2,
@@ -90,10 +122,15 @@ export interface LevelMeta {
 }
 
 export const LEVEL_META: Record<SystemLevel, LevelMeta> = {
+  0: {
+    name: 'Level 0: Low-Energy / Emergency Mode',
+    shortName: 'Low-Energy Mode',
+    desc: 'Emergency recovery protocol: 1 low-ambition essential, scheduled rest blocks, no allowances & 60-sec fast review'
+  },
   1: {
     name: 'Level 1: Daily Flow',
     shortName: 'Daily Flow',
-    desc: 'Daily mission, consistency habits, allowances & daily energy/nervous system review (also great as Re-Entry / Recovery Mode)'
+    desc: 'Daily mission, consistency habits, allowances & daily energy/nervous system review'
   },
   2: {
     name: 'Level 2: Focus & Playbook',

@@ -31,7 +31,7 @@ export interface TemplateField {
   defaultValue?: any;
 }
 
-export type SystemLevel = 1 | 2 | 3 | 4 | 5;
+export type SystemLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
 export type TemplateCategory = 'daily' | 'gws' | 'weekly' | 'review' | 'custom';
 
@@ -145,6 +145,13 @@ export interface DailyEnergyCheck {
   nervousSystemNote?: string; // Optional brief note on how body/nervous system feels
 }
 
+export interface ScheduledRestBlock {
+  id: string;
+  timeWindow: string; // e.g. "14:00–14:45" or "21:30"
+  activity: string;   // e.g. "30m NSDR / Nap (no screens)"
+  completed: boolean;
+}
+
 export interface DailyEntry {
   date: string; // YYYY-MM-DD
   templateId: string;
@@ -155,6 +162,7 @@ export interface DailyEntry {
   automaticTaskList?: TaskItem[];
   planNotes: string; // e.g. Day priorities
   priorityItems?: DailyPriorityItem[];
+  restBlocks?: ScheduledRestBlock[]; // LVL 0 / recovery scheduled rest blocks
   gwsSessionIds: string[];
   problemsEncountered?: string;
   reviewNotes?: string;
