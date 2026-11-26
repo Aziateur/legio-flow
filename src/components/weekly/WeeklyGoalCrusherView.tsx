@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   useStorage,
   getCurrentWeekRange,
@@ -10,7 +10,9 @@ import {
 } from '../../context/StorageContext';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
+  MovedOrphanGoalRecord,
   STRATEGY_PRIORITY_META,
+  absorbOrphanedRoadmapGoals,
   getActiveStageForPlan,
   getCommittedGatesForQuarter,
   getWeeklyGoalsAssignedToRoadmap,
@@ -210,11 +212,77 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     return {};
   };
 
-  const handleLinkWeeklyGoalParent = (taskId: string, encodedParent: string) => {
-    const patch = decodeWeeklyParentPatch(encodedParent);
+  const repointDailyPrioritiesForMoved = (moved: MovedOrphanGoalRecord[]) => {
+    if (moved.length === 0) return;
+    const byOldId = new Map(moved.map(m => [m.oldTaskId, m]));
+    weekDaysRange.days.forEach(dStr => {
+      const entry = dailyEntries[dStr];
+      if (!entry) return;
+      const items = getPriorityItemsForEntry(entry);
+      let changed = false;
+      const nextItems = items.map(item => {
+        if (item.weeklyTaskId && !item.subTaskId && byOldId.has(item.weeklyTaskId)) {
+          const hit = byOldId.get(item.weeklyTaskId)!;
+          changed = true;
+          return { ...item, weeklyTaskId: hit.newParentId, subTaskId: hit.newSubId };
+        }
+        return item;
+      });
+      if (changed) {
+        saveDailyEntry(dStr, {
+          planNotes: formatPriorityItemsToPlanNotes(nextItems),
+          priorityItems: nextItems
+        });
+      }
+    });
+  };
+
+  // Auto-consolidate any orphaned standalone pulled proximal goals into the Weekly Goal assigned to the same Roadmap
+  useEffect(() => {
+    const { nextTasks, moved } = absorbOrphanedRoadmapGoals(plan.tasks);
+    if (moved.length === 0) return;
     saveWeeklyPlan({
       ...plan,
-      tasks: plan.tasks.map(t => (t.id === taskId ? { ...t, ...patch } : t))
+      tasks: nextTasks,
+      achievedScore: computeWeeklyAchievedScore(nextTasks)
+    });
+    repointDailyPrioritiesForMoved(moved);
+    setPulledNotice(
+      moved.length === 1
+        ? `Grouped "${moved[0].orphanText.slice(0, 26)}${moved[0].orphanText.length > 26 ? '…' : ''}" inside "${moved[0].parentText.slice(0, 26)}${moved[0].parentText.length > 26 ? '…' : ''}"`
+        : `Grouped ${moved.length} pulled roadmap goals inside their assigned weekly goals`
+    );
+    setTimeout(() => setPulledNotice(null), 2800);
+  }, [plan.id, plan.tasks]);
+
+  const handleLinkWeeklyGoalParent = (taskId: string, encodedParent: string) => {
+    const patch = decodeWeeklyParentPatch(encodedParent);
+    const patchedTasks = plan.tasks.map(t => (t.id === taskId ? { ...t, ...patch } : t));
+    if (patch.strategyPlanId && !patch.monthlyTaskId) {
+      const { nextTasks, moved } = absorbOrphanedRoadmapGoals(
+        patchedTasks,
+        patch.strategyPlanId,
+        taskId
+      );
+      saveWeeklyPlan({
+        ...plan,
+        tasks: nextTasks,
+        achievedScore: computeWeeklyAchievedScore(nextTasks)
+      });
+      if (moved.length > 0) {
+        repointDailyPrioritiesForMoved(moved);
+        setPulledNotice(
+          moved.length === 1
+            ? `Assigned Roadmap & moved "${moved[0].orphanText.slice(0, 24)}${moved[0].orphanText.length > 24 ? '…' : ''}" inside`
+            : `Assigned Roadmap & moved ${moved.length} pulled proximal goals inside`
+        );
+        setTimeout(() => setPulledNotice(null), 2800);
+      }
+      return;
+    }
+    saveWeeklyPlan({
+      ...plan,
+      tasks: patchedTasks
     });
   };
 

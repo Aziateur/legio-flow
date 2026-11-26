@@ -360,10 +360,101 @@ export const pullRoadmapItemIntoWeeklyPlan = (
     text: trimmed,
     score: 2,
     completed: Boolean(params.completed),
+    ...(params.targetWeeklyTaskId === '__new__' ? { parentLinkMode: 'mirror' } : {}),
     ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
     ...(params.strategyPlanId ? { strategyPlanId: params.strategyPlanId } : {}),
     ...(params.strategyStageId ? { strategyStageId: params.strategyStageId } : {}),
     ...(params.strategyGoalId ? { strategyGoalId: params.strategyGoalId } : {})
   };
   return { nextTasks: [...weeklyPlan.tasks, newTask], alreadyExists: false };
+};
+
+export interface MovedOrphanGoalRecord {
+  oldTaskId: string;
+  newParentId: string;
+  newSubId: string;
+  orphanText: string;
+  parentText: string;
+}
+
+// Auto-fold standalone pulled Roadmap proximal goals into an assigned Weekly Goal for the same Roadmap
+export const absorbOrphanedRoadmapGoals = (
+  tasks: TaskItem[],
+  focusPlanId?: string,
+  focusParentTaskId?: string
+): { nextTasks: TaskItem[]; moved: MovedOrphanGoalRecord[] } => {
+  const moved: MovedOrphanGoalRecord[] = [];
+  const orphanIds = new Set<string>();
+  const additionsByParent = new Map<string, SubTaskItem[]>();
+
+  tasks.forEach((orphan, idx) => {
+    if (!orphan.strategyPlanId || !orphan.strategyGoalId) return;
+    if (orphan.parentLinkMode === 'mirror') return;
+    if (orphan.subTasks && orphan.subTasks.length > 0) return;
+    if (focusPlanId && orphan.strategyPlanId !== focusPlanId) return;
+
+    let parent: TaskItem | undefined;
+    if (focusParentTaskId) {
+      const focused = tasks.find(
+        t =>
+          t.id === focusParentTaskId &&
+          t.id !== orphan.id &&
+          t.strategyPlanId === orphan.strategyPlanId &&
+          !t.strategyGoalId
+      );
+      parent = focused;
+    }
+    if (!parent) {
+      parent = getWeeklyGoalsAssignedToRoadmap(
+        { tasks } as WeeklyPlan,
+        orphan.strategyPlanId,
+        orphan.strategyStageId
+      ).find(t => t.id !== orphan.id);
+    }
+    if (!parent) return;
+
+    const newSub: SubTaskItem = {
+      id: `sub_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      text: orphan.text.trim(),
+      completed: orphan.completed,
+      strategyPlanId: orphan.strategyPlanId,
+      ...(orphan.strategyStageId ? { strategyStageId: orphan.strategyStageId } : {}),
+      strategyGoalId: orphan.strategyGoalId
+    };
+    orphanIds.add(orphan.id);
+    const list = additionsByParent.get(parent.id) || [];
+    list.push(newSub);
+    additionsByParent.set(parent.id, list);
+    moved.push({
+      oldTaskId: orphan.id,
+      newParentId: parent.id,
+      newSubId: newSub.id,
+      orphanText: orphan.text.trim(),
+      parentText: parent.text.trim()
+    });
+  });
+
+  if (moved.length === 0) {
+    return { nextTasks: tasks, moved };
+  }
+
+  const nextTasks = tasks
+    .filter(t => !orphanIds.has(t.id))
+    .map(t => {
+      const added = additionsByParent.get(t.id);
+      if (!added || added.length === 0) return t;
+      const existingSubs = t.subTasks || [];
+      const existingGoalIds = new Set(existingSubs.map(s => s.strategyGoalId).filter(Boolean));
+      const dedupedAdded = added.filter(
+        s => !s.strategyGoalId || !existingGoalIds.has(s.strategyGoalId)
+      );
+      const updatedSubs = [...existingSubs, ...dedupedAdded];
+      return {
+        ...t,
+        subTasks: updatedSubs,
+        completed: updatedSubs.length > 0 ? updatedSubs.every(s => s.completed) : t.completed
+      };
+    });
+
+  return { nextTasks, moved };
 };
