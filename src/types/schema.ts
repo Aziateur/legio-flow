@@ -503,7 +503,7 @@ export interface ProblemSettings {
   separateInboxTab?: boolean;      // Default true
 }
 
-export type ProblemCheckInOutcome = 'effective' | 'not_triggered' | 'failed';
+export type ProblemCheckInOutcome = 'effective' | 'not_triggered' | 'tweaked' | 'failed';
 
 export interface ProblemCheckIn {
   date: string; // YYYY-MM-DD
@@ -532,7 +532,7 @@ export interface ProblemEntry {
   tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];
-  checkIns?: ProblemCheckIn[]; // Dated 3-way review check-ins ('effective' | 'not_triggered' | 'failed')
+  checkIns?: ProblemCheckIn[]; // Dated 4-way review check-ins ('effective' | 'not_triggered' | 'tweaked' | 'failed')
   heldDates?: string[]; // YYYY-MM-DD dates when active solution/reminder held (without closing prematurely)
   lastHeldDate?: string; // Latest YYYY-MM-DD when user confirmed it held
   fixType?: ProblemFixType;

@@ -31,7 +31,7 @@ export const ProblemPulseBar: React.FC<ProblemPulseBarProps> = ({
     <div className="flex flex-wrap items-center gap-2">
       <div
         className="inline-flex items-center gap-[3px]"
-        title="Last 14 days (oldest → today): orange = fired, green = effective/held, gray = nothing happened, dark = quiet"
+        title="Last 14 days (oldest → today): orange = fired, green = effective/held, purple = tweak noted, gray = nothing happened, dark = quiet"
       >
         {pulse.days.map(day => {
           const dotCls =
@@ -39,6 +39,8 @@ export const ProblemPulseBar: React.FC<ProblemPulseBarProps> = ({
               ? sev >= 4
                 ? 'bg-orange-400 ring-1 ring-rose-500/70'
                 : 'bg-orange-400'
+              : day.state === 'tweaked'
+              ? 'bg-violet-400'
               : day.state === 'effective'
               ? 'bg-emerald-400'
               : day.state === 'not_triggered'
@@ -47,6 +49,8 @@ export const ProblemPulseBar: React.FC<ProblemPulseBarProps> = ({
           const stateText =
             day.state === 'hit'
               ? 'Fired'
+              : day.state === 'tweaked'
+              ? 'Tweak / improvement noted'
               : day.state === 'effective'
               ? 'Fix effective / held'
               : day.state === 'not_triggered'

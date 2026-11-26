@@ -11,6 +11,7 @@ import {
   getProblemActionText,
   getProblemReminderText,
   getProblemSeverity,
+  getSolutionTestingSummary,
   hasActiveAction,
   hasActiveReminder,
   isProblemClassified,
@@ -24,7 +25,6 @@ import { useStorage } from '../../context/StorageContext';
 import { ProblemPulseBar } from './ProblemPulseBar';
 import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
-  AlertTriangle,
   ArrowRight,
   Bell,
   CheckCircle2,
@@ -138,7 +138,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => problems.filter(p => p.isTopConstraint && p.status !== 'solved').length,
     [problems]
   );
-  const justFailedFix = Boolean(problem.lastFixFailedAt && problem.status === 'open');
+  const testingSummary = getSolutionTestingSummary(problem);
 
   const openWorkbench = (tab?: WorkbenchTab) => {
     const resolvedTab: WorkbenchTab =
@@ -370,10 +370,16 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   {lastDate.slice(5)}
                 </span>
 
-                {justFailedFix && (
-                  <span className="inline-flex items-center space-x-1 text-rose-300 font-bold text-[10px]">
-                    <AlertTriangle className="w-3 h-3" />
-                    <span>Slipped — rethink solution</span>
+                {testingSummary.hasSolution && problem.status !== 'solved' && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md border text-[10px] font-bold ${testingSummary.badgeClass}`}
+                  >
+                    {testingSummary.label}
+                    {verification.readyToVerify &&
+                    testingSummary.effectiveCount > 0 &&
+                    testingSummary.state !== 'failed'
+                      ? ' · Ready to resolve'
+                      : ''}
                   </span>
                 )}
 
@@ -381,14 +387,6 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   <span className="inline-flex items-center space-x-1 text-emerald-300 font-bold text-[10px]">
                     <CheckCircle2 className="w-3 h-3" />
                     <span>Task done ({problem.fixTaskCompletedAt.slice(5)})</span>
-                  </span>
-                )}
-
-                {verification.isTesting && problem.status !== 'solved' && (
-                  <span className="font-mono text-[10px] text-sky-300 font-semibold">
-                    {verification.readyToVerify
-                      ? `✓ ${verification.daysClean}d clean — ready to resolve`
-                      : `${verification.daysClean}/${verification.targetDays}d clean`}
                   </span>
                 )}
 

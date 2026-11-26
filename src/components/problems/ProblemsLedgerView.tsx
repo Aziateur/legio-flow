@@ -17,6 +17,7 @@ import {
   getProblemActionText,
   getProblemReminderText,
   getProblemSeverity,
+  getSolutionTestingSummary,
   hasActiveAction,
   hasActiveReminder,
   hasExistingParent,
@@ -655,7 +656,7 @@ export const ProblemsLedgerView: React.FC = () => {
             const cat = resolveCategoryMeta(prob.category, problemCategories);
             const hits = getClusterTotalHits(problems, prob);
             const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
-            const failed = Boolean(prob.lastFixFailedAt && prob.status === 'open');
+            const testing = getSolutionTestingSummary(prob);
             const reminderText = getProblemReminderText(prob);
             const actionText = getProblemActionText(prob);
             const remActive = hasActiveReminder(prob);
@@ -833,10 +834,18 @@ export const ProblemsLedgerView: React.FC = () => {
 
                 {/* Progress / Alerts + Plain Actions */}
                 <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                  {failed && (
-                    <div className="text-[10px] font-bold text-rose-300 flex items-center space-x-1">
-                      <AlertTriangle className="w-3 h-3 shrink-0" />
-                      <span>Slipped on {prob.lastFixFailedAt?.slice(5)} — open to adjust</span>
+                  {testing.hasSolution && (
+                    <div className="space-y-1">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-bold ${testing.badgeClass}`}
+                      >
+                        {testing.label}
+                      </span>
+                      {testing.latestTweak && (
+                        <div className="text-[10px] text-violet-300 truncate">
+                          Tweak: &ldquo;{testing.latestTweak.note}&rdquo;
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -847,11 +856,11 @@ export const ProblemsLedgerView: React.FC = () => {
                     </div>
                   )}
 
-                  {ver.isTesting && (
+                  {ver.isTesting && testing.effectiveCount > 0 && testing.state !== 'failed' && (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[10px] font-mono">
                         <span className={ver.readyToVerify ? 'text-emerald-300 font-bold' : 'text-sky-300'}>
-                          {ver.readyToVerify ? '✓ Ready to resolve' : `${ver.daysClean}/${ver.targetDays}d clean`}
+                          {ver.readyToVerify ? '✓ Ready to resolve' : `${ver.daysClean}/${ver.targetDays}d window`}
                         </span>
                         <span className="text-slate-500">{ver.pct}%</span>
                       </div>
@@ -906,7 +915,7 @@ export const ProblemsLedgerView: React.FC = () => {
                         Open
                       </button>
 
-                      {ver.readyToVerify && (
+                      {ver.readyToVerify && testing.effectiveCount > 0 && testing.state !== 'failed' && (
                         <button
                           type="button"
                           onClick={() => updateProblem(prob.id, { status: 'solved', classified: true })}

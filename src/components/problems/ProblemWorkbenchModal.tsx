@@ -20,6 +20,7 @@ import {
   getProblemCheckInForDate,
   getProblemReminderText,
   getProblemSeverity,
+  getSolutionTestingSummary,
   hasActiveAction,
   hasActiveReminder,
   isProblemClassified,
@@ -54,6 +55,7 @@ import {
   Map as MapIcon,
   MessageSquarePlus,
   Minus,
+  Pencil,
   Plus,
   RotateCcw,
   Send,
@@ -134,6 +136,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
   const [reminderDraft, setReminderDraft] = useState(problem ? getProblemReminderText(problem) : '');
   const [actionDraft, setActionDraft] = useState(problem ? getProblemActionText(problem) : '');
   const [clueDraft, setClueDraft] = useState('');
+  const [tweakOpen, setTweakOpen] = useState(false);
+  const [tweakDraft, setTweakDraft] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [newParentTitle, setNewParentTitle] = useState('');
   const [severityPickerOpen, setSeverityPickerOpen] = useState(false);
@@ -151,6 +155,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     setReminderDraft(getProblemReminderText(problem));
     setActionDraft(getProblemActionText(problem));
     setSeverityPickerOpen(false);
+    setTweakOpen(false);
+    setTweakDraft('');
   }, [problem?.id]);
 
   useEffect(() => {
@@ -182,6 +188,7 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
   const reminderActive = hasActiveReminder(problem);
   const actionActive = hasActiveAction(problem);
   const verification = getFixVerificationProgress(problem, todayDate, defaultVerifyDays);
+  const testingSummary = getSolutionTestingSummary(problem);
   const timeline = getClusterOccurrenceTimeline(problems, problem);
   const directChildren = getDirectChildren(problems, problem.id);
   const parentProblem = problem.parentProblemId
@@ -705,10 +712,16 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                   </span>
                 )}
 
-                {problem.status === 'solved' && (
+                {problem.status === 'solved' ? (
                   <span className="px-2 py-0.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 font-bold">
                     Resolved
                   </span>
+                ) : (
+                  testingSummary.hasSolution && (
+                    <span className={`px-2 py-0.5 rounded-full border font-bold ${testingSummary.badgeClass}`}>
+                      {testingSummary.label}
+                    </span>
+                  )
                 )}
               </div>
 
@@ -1077,37 +1090,44 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                       );
                     })}
                   </div>
+                </div>
 
-                  {(reminderActive || actionActive) && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/70 text-xs">
-                      <div className="flex items-center space-x-1.5">
-                        <span className="text-[11px] text-slate-400">Clean goal:</span>
-                        {VERIFY_DAY_OPTIONS.map(days => {
-                          const active = (problem.verifyDays || defaultVerifyDays) === days;
-                          return (
-                            <button
-                              key={days}
-                              type="button"
-                              onClick={() => updateProblem(problem.id, { verifyDays: days })}
-                              className={`px-2 py-0.5 rounded-lg font-mono text-[10px] font-bold border ${
-                                active
-                                  ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
-                                  : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
-                              }`}
-                            >
-                              {days}d
-                            </button>
-                          );
-                        })}
-                      </div>
+                {(reminderActive || actionActive) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-slate-950/75 border border-slate-800 text-xs">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-[11px] text-slate-400">Clean goal:</span>
+                      {VERIFY_DAY_OPTIONS.map(days => {
+                        const active = (problem.verifyDays || defaultVerifyDays) === days;
+                        return (
+                          <button
+                            key={days}
+                            type="button"
+                            onClick={() => updateProblem(problem.id, { verifyDays: days })}
+                            className={`px-2 py-0.5 rounded-lg font-mono text-[10px] font-bold border ${
+                              active
+                                ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
+                            }`}
+                          >
+                            {days}d
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {testingSummary.hasSolution && (
+                        <span className={`px-2 py-0.5 rounded-lg border text-[11px] font-bold ${testingSummary.badgeClass}`}>
+                          {testingSummary.label}
+                        </span>
+                      )}
                       {verification.isTesting && (
-                        <span className="font-mono text-[11px] font-bold text-sky-300">
-                          {verification.daysClean}/{verification.targetDays}d since fix started
+                        <span className="font-mono text-[10px] text-slate-500">
+                          started {verification.daysClean}/{verification.targetDays}d
                         </span>
                       )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
 
               {/* SECTION 2: CLUES & EVIDENCE (Always visible right below while designing solutions!) */}
@@ -1172,6 +1192,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                       className={`flex items-start gap-2.5 p-2.5 rounded-xl border text-xs ${
                         entry.kind === 'effective'
                           ? 'bg-emerald-500/5 border-emerald-500/25'
+                          : entry.kind === 'tweaked'
+                          ? 'bg-violet-500/5 border-violet-500/25'
                           : entry.kind === 'not_triggered'
                           ? 'bg-slate-900/60 border-slate-800/80'
                           : 'bg-slate-900/90 border-slate-800'
@@ -1184,15 +1206,19 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                         className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
                           entry.kind === 'effective'
                             ? 'bg-emerald-500/15 text-emerald-300'
+                            : entry.kind === 'tweaked'
+                            ? 'bg-violet-500/15 text-violet-300'
                             : entry.kind === 'not_triggered'
                             ? 'bg-slate-800 text-slate-400'
                             : 'bg-orange-500/10 text-orange-300'
                         }`}
                       >
                         {entry.kind === 'effective'
-                          ? 'Fix effective'
+                          ? 'Fix worked'
+                          : entry.kind === 'tweaked'
+                          ? 'Tweak / Improve'
                           : entry.kind === 'not_triggered'
-                          ? 'Nothing happened'
+                          ? "Didn't come up"
                           : entry.sourceLabel}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -1207,6 +1233,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                           <p className="text-slate-500 italic">
                             {entry.kind === 'effective'
                               ? 'Confirmed fix held during review'
+                              : entry.kind === 'tweaked'
+                              ? 'Noted an improvement to test'
                               : entry.kind === 'not_triggered'
                               ? 'Situation did not come up'
                               : 'Logged occurrence'}
@@ -1283,132 +1311,299 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
           )}
         </div>
 
-        {/* STICKY FOOTER: 3-WAY CHECK-IN FOR CONTEXT DATE + LIFECYCLE */}
-        <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-950/75 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {problem.status !== 'solved' ? (
-              <>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
-                  {contextDate.slice(5)}:
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    recordProblemCheckIn(problem.id, 'effective', {
-                      date: contextDate,
-                      sourceType: contextSourceType,
-                      sourceRef: contextSourceRef
-                    });
-                    showToast('Marked Effective for ' + contextDate.slice(5));
-                  }}
-                  className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                    checkInVerdict === 'effective'
-                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                      : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800'
-                  }`}
-                >
-                  <Check className="w-3 h-3" />
-                  <span>Effective</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    recordProblemCheckIn(problem.id, 'not_triggered', {
-                      date: contextDate,
-                      sourceType: contextSourceType,
-                      sourceRef: contextSourceRef
-                    });
-                    showToast('Logged Nothing happened on ' + contextDate.slice(5));
-                  }}
-                  className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                    checkInVerdict === 'not_triggered'
-                      ? 'bg-slate-200 text-slate-950 border-slate-100'
-                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
-                  }`}
-                >
-                  <Minus className="w-3 h-3" />
-                  <span>Nothing happened</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    recordProblemCheckIn(problem.id, 'failed', {
+        {/* STICKY FOOTER: INLINE TWEAK INPUT + 4-WAY CHECK-IN FOR CONTEXT DATE + LIFECYCLE */}
+        <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-950/75 space-y-2.5 shrink-0">
+          {tweakOpen && problem.status !== 'solved' && (
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 p-2.5 rounded-xl bg-violet-500/10 border border-violet-500/35">
+              <input
+                type="text"
+                autoFocus
+                value={tweakDraft}
+                onChange={e => setTweakDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const trimmed = tweakDraft.trim();
+                    recordProblemCheckIn(problem.id, 'tweaked', {
                       date: contextDate,
                       sourceType: contextSourceType,
                       sourceRef: contextSourceRef,
-                      note: clueDraft.trim() || undefined
+                      ...(trimmed ? { note: trimmed } : {})
                     });
-                    setClueDraft('');
-                    showToast("Logged Didn't work on " + contextDate.slice(5));
-                  }}
-                  className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                    checkInVerdict === 'failed'
-                      ? 'bg-rose-500 text-slate-950 border-rose-400'
-                      : 'bg-slate-900 hover:bg-rose-500/15 text-rose-300 border-slate-800'
-                  }`}
-                >
-                  <X className="w-3 h-3" />
-                  <span>Didn&apos;t work</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateProblem(problem.id, { status: 'solved', classified: true });
-                    onClose();
-                  }}
-                  className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 text-xs font-extrabold ml-1"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Mark Resolved</span>
-                </button>
-              </>
-            ) : (
+                    setTweakOpen(false);
+                    setTweakDraft('');
+                    showToast('Saved tweak for ' + contextDate.slice(5));
+                  }
+                  if (e.key === 'Escape') {
+                    setTweakOpen(false);
+                    setTweakDraft('');
+                  }
+                }}
+                placeholder="What tweak would make this solution work better? (Enter to save)..."
+                className="flex-1 min-w-[180px] bg-slate-950 border border-violet-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+              />
               <button
                 type="button"
                 onClick={() => {
-                  updateProblem(problem.id, { status: 'open' });
-                  showToast('Reopened problem');
+                  const trimmed = tweakDraft.trim();
+                  recordProblemCheckIn(problem.id, 'tweaked', {
+                    date: contextDate,
+                    sourceType: contextSourceType,
+                    sourceRef: contextSourceRef,
+                    ...(trimmed ? { note: trimmed } : {})
+                  });
+                  setTweakOpen(false);
+                  setTweakDraft('');
+                  showToast('Saved tweak for ' + contextDate.slice(5));
                 }}
-                className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold"
+                className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-extrabold text-xs shrink-0"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reopen Problem</span>
+                Save tweak
               </button>
-            )}
-          </div>
+              <button
+                type="button"
+                disabled={!tweakDraft.trim()}
+                onClick={() => {
+                  const trimmed = tweakDraft.trim();
+                  if (!trimmed) return;
+                  recordProblemCheckIn(problem.id, 'tweaked', {
+                    date: contextDate,
+                    sourceType: contextSourceType,
+                    sourceRef: contextSourceRef,
+                    note: trimmed
+                  });
+                  const curRem = getProblemReminderText(problem);
+                  const curAct = getProblemActionText(problem);
+                  const patch: Record<string, unknown> = {};
+                  if (reminderActive && curRem) {
+                    const updatedRem = `${curRem} — ${trimmed}`;
+                    patch.isGuardrail = true;
+                    patch.reminderText = updatedRem;
+                    setReminderDraft(updatedRem);
+                  } else if (actionActive && curAct) {
+                    const updatedAct = `${curAct} — ${trimmed}`;
+                    patch.fixNote = updatedAct;
+                    setActionDraft(updatedAct);
+                  } else if (curRem) {
+                    const updatedRem = `${curRem} — ${trimmed}`;
+                    patch.isGuardrail = true;
+                    patch.reminderText = updatedRem;
+                    setReminderDraft(updatedRem);
+                  } else {
+                    patch.fixNote = trimmed;
+                    setActionDraft(trimmed);
+                  }
+                  if (problem.status === 'open') {
+                    patch.status = 'testing';
+                    patch.fixStartedAt = todayDate;
+                  }
+                  updateProblem(problem.id, patch);
+                  setTweakOpen(false);
+                  setTweakDraft('');
+                  showToast('Saved tweak & updated active solution');
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-200 border border-amber-500/40 font-extrabold text-xs shrink-0"
+              >
+                Save &amp; update fix
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTweakOpen(false);
+                  setTweakDraft('');
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
-          <div>
-            {confirmDelete ? (
-              <div className="inline-flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {problem.status !== 'solved' ? (
+                <>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                    {contextDate.slice(5)}:
+                  </span>
+                  {testingSummary.hasSolution ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordProblemCheckIn(problem.id, 'effective', {
+                            date: contextDate,
+                            sourceType: contextSourceType,
+                            sourceRef: contextSourceRef
+                          });
+                          showToast('Marked Worked for ' + contextDate.slice(5));
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
+                          checkInVerdict === 'effective'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                            : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800'
+                        }`}
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>Worked</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordProblemCheckIn(problem.id, 'not_triggered', {
+                            date: contextDate,
+                            sourceType: contextSourceType,
+                            sourceRef: contextSourceRef
+                          });
+                          showToast("Logged Didn't come up on " + contextDate.slice(5));
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
+                          checkInVerdict === 'not_triggered'
+                            ? 'bg-slate-200 text-slate-950 border-slate-100'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        <Minus className="w-3 h-3" />
+                        <span>Didn&apos;t come up</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTweakOpen(v => !v);
+                          setTweakDraft('');
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
+                          checkInVerdict === 'tweaked' || tweakOpen
+                            ? 'bg-violet-500 text-slate-950 border-violet-400'
+                            : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
+                        }`}
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>Tweak</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordProblemCheckIn(problem.id, 'failed', {
+                            date: contextDate,
+                            sourceType: contextSourceType,
+                            sourceRef: contextSourceRef,
+                            note: clueDraft.trim() || undefined
+                          });
+                          setClueDraft('');
+                          showToast('Logged Failed on ' + contextDate.slice(5));
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
+                          checkInVerdict === 'failed'
+                            ? 'bg-rose-500 text-slate-950 border-rose-400'
+                            : 'bg-slate-900 hover:bg-rose-500/15 text-rose-300 border-slate-800'
+                        }`}
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Failed</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordProblemCheckIn(problem.id, 'not_triggered', {
+                            date: contextDate,
+                            sourceType: contextSourceType,
+                            sourceRef: contextSourceRef
+                          });
+                          showToast("Logged Didn't come up on " + contextDate.slice(5));
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
+                          checkInVerdict === 'not_triggered'
+                            ? 'bg-slate-200 text-slate-950 border-slate-100'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        <Minus className="w-3 h-3" />
+                        <span>Didn&apos;t come up</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = clueDraft.trim();
+                          recordProblemRecurrence(problem.id, {
+                            date: contextDate,
+                            sourceType: contextSourceType,
+                            ...(contextSourceRef ? { sourceRef: contextSourceRef } : {}),
+                            ...(trimmed ? { note: trimmed } : {})
+                          });
+                          setClueDraft('');
+                          showToast('Logged occurrence on ' + contextDate.slice(5));
+                        }}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 transition-colors"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Happened again</span>
+                      </button>
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateProblem(problem.id, { status: 'solved', classified: true });
+                      onClose();
+                    }}
+                    className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 text-xs font-extrabold ml-1"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Mark Resolved</span>
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
                   onClick={() => {
-                    deleteProblem(problem.id);
-                    onClose();
+                    updateProblem(problem.id, { status: 'open' });
+                    showToast('Reopened problem');
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-xs font-extrabold"
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold"
                 >
-                  Confirm Delete
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reopen Problem</span>
                 </button>
+              )}
+            </div>
+
+            <div>
+              {confirmDelete ? (
+                <div className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      deleteProblem(problem.id);
+                      onClose();
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-xs font-extrabold"
+                  >
+                    Confirm Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+                  onClick={() => setConfirmDelete(true)}
+                  className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                 >
-                  Cancel
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
                 </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>

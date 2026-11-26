@@ -797,7 +797,7 @@ export const missCauseToProblemCategory = (cause?: OutcomeRootCause): ProblemCat
   return 'mindset';
 };
 
-export type PulseDayState = 'hit' | 'effective' | 'not_triggered' | 'quiet';
+export type PulseDayState = 'hit' | 'effective' | 'tweaked' | 'not_triggered' | 'quiet';
 
 export interface ProblemPulseDay {
   date: string;
@@ -813,6 +813,141 @@ export interface ProblemPulseSummary {
   trend: 'hot' | 'active' | 'cooling' | 'quiet';
   trendLabel: string;
 }
+
+export type SolutionTestingState = 'none' | 'untested' | 'holding' | 'tweaked' | 'failed';
+
+export interface SolutionTestingSummary {
+  hasSolution: boolean;
+  state: SolutionTestingState;
+  effectiveCount: number;
+  tweakCount: number;
+  notTriggeredCount: number;
+  failedCount: number;
+  latestTweak?: { date: string; note: string };
+  label: string;
+  shortLabel: string;
+  badgeClass: string;
+}
+
+export const getSolutionTestingSummary = (
+  problem: ProblemEntry
+): SolutionTestingSummary => {
+  const hasSolution =
+    hasActiveReminder(problem) || hasActiveAction(problem) || problem.status === 'testing';
+  if (problem.status === 'solved' || !hasSolution) {
+    return {
+      hasSolution: false,
+      state: 'none',
+      effectiveCount: 0,
+      tweakCount: 0,
+      notTriggeredCount: 0,
+      failedCount: 0,
+      label: '',
+      shortLabel: '',
+      badgeClass: ''
+    };
+  }
+
+  const sinceDate = (problem.fixStartedAt || problem.createdAt || '').slice(0, 10);
+  const byDate = new Map<string, ProblemCheckInOutcome>();
+
+  (problem.heldDates || []).forEach(d => {
+    const clean = (d || '').slice(0, 10);
+    if (clean && (!sinceDate || clean >= sinceDate)) {
+      byDate.set(clean, 'effective');
+    }
+  });
+
+  let latestTweak: { date: string; note: string } | undefined;
+  (problem.checkIns || []).forEach(c => {
+    const clean = (c.date || '').slice(0, 10);
+    if (clean && (!sinceDate || clean >= sinceDate)) {
+      byDate.set(clean, c.outcome);
+      if (c.outcome === 'tweaked' && c.note?.trim()) {
+        if (!latestTweak || clean >= latestTweak.date) {
+          latestTweak = { date: clean, note: c.note.trim() };
+        }
+      }
+    }
+  });
+
+  let effectiveCount = 0;
+  let tweakCount = 0;
+  let notTriggeredCount = 0;
+  let failedCount = 0;
+  byDate.forEach(outcome => {
+    if (outcome === 'effective') effectiveCount += 1;
+    else if (outcome === 'tweaked') tweakCount += 1;
+    else if (outcome === 'not_triggered') notTriggeredCount += 1;
+    else if (outcome === 'failed') failedCount += 1;
+  });
+
+  if (Boolean(problem.lastFixFailedAt && problem.status === 'open')) {
+    return {
+      hasSolution: true,
+      state: 'failed',
+      effectiveCount,
+      tweakCount,
+      notTriggeredCount,
+      failedCount,
+      ...(latestTweak ? { latestTweak } : {}),
+      label: `Failed (${problem.lastFixFailedAt!.slice(5)}) · Needs rethink`,
+      shortLabel: 'Failed · Rethink',
+      badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/35'
+    };
+  }
+
+  if (effectiveCount === 0 && tweakCount === 0) {
+    return {
+      hasSolution: true,
+      state: 'untested',
+      effectiveCount,
+      tweakCount,
+      notTriggeredCount,
+      failedCount,
+      label:
+        notTriggeredCount > 0
+          ? `Not tested yet · ${notTriggeredCount}d didn't come up`
+          : 'Testing · Not enough data yet',
+      shortLabel: 'Not tested yet',
+      badgeClass: 'bg-slate-800/90 text-slate-300 border-slate-700'
+    };
+  }
+
+  if (tweakCount > 0) {
+    const tweakWord = tweakCount === 1 ? 'tweak' : 'tweaks';
+    return {
+      hasSolution: true,
+      state: 'tweaked',
+      effectiveCount,
+      tweakCount,
+      notTriggeredCount,
+      failedCount,
+      ...(latestTweak ? { latestTweak } : {}),
+      label:
+        effectiveCount > 0
+          ? `Testing · Worked ${effectiveCount}× · ${tweakCount} ${tweakWord}`
+          : `Testing · ${tweakCount} ${tweakWord} to improve`,
+      shortLabel:
+        effectiveCount > 0
+          ? `Worked ${effectiveCount}× · ${tweakCount} ${tweakWord}`
+          : `${tweakCount} ${tweakWord}`,
+      badgeClass: 'bg-violet-500/15 text-violet-300 border-violet-500/35'
+    };
+  }
+
+  return {
+    hasSolution: true,
+    state: 'holding',
+    effectiveCount,
+    tweakCount,
+    notTriggeredCount,
+    failedCount,
+    label: `Testing · Worked ${effectiveCount}×${notTriggeredCount > 0 ? ` (${notTriggeredCount} quiet)` : ''}`,
+    shortLabel: `Worked ${effectiveCount}×`,
+    badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+  };
+};
 
 const shiftIsoDate = (dateStr: string, deltaDays: number): string => {
   const d = new Date(`${dateStr.slice(0, 10)}T12:00:00Z`);
@@ -841,10 +976,12 @@ export const getProblemPulse = (
   });
 
   const effectiveDates = new Set<string>(problem.heldDates || []);
+  const tweakedDates = new Set<string>();
   const notTriggeredDates = new Set<string>();
   const failedCheckInDates = new Set<string>();
   (problem.checkIns || []).forEach(c => {
     if (c.outcome === 'effective') effectiveDates.add(c.date);
+    else if (c.outcome === 'tweaked') tweakedDates.add(c.date);
     else if (c.outcome === 'not_triggered') notTriggeredDates.add(c.date);
     else if (c.outcome === 'failed') failedCheckInDates.add(c.date);
   });
@@ -858,8 +995,9 @@ export const getProblemPulse = (
     const dStr = shiftIsoDate(todayDate, offset);
     const count = hitDateCounts.get(dStr) || 0;
     const isHit = count > 0 || failedCheckInDates.has(dStr);
-    const isEffective = !isHit && effectiveDates.has(dStr);
-    const isNotTriggered = !isHit && !isEffective && notTriggeredDates.has(dStr);
+    const isTweaked = !isHit && tweakedDates.has(dStr);
+    const isEffective = !isHit && !isTweaked && effectiveDates.has(dStr);
+    const isNotTriggered = !isHit && !isTweaked && !isEffective && notTriggeredDates.has(dStr);
 
     if (isHit) {
       const addCount = Math.max(1, count);
@@ -873,6 +1011,8 @@ export const getProblemPulse = (
       date: dStr,
       state: isHit
         ? 'hit'
+        : isTweaked
+        ? 'tweaked'
         : isEffective
         ? 'effective'
         : isNotTriggered

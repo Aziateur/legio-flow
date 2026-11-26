@@ -3646,11 +3646,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (!merged.solvedAt) merged.solvedAt = nowIso;
           merged.isTopConstraint = false;
           delete merged.lastFixFailedAt;
-          if (merged.fixNote?.trim() && p.status !== 'solved') {
+          if ((merged.fixNote?.trim() || merged.reminderText?.trim()) && p.status !== 'solved') {
             const startedAt = (merged.fixStartedAt || p.updatedAt || p.createdAt || todayStr).slice(0, 10);
             const verifiedAttempt: ProblemFixAttempt = {
               id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-              fixText: merged.fixNote.trim(),
+              fixText: merged.fixNote?.trim() || merged.reminderText?.trim() || 'Previous fix',
               startedAt,
               endedAt: todayStr,
               outcome: 'verified',
@@ -3690,7 +3690,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || occDate).slice(0, 10);
       const failedAttempt: ProblemFixAttempt = {
         id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        fixText: p.fixNote?.trim() || 'Previous fix',
+        fixText: p.fixNote?.trim() || p.reminderText?.trim() || 'Previous fix',
         startedAt,
         endedAt: occDate,
         outcome: 'failed',
@@ -3743,9 +3743,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
-  // 3-way Daily / Weekly Review Check-In:
+  // 4-way Daily / Weekly Review Check-In:
   // 'effective'     -> logs a held day (never prematurely closes as Solved)
-  // 'not_triggered' -> marks nothing happened cleanly
+  // 'not_triggered' -> marks nothing happened cleanly (neutral; doesn't prove fix works)
+  // 'tweaked'       -> logs an improvement note without failing or resetting the active experiment
   // 'failed'        -> logs recurrence + optional clue note + re-opens Testing fixes (avoids duplicate same-day occurrence spam if toggled)
   const recordProblemCheckIn: StorageContextType['recordProblemCheckIn'] = (id, outcome, options) => {
     const nowIso = new Date().toISOString();
@@ -3761,7 +3762,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || checkDate).slice(0, 10);
       const failedAttempt: ProblemFixAttempt = {
         id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        fixText: p.fixNote?.trim() || 'Previous fix',
+        fixText: p.fixNote?.trim() || p.reminderText?.trim() || 'Previous fix',
         startedAt,
         endedAt: checkDate,
         outcome: 'failed',
@@ -3834,6 +3835,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           };
           delete updated.solvedAt;
           updated = handleFailureIfTesting(updated, note);
+          const hasActiveSolution = Boolean(
+            updated.reminderText?.trim() ||
+              updated.isGuardrail ||
+              updated.fixType === 'rule_guardrail' ||
+              updated.fixNote?.trim() ||
+              (updated.dispatchedTo && updated.dispatchedTo.length > 0)
+          );
+          if (hasActiveSolution) {
+            updated.lastFixFailedAt = checkDate;
+          }
         }
 
         return updated;

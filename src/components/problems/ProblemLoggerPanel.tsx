@@ -14,11 +14,11 @@ import {
   countClusterOccurrencesInRange,
   getClusterOccurrenceTimeline,
   getClusterTotalHits,
-  getFixVerificationProgress,
   getLastOccurrenceDate,
   getProblemActionText,
   getProblemCheckInForDate,
   getProblemReminderText,
+  getSolutionTestingSummary,
   hasActiveAction,
   hasActiveReminder,
   hasExistingParent,
@@ -48,6 +48,7 @@ import {
   Eye,
   MessageSquarePlus,
   Minus,
+  Pencil,
   Plus,
   Trash2,
   Wrench,
@@ -102,7 +103,6 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     todayDate,
     problems,
     problemCategories,
-    problemSettings,
     weeklyPlans,
     checklistItems,
     selectedWeekId,
@@ -118,7 +118,6 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const caps = getLevelCapabilities(systemLevel);
   const fullEngine = caps.problemsConstraintEngine;
 
-  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
   const isMacroReview =
     mode === 'review' &&
     (sourceType === 'monthly' || sourceType === 'quarterly' || sourceType === 'yearly');
@@ -131,10 +130,10 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [showAllMacroSlips, setShowAllMacroSlips] = useState(false);
 
-  // Per-problem note-on-hit / clue prompt
+  // Per-problem note-on-hit / clue / tweak prompt
   const [notePromptTarget, setNotePromptTarget] = useState<{
     problem: ProblemEntry;
-    kind: 'recur' | 'failed_checkin' | 'clue';
+    kind: 'recur' | 'failed_checkin' | 'clue' | 'tweak';
   } | null>(null);
   const [notePromptDraft, setNotePromptDraft] = useState('');
   const [workbenchState, setWorkbenchState] = useState<{
@@ -317,22 +316,51 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     });
   };
 
-  const commitPromptedNote = (note?: string) => {
+  const commitPromptedNote = (note?: string, applyToFix = false) => {
     if (!notePromptTarget) return;
     const { problem: target, kind } = notePromptTarget;
-    if (kind === 'failed_checkin') {
+    const trimmed = note?.trim();
+    if (kind === 'tweak') {
+      recordProblemCheckIn(target.id, 'tweaked', {
+        date,
+        sourceType,
+        ...(sourceRef ? { sourceRef } : {}),
+        ...(trimmed ? { note: trimmed } : {})
+      });
+      if (applyToFix && trimmed) {
+        const curRem = getProblemReminderText(target);
+        const curAct = getProblemActionText(target);
+        const patch: Partial<ProblemEntry> = {};
+        if (hasActiveReminder(target) && curRem) {
+          patch.isGuardrail = true;
+          patch.reminderText = `${curRem} — ${trimmed}`;
+        } else if (hasActiveAction(target) && curAct) {
+          patch.fixNote = `${curAct} — ${trimmed}`;
+        } else if (curRem) {
+          patch.isGuardrail = true;
+          patch.reminderText = `${curRem} — ${trimmed}`;
+        } else {
+          patch.fixNote = trimmed;
+        }
+        if (target.status === 'open') {
+          patch.status = 'testing';
+          patch.fixStartedAt = todayDate;
+        }
+        updateProblem(target.id, patch);
+      }
+    } else if (kind === 'failed_checkin') {
       recordProblemCheckIn(target.id, 'failed', {
         date,
         sourceType,
         ...(sourceRef ? { sourceRef } : {}),
-        ...(note?.trim() ? { note: note.trim() } : {})
+        ...(trimmed ? { note: trimmed } : {})
       });
     } else {
       recordProblemRecurrence(target.id, {
         date,
         sourceType,
         ...(sourceRef ? { sourceRef } : {}),
-        ...(note?.trim() ? { note: note.trim() } : {})
+        ...(trimmed ? { note: trimmed } : {})
       });
     }
     setNotePromptTarget(null);
@@ -388,15 +416,34 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     );
   };
 
-  const renderNotePromptBanner = () =>
-    notePromptTarget ? (
-      <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/35 space-y-2">
-        <div className="text-[11px] font-bold text-sky-200">
-          {notePromptTarget.kind === 'failed_checkin'
-            ? `Why didn’t it work for "${notePromptTarget.problem.title}"?`
-            : notePromptTarget.kind === 'clue'
-            ? `Log observation clue for "${notePromptTarget.problem.title}":`
-            : `What happened with "${notePromptTarget.problem.title}"?`}
+  const renderNotePromptBanner = () => {
+    if (!notePromptTarget) return null;
+    const isTweak = notePromptTarget.kind === 'tweak';
+    const currentSolution =
+      getProblemReminderText(notePromptTarget.problem) ||
+      getProblemActionText(notePromptTarget.problem);
+
+    return (
+      <div
+        className={`p-3 rounded-xl border space-y-2 ${
+          isTweak ? 'bg-violet-500/10 border-violet-500/35' : 'bg-sky-500/10 border-sky-500/35'
+        }`}
+      >
+        <div className="space-y-0.5">
+          <div className={`text-[11px] font-bold ${isTweak ? 'text-violet-200' : 'text-sky-200'}`}>
+            {isTweak
+              ? `Note a tweak to improve "${notePromptTarget.problem.title}":`
+              : notePromptTarget.kind === 'failed_checkin'
+              ? `Why didn’t it work for "${notePromptTarget.problem.title}"?`
+              : notePromptTarget.kind === 'clue'
+              ? `Log observation clue for "${notePromptTarget.problem.title}":`
+              : `What happened with "${notePromptTarget.problem.title}"?`}
+          </div>
+          {isTweak && currentSolution && (
+            <div className="text-[10px] text-slate-400 truncate">
+              Current fix: {currentSolution}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
           <input
@@ -407,33 +454,72 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             onKeyDown={e => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                commitPromptedNote(notePromptDraft);
+                commitPromptedNote(notePromptDraft, false);
               }
               if (e.key === 'Escape') {
                 setNotePromptTarget(null);
                 setNotePromptDraft('');
               }
             }}
-            placeholder="1-line context note (Enter to save)..."
-            className="flex-1 min-w-[180px] bg-slate-950 border border-sky-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+            placeholder={
+              isTweak
+                ? 'What tweak would improve this solution? (Enter to save)...'
+                : '1-line context note (Enter to save)...'
+            }
+            className={`flex-1 min-w-[180px] bg-slate-950 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none border ${
+              isTweak ? 'border-violet-500/40' : 'border-sky-500/40'
+            }`}
           />
-          <button
-            type="button"
-            onClick={() => commitPromptedNote(notePromptDraft)}
-            className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
-          >
-            Save Note
-          </button>
-          <button
-            type="button"
-            onClick={() => commitPromptedNote()}
-            className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
-          >
-            Skip note
-          </button>
+          {isTweak ? (
+            <>
+              <button
+                type="button"
+                onClick={() => commitPromptedNote(notePromptDraft, false)}
+                className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-extrabold text-xs shrink-0"
+              >
+                Save tweak
+              </button>
+              <button
+                type="button"
+                onClick={() => commitPromptedNote(notePromptDraft, true)}
+                disabled={!notePromptDraft.trim()}
+                className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-200 border border-amber-500/40 font-extrabold text-xs shrink-0"
+              >
+                Save &amp; update fix
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNotePromptTarget(null);
+                  setNotePromptDraft('');
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => commitPromptedNote(notePromptDraft)}
+                className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
+              >
+                Save Note
+              </button>
+              <button
+                type="button"
+                onClick={() => commitPromptedNote()}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
+              >
+                Skip note
+              </button>
+            </>
+          )}
         </div>
       </div>
-    ) : null;
+    );
+  };
 
   // ================================================================
   // MODE 1: ZERO-FRICTION COMPACT CAPTURE (GWS Studio & Modals)
@@ -584,25 +670,27 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
       {!collapsed && (
         <div className="p-4 space-y-4">
-          {/* SECTION A: 3-WAY CHECK-IN ON ACTIVE FIXES & REMINDERS (Review Step!) */}
+          {/* SECTION A: 4-WAY CHECK-IN ON ACTIVE SOLUTIONS (Review Step!) */}
           {activeFixesToCheck.length > 0 && (
             <div className="p-3.5 rounded-2xl bg-slate-900/75 border border-slate-800 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center space-x-1.5">
                   <Bell className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Check In on Active Fixes &amp; Reminders ({activeFixesToCheck.length})</span>
+                  <span>Testing Active Solutions ({activeFixesToCheck.length})</span>
                 </span>
                 <span className="text-[10px] text-slate-500">
-                  Was your fix effective today, did the situation not happen, or did it fail?
+                  Did your solution work, not come up, need a tweak, or fail?
                 </span>
               </div>
 
               <div className="space-y-2">
                 {activeFixesToCheck.map(p => {
-                  const ver = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
+                  const testing = getSolutionTestingSummary(p);
                   const rem = getProblemReminderText(p);
                   const act = getProblemActionText(p);
                   const verdict = getProblemCheckInForDate(p, date);
+                  const isTweakOpenForThis =
+                    notePromptTarget?.problem.id === p.id && notePromptTarget.kind === 'tweak';
                   const linkedActs = resolveProblemLinkedActions(
                     p.id,
                     weeklyPlans,
@@ -629,7 +717,14 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                           )}
                           <span className="truncate">{rem || act || p.title}</span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 pl-5">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-500 pl-5">
+                          {testing.hasSolution && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md border font-bold ${testing.badgeClass}`}
+                            >
+                              {testing.label}
+                            </span>
+                          )}
                           <span>Problem: {p.title}</span>
                           {linkedActs.slice(0, 2).map(la => (
                             <span
@@ -639,15 +734,15 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                               {la.detail}
                             </span>
                           ))}
-                          {ver.isTesting && (
-                            <span className="font-mono text-slate-400">
-                              · {ver.daysClean}/{ver.targetDays}d clean
-                            </span>
-                          )}
                         </div>
+                        {testing.latestTweak && (
+                          <div className="pl-5 text-[10px] text-violet-300 truncate">
+                            Tweak ({testing.latestTweak.date.slice(5)}): &ldquo;{testing.latestTweak.note}&rdquo;
+                          </div>
+                        )}
                       </button>
 
-                      {/* 3-WAY CHECK-IN BUTTONS */}
+                      {/* 4-WAY CHECK-IN BUTTONS */}
                       <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                         <button
                           type="button"
@@ -661,7 +756,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                           }`}
                         >
                           <Check className="w-3 h-3" />
-                          <span>Effective</span>
+                          <span>Worked</span>
                         </button>
 
                         <button
@@ -676,7 +771,28 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                           }`}
                         >
                           <Minus className="w-3 h-3" />
-                          <span>Nothing happened</span>
+                          <span>Didn&apos;t come up</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isTweakOpenForThis) {
+                              setNotePromptTarget(null);
+                              setNotePromptDraft('');
+                            } else {
+                              setNotePromptTarget({ problem: p, kind: 'tweak' });
+                              setNotePromptDraft('');
+                            }
+                          }}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            verdict === 'tweaked' || isTweakOpenForThis
+                              ? 'bg-violet-500 text-slate-950 border-violet-400'
+                              : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
+                          }`}
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Tweak</span>
                         </button>
 
                         <button
@@ -689,15 +805,19 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                           }`}
                         >
                           <X className="w-3 h-3" />
-                          <span>Didn&apos;t work</span>
+                          <span>Failed</span>
                         </button>
 
                         <button
                           type="button"
-                          onClick={() => setWorkbenchState({ problemId: p.id })}
-                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-bold"
+                          onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
+                          className={`px-2 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            testing.state === 'failed'
+                              ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/35'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
                         >
-                          Open
+                          {testing.state === 'failed' ? 'Rethink fix →' : 'Edit fix'}
                         </button>
                       </div>
                     </div>
