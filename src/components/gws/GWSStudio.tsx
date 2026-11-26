@@ -391,6 +391,9 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
         addProblem({
           title: trimmedDraft,
           category: heldBackCategory,
+          classified: false,
+          scale: 'friction',
+          severity: 2,
           ...(roadmapPlanId ? { roadmapPlanId } : {}),
           tags: heldBackTags,
           sourceType: 'gws',

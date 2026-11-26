@@ -26,6 +26,7 @@ import { getMissCauseMeta } from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
+import { ProblemWorkbenchModal } from '../problems/ProblemWorkbenchModal';
 import { 
   Target, 
   Gift, 
@@ -68,7 +69,8 @@ export const WeeklyGoalCrusherView: React.FC = () => {
     strategyPlans,
     monthlyPlans,
     quarterlyPlans,
-    yearlyPlans
+    yearlyPlans,
+    problems
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
@@ -84,6 +86,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
   const [pullSourceTab, setPullSourceTab] = useState<'roadmaps' | 'monthly' | 'quarterly' | 'yearly'>('roadmaps');
   const [pullTargetByRoadmap, setPullTargetByRoadmap] = useState<Record<string, string>>({});
   const [pulledNotice, setPulledNotice] = useState<string | null>(null);
+  const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
 
   // Pull-from-Plans helpers (Roadmaps active unlocked stage only + Monthly + Quarterly + Yearly)
   const planMonthKey = (plan.startDate || selectedDate).slice(0, 7);
@@ -1883,15 +1886,22 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                             </>
                           );
                         })()}
-                        {task.problemId && (
-                          <span
-                            title="Dispatched fix for a Problem — checking off signals verification in Problem Log"
-                            className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-[10px] font-bold text-orange-300"
-                          >
-                            <Wrench className="w-2.5 h-2.5" />
-                            <span>Problem Fix</span>
-                          </span>
-                        )}
+                        {task.problemId && (() => {
+                          const linkedProb = problems.find(p => p.id === task.problemId);
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => setActiveProblemId(task.problemId!)}
+                              title={`Dispatched fix for "${linkedProb?.title || 'Problem'}" — click to open Case File`}
+                              className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/35 text-[10px] font-bold text-orange-300 transition-colors max-w-[190px]"
+                            >
+                              <Wrench className="w-2.5 h-2.5 shrink-0" />
+                              <span className="truncate">
+                                Fix: {linkedProb?.title || 'Problem'}
+                              </span>
+                            </button>
+                          );
+                        })()}
                         {hasParentOptions || encodedParent ? (
                           <select
                             value={encodedParent}
@@ -2061,14 +2071,22 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                               <Crosshair className="w-3 h-3" />
                             </span>
                           )}
-                          {sub.problemId && (
-                            <span
-                              title="Dispatched fix for a Problem — completing here signals Verify Solved in Problem Log"
-                              className="shrink-0 inline-flex items-center text-orange-400/85"
-                            >
-                              <Wrench className="w-3 h-3" />
-                            </span>
-                          )}
+                          {sub.problemId && (() => {
+                            const linkedProb = problems.find(p => p.id === sub.problemId);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setActiveProblemId(sub.problemId!)}
+                                title={`Fix for "${linkedProb?.title || 'Problem'}" — click to open Case File`}
+                                className="shrink-0 inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/30 text-[10px] font-bold text-orange-300 transition-colors max-w-[160px]"
+                              >
+                                <Wrench className="w-2.5 h-2.5 shrink-0" />
+                                <span className="truncate">
+                                  Fix: {linkedProb?.title || 'Problem'}
+                                </span>
+                              </button>
+                            );
+                          })()}
                         </div>
 
                         <div className="flex items-center space-x-1.5 shrink-0">
@@ -2226,6 +2244,17 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         targetWeekId={plan.id}
         defaultCollapsed={false}
       />
+
+      {activeProblemId && (
+        <ProblemWorkbenchModal
+          problemId={activeProblemId}
+          contextDate={selectedDate}
+          contextSourceType="weekly"
+          contextSourceRef={plan.id}
+          targetWeekId={plan.id}
+          onClose={() => setActiveProblemId(null)}
+        />
+      )}
 
     </div>
   );

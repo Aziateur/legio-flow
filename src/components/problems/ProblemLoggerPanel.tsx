@@ -12,16 +12,20 @@ import {
   clusterOccurredOnDate,
   computeProblemPriorityScore,
   countClusterOccurrencesInRange,
+  getClusterOccurrenceTimeline,
   getClusterTotalHits,
   getFixVerificationProgress,
   getLastOccurrenceDate,
   getProblemActionText,
+  getProblemCheckInForDate,
   getProblemReminderText,
   hasActiveAction,
   hasActiveReminder,
   hasExistingParent,
   isProblemClassified,
+  isProblemWatching,
   normalizeTag,
+  resolveProblemLinkedActions,
   severityToImpact,
   shouldPromptNoteOnHit,
   tagsMatch
@@ -32,6 +36,7 @@ import { ProblemItemRow } from './ProblemItemRow';
 import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
+  ArrowRight,
   Bell,
   Check,
   CheckCircle2,
@@ -40,9 +45,13 @@ import {
   Circle,
   Crosshair,
   ExternalLink,
+  Eye,
+  MessageSquarePlus,
+  Minus,
   Plus,
   Trash2,
-  Wrench
+  Wrench,
+  X
 } from 'lucide-react';
 
 interface ProblemLoggerPanelProps {
@@ -84,6 +93,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   draftText,
   onDraftTextChange,
   draftCategory,
+  onDraftCategoryChange,
   draftTags,
   onDraftTagsChange
 }) => {
@@ -93,9 +103,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     problems,
     problemCategories,
     problemSettings,
+    weeklyPlans,
+    checklistItems,
+    selectedWeekId,
     addProblem,
     recordProblemRecurrence,
-    recordProblemHeld,
+    recordProblemCheckIn,
     updateProblem,
     deleteProblem,
     setActiveTab,
@@ -118,8 +131,11 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [showAllMacroSlips, setShowAllMacroSlips] = useState(false);
 
-  // Per-problem note-on-hit prompt when clicking quick recurring chips or audit check-in
-  const [notePromptTarget, setNotePromptTarget] = useState<ProblemEntry | null>(null);
+  // Per-problem note-on-hit / clue prompt
+  const [notePromptTarget, setNotePromptTarget] = useState<{
+    problem: ProblemEntry;
+    kind: 'recur' | 'failed_checkin' | 'clue';
+  } | null>(null);
   const [notePromptDraft, setNotePromptDraft] = useState('');
   const [workbenchState, setWorkbenchState] = useState<{
     problemId: string;
@@ -195,7 +211,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     showAllMacroSlips
   ]);
 
-  // Quick "Happened again" chips — Top 3 Focus first!
+  // Quick "Happened again" chips
   const quickRecurCandidates = useMemo(() => {
     if (mode === 'weekly_triage' || mode === 'roadmap') return [];
     const shownIds = new Set(displayedProblems.map(p => p.id));
@@ -205,21 +221,31 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       .slice(0, 4);
   }, [mode, topLevelProblems, problems, displayedProblems]);
 
-  // Active Reminders / Actions to check in on honestly during Daily or Weekly reviews
-  const activeFixesToAudit = useMemo(() => {
-    if (!showAuditStrip || !fullEngine) return [];
-    const shownIds = new Set(displayedProblems.map(p => p.id));
-    return topLevelProblems
+  // Review Check-Ins: ALL active fixes/reminders + ALL actively observed problems
+  const { activeFixesToCheck, observingToCheck } = useMemo(() => {
+    if (!showAuditStrip || !fullEngine) {
+      return { activeFixesToCheck: [], observingToCheck: [] };
+    }
+    const sorter = (a: ProblemEntry, b: ProblemEntry) =>
+      computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a);
+
+    const activeFixes = topLevelProblems
       .filter(
         p =>
           p.status !== 'solved' &&
-          (hasActiveReminder(p) || hasActiveAction(p) || p.status === 'testing') &&
-          !shownIds.has(p.id)
+          (hasActiveReminder(p) || hasActiveAction(p) || p.status === 'testing')
       )
-      .slice(0, 5);
-  }, [showAuditStrip, fullEngine, topLevelProblems, displayedProblems]);
+      .sort(sorter);
 
-  // ZERO-FRICTION RAW CAPTURE (Classify later at end of day or week!)
+    const fixIds = new Set(activeFixes.map(p => p.id));
+    const observing = topLevelProblems
+      .filter(p => p.status !== 'solved' && !fixIds.has(p.id) && isProblemWatching(p))
+      .sort(sorter);
+
+    return { activeFixesToCheck: activeFixes, observingToCheck: observing };
+  }, [showAuditStrip, fullEngine, topLevelProblems, problems]);
+
+  // Zero-friction raw capture (classify later)
   const handleLogProblem = () => {
     const trimmed = textValue.trim();
     if (!trimmed) return;
@@ -267,7 +293,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
   const handleQuickRecur = (prob: ProblemEntry) => {
     if (fullEngine && shouldPromptNoteOnHit(prob)) {
-      setNotePromptTarget(prob);
+      setNotePromptTarget({ problem: prob, kind: 'recur' });
       setNotePromptDraft('');
       return;
     }
@@ -278,19 +304,41 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     });
   };
 
-  const commitPromptedRecur = (note?: string) => {
-    if (!notePromptTarget) return;
-    recordProblemRecurrence(notePromptTarget.id, {
+  const handleCheckInFailed = (prob: ProblemEntry) => {
+    if (shouldPromptNoteOnHit(prob)) {
+      setNotePromptTarget({ problem: prob, kind: 'failed_checkin' });
+      setNotePromptDraft('');
+      return;
+    }
+    recordProblemCheckIn(prob.id, 'failed', {
       date,
       sourceType,
-      ...(sourceRef ? { sourceRef } : {}),
-      ...(note?.trim() ? { note: note.trim() } : {})
+      ...(sourceRef ? { sourceRef } : {})
     });
+  };
+
+  const commitPromptedNote = (note?: string) => {
+    if (!notePromptTarget) return;
+    const { problem: target, kind } = notePromptTarget;
+    if (kind === 'failed_checkin') {
+      recordProblemCheckIn(target.id, 'failed', {
+        date,
+        sourceType,
+        ...(sourceRef ? { sourceRef } : {}),
+        ...(note?.trim() ? { note: note.trim() } : {})
+      });
+    } else {
+      recordProblemRecurrence(target.id, {
+        date,
+        sourceType,
+        ...(sourceRef ? { sourceRef } : {}),
+        ...(note?.trim() ? { note: note.trim() } : {})
+      });
+    }
     setNotePromptTarget(null);
     setNotePromptDraft('');
   };
 
-  // Minimal flat row for LVL 1–2
   const renderLiteRow = (p: ProblemEntry) => {
     const isSolved = p.status === 'solved';
     const hits = getClusterTotalHits(problems, p);
@@ -344,7 +392,11 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     notePromptTarget ? (
       <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/35 space-y-2">
         <div className="text-[11px] font-bold text-sky-200">
-          Log detail for &ldquo;{notePromptTarget.title}&rdquo;:
+          {notePromptTarget.kind === 'failed_checkin'
+            ? `Why didn’t it work for "${notePromptTarget.problem.title}"?`
+            : notePromptTarget.kind === 'clue'
+            ? `Log observation clue for "${notePromptTarget.problem.title}":`
+            : `What happened with "${notePromptTarget.problem.title}"?`}
         </div>
         <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
           <input
@@ -355,26 +407,26 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             onKeyDown={e => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                commitPromptedRecur(notePromptDraft);
+                commitPromptedNote(notePromptDraft);
               }
               if (e.key === 'Escape') {
                 setNotePromptTarget(null);
                 setNotePromptDraft('');
               }
             }}
-            placeholder="What triggered it or happened this time? (Enter to save)..."
+            placeholder="1-line context note (Enter to save)..."
             className="flex-1 min-w-[180px] bg-slate-950 border border-sky-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
           />
           <button
             type="button"
-            onClick={() => commitPromptedRecur(notePromptDraft)}
+            onClick={() => commitPromptedNote(notePromptDraft)}
             className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
           >
             Save Note
           </button>
           <button
             type="button"
-            onClick={() => commitPromptedRecur()}
+            onClick={() => commitPromptedNote()}
             className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
           >
             Skip note
@@ -494,7 +546,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
           <div className="flex items-center space-x-2">
             <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
             <span className="text-xs font-extrabold uppercase tracking-wider text-orange-400">
-              {title || 'Problems & Frictions'}
+              {title || 'Problems & Check-In'}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 font-mono text-[10px] font-bold text-slate-300">
               {activeCount} active
@@ -531,8 +583,208 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       </div>
 
       {!collapsed && (
-        <div className="p-4 space-y-3.5">
-          {/* Pure 1-Line Capture Bar (Zero fields on entry!) */}
+        <div className="p-4 space-y-4">
+          {/* SECTION A: 3-WAY CHECK-IN ON ACTIVE FIXES & REMINDERS (Review Step!) */}
+          {activeFixesToCheck.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-slate-900/75 border border-slate-800 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center space-x-1.5">
+                  <Bell className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Check In on Active Fixes &amp; Reminders ({activeFixesToCheck.length})</span>
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  Was your fix effective today, did the situation not happen, or did it fail?
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {activeFixesToCheck.map(p => {
+                  const ver = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
+                  const rem = getProblemReminderText(p);
+                  const act = getProblemActionText(p);
+                  const verdict = getProblemCheckInForDate(p, date);
+                  const linkedActs = resolveProblemLinkedActions(
+                    p.id,
+                    weeklyPlans,
+                    checklistItems,
+                    todayDate,
+                    selectedWeekId
+                  );
+
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800/90 text-xs"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
+                        className="min-w-0 flex-1 text-left space-y-1 group"
+                      >
+                        <div className="font-bold text-slate-100 group-hover:text-amber-200 flex items-center space-x-1.5">
+                          {rem ? (
+                            <Bell className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          ) : (
+                            <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                          )}
+                          <span className="truncate">{rem || act || p.title}</span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 pl-5">
+                          <span>Problem: {p.title}</span>
+                          {linkedActs.slice(0, 2).map(la => (
+                            <span
+                              key={`${la.kind}_${la.id}`}
+                              className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-sky-300 font-semibold"
+                            >
+                              {la.detail}
+                            </span>
+                          ))}
+                          {ver.isTesting && (
+                            <span className="font-mono text-slate-400">
+                              · {ver.daysClean}/{ver.targetDays}d clean
+                            </span>
+                          )}
+                        </div>
+                      </button>
+
+                      {/* 3-WAY CHECK-IN BUTTONS */}
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            recordProblemCheckIn(p.id, 'effective', { date, sourceType, sourceRef })
+                          }
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            verdict === 'effective'
+                              ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                              : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800'
+                          }`}
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Effective</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            recordProblemCheckIn(p.id, 'not_triggered', { date, sourceType, sourceRef })
+                          }
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            verdict === 'not_triggered'
+                              ? 'bg-slate-200 text-slate-950 border-slate-100'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          <Minus className="w-3 h-3" />
+                          <span>Nothing happened</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCheckInFailed(p)}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            verdict === 'failed'
+                              ? 'bg-rose-500 text-slate-950 border-rose-400'
+                              : 'bg-slate-900 hover:bg-rose-500/15 text-rose-300 border-slate-800'
+                          }`}
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Didn&apos;t work</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setWorkbenchState({ problemId: p.id })}
+                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-bold"
+                        >
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* SECTION B: CHECK IN ON ACTIVELY OBSERVED PROBLEMS */}
+          {observingToCheck.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-slate-900/75 border border-sky-500/25 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center space-x-1.5">
+                  <Eye className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Observing — Did You Learn Anything Today? ({observingToCheck.length})</span>
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {observingToCheck.map(p => {
+                  const latestClue = getClusterOccurrenceTimeline(problems, p).find(o => o.note?.trim());
+                  const verdict = getProblemCheckInForDate(p, date);
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 p-3 rounded-xl bg-slate-950 border border-slate-800/90 text-xs"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setWorkbenchState({ problemId: p.id })}
+                        className="min-w-0 flex-1 text-left space-y-0.5 group"
+                      >
+                        <div className="font-bold text-sky-100 group-hover:text-sky-200 truncate">
+                          {p.watchQuestion?.trim() || p.title}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate">
+                          {p.watchQuestion?.trim() ? `Problem: ${p.title}` : 'Watching for patterns'}
+                          {latestClue?.note ? ` · Last clue (${latestClue.date.slice(5)}): "${latestClue.note}"` : ''}
+                        </div>
+                      </button>
+
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNotePromptTarget({ problem: p, kind: 'clue' });
+                            setNotePromptDraft('');
+                          }}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 border border-sky-500/35 text-[11px] font-bold"
+                        >
+                          <MessageSquarePlus className="w-3 h-3" />
+                          <span>+ Add clue</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            recordProblemCheckIn(p.id, 'not_triggered', { date, sourceType, sourceRef })
+                          }
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            verdict === 'not_triggered'
+                              ? 'bg-slate-200 text-slate-950 border-slate-100'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          <Minus className="w-3 h-3" />
+                          <span>Nothing happened</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWorkbenchState({ problemId: p.id })}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-[11px] font-bold"
+                        >
+                          <span>Design solution</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {renderNotePromptBanner()}
+
+          {/* Pure 1-Line Raw Capture Bar */}
           <div className="flex items-center gap-2">
             <input
               type="text"
@@ -547,7 +799,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
               }}
               placeholder={
                 sourceType === 'daily'
-                  ? 'Record what got in your way today & press Enter (classify later)...'
+                  ? 'Record a new friction from today & press Enter (classify later)...'
                   : 'Record a problem or recurring pattern & press Enter...'
               }
               className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
@@ -586,92 +838,10 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             </div>
           )}
 
-          {renderNotePromptBanner()}
-
-          {/* Honest Check-In Strip for Active Reminders & Solutions (Held Today != Solved!) */}
-          {activeFixesToAudit.length > 0 && (
-            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center space-x-1.5">
-                  <Bell className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Check In on Active Solutions ({activeFixesToAudit.length})</span>
-                </span>
-                <span className="text-[10px] text-slate-500">
-                  &ldquo;Held&rdquo; logs a clean day without prematurely closing
-                </span>
-              </div>
-
-              <div className="space-y-1.5">
-                {activeFixesToAudit.map(p => {
-                  const ver = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
-                  const rem = getProblemReminderText(p);
-                  const act = getProblemActionText(p);
-                  const alreadyHeld = (p.heldDates || []).includes(date);
-                  return (
-                    <div
-                      key={p.id}
-                      className="flex flex-wrap items-center justify-between gap-2 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800/90"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
-                        className="min-w-0 flex-1 text-left space-y-0.5"
-                      >
-                        <div className="font-bold text-slate-100 flex items-center space-x-1.5">
-                          {rem ? (
-                            <Bell className="w-3 h-3 text-amber-400 shrink-0" />
-                          ) : (
-                            <Wrench className="w-3 h-3 text-sky-400 shrink-0" />
-                          )}
-                          <span className="truncate">{rem || act || p.title}</span>
-                        </div>
-                        {(rem || act) && (
-                          <div className="text-[10px] text-slate-500 truncate pl-4">
-                            For: {p.title}
-                            {ver.isTesting ? ` · ${ver.daysClean}/${ver.targetDays}d clean` : ''}
-                          </div>
-                        )}
-                      </button>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickRecur(p)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 text-orange-300 border border-slate-800 text-[11px] font-bold"
-                        >
-                          Happened again
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => recordProblemHeld(p.id, date)}
-                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
-                            alreadyHeld
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                              : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800 hover:border-emerald-500/35'
-                          }`}
-                        >
-                          <Check className="w-3 h-3" />
-                          <span>{alreadyHeld ? 'Held ✓' : 'Held'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
-                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-bold"
-                        >
-                          Open
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Problems List */}
+          {/* Logged for this scope */}
           {displayedProblems.length === 0 ? (
             <div className="p-4 rounded-xl bg-slate-900/50 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
-              No {fullEngine ? 'problems' : 'frictions'} recorded for this {sourceType} scope yet.
+              No {fullEngine ? 'problems' : 'frictions'} recorded specifically for this {sourceType} scope yet.
             </div>
           ) : (
             <div className="space-y-2">

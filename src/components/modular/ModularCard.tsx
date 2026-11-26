@@ -6,6 +6,7 @@ import {
   resolveDailyPriorityContext
 } from '../../lib/planHierarchy';
 import { getMissCauseMeta } from '../../lib/energyAnalytics';
+import { ProblemWorkbenchModal } from '../problems/ProblemWorkbenchModal';
 import { 
   CheckCircle2, 
   Circle,
@@ -21,7 +22,8 @@ import {
   ArrowRight,
   Layers,
   Map as MapIcon,
-  Target
+  Target,
+  Wrench
 } from 'lucide-react';
 
 interface PriorityRow {
@@ -118,8 +120,9 @@ interface ModularCardProps {
 }
 
 export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange, onAction }) => {
-  const { weeklyPlans, strategyPlans, dailyEntries, checklistItems, selectedWeekId } = useStorage();
+  const { weeklyPlans, strategyPlans, dailyEntries, checklistItems, problems, selectedDate, selectedWeekId } = useStorage();
   const [groupPrioritiesByGoal, setGroupPrioritiesByGoal] = useState(false);
+  const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
   const [localPriorityRows, setLocalPriorityRows] = useState<PriorityRow[]>(() =>
     field.type === 'numbered_list' ? padPriorityRows(parsePriorityValueToNonEmptyRows(value), 3) : []
   );
@@ -466,6 +469,13 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
               : undefined;
           const isOneOffBacked =
             !ctx?.roadmapPlan && !ctx?.weeklyTask && linkedChecklistItem?.recurrence === 'none';
+          const linkedProblemId =
+            ctx?.subTask?.problemId ||
+            ctx?.weeklyTask?.problemId ||
+            linkedChecklistItem?.problemId;
+          const linkedProblem = linkedProblemId
+            ? problems.find(p => p.id === linkedProblemId)
+            : undefined;
           const carriedDiag =
             !row.completed && row.text.trim().length > 0
               ? resolveDailyCarriedDiagnosis(row, dailyEntries)
@@ -474,6 +484,7 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
           const showMetaLine =
             row.text.trim().length > 0 &&
             ((!hideGroupBadges && (ctx?.roadmapPlan || ctx?.weeklyTask || isOneOffBacked)) ||
+              Boolean(linkedProblem) ||
               (row.pushedFromDate && !row.completed) ||
               Boolean(carriedDiag));
 
@@ -609,6 +620,17 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                       <ListChecks className="w-2.5 h-2.5 text-sky-400 shrink-0" />
                       <span>One-Off</span>
                     </span>
+                  )}
+                  {linkedProblem && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveProblemId(linkedProblem.id)}
+                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/35 text-orange-300 font-bold transition-colors"
+                      title={`Fix for problem: ${linkedProblem.title} — click to open Case File`}
+                    >
+                      <Wrench className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate max-w-[160px]">Fix: {linkedProblem.title}</span>
+                    </button>
                   )}
                   {row.pushedFromDate && !row.completed && (
                     <span
@@ -1040,6 +1062,15 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
       <div className="mt-1 flex-1">
         {renderFieldContent()}
       </div>
+
+      {activeProblemId && (
+        <ProblemWorkbenchModal
+          problemId={activeProblemId}
+          contextDate={selectedDate}
+          contextSourceType="daily"
+          onClose={() => setActiveProblemId(null)}
+        />
+      )}
     </div>
   );
 };

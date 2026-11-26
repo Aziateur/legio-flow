@@ -363,6 +363,7 @@ export interface ChecklistItem {
   scheduleDayOfMonth?: number | 'last'; // Optional monthly schedule day: 1..28 or 'last' (undefined = Any day)
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
   sourceDailyDate?: string; // YYYY-MM-DD when auto-captured from a standalone Daily Mission task
+  problemId?: string; // Links a dispatched Problem fix (One-Off, Habit, or Rep) back to its ProblemEntry
 }
 
 export type AllowancePeriod = 'daily' | 'weekly' | 'monthly';
@@ -502,6 +503,14 @@ export interface ProblemSettings {
   separateInboxTab?: boolean;      // Default true
 }
 
+export type ProblemCheckInOutcome = 'effective' | 'not_triggered' | 'failed';
+
+export interface ProblemCheckIn {
+  date: string; // YYYY-MM-DD
+  outcome: ProblemCheckInOutcome;
+  note?: string;
+}
+
 export interface ProblemEntry {
   id: string;
   title: string;
@@ -511,7 +520,9 @@ export interface ProblemEntry {
   impact?: ProblemImpact; // 'low' | 'high' | 'critical'
   severity?: ProblemSeverity; // Graded 1-5 severity (1 Minor, 2 Low, 3 Moderate, 4 Severe, 5 Critical)
   isTopConstraint?: boolean; // Pinned in the Top 3 Constraints focus spotlight
-  promptNoteOnHit?: boolean; // When true, logging a hit asks for a 1-line context sentence (defaults true for Top 3, false otherwise)
+  watching?: boolean; // Explicit active Observation mode (distinct from idle backlog)
+  watchQuestion?: string; // Optional 1-line question: what to look out for while observing
+  promptNoteOnHit?: boolean; // When true, logging a hit asks for a 1-line context sentence (defaults true for Top 3 / Watching)
   trigger?: string; // When / in what context does this fire?
   rootCause?: string; // Why is this actually happening below the surface symptom?
   isGuardrail?: boolean; // Pinned as an active Reminder / Pre-Flight cue
@@ -521,6 +532,7 @@ export interface ProblemEntry {
   tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];
+  checkIns?: ProblemCheckIn[]; // Dated 3-way review check-ins ('effective' | 'not_triggered' | 'failed')
   heldDates?: string[]; // YYYY-MM-DD dates when active solution/reminder held (without closing prematurely)
   lastHeldDate?: string; // Latest YYYY-MM-DD when user confirmed it held
   fixType?: ProblemFixType;

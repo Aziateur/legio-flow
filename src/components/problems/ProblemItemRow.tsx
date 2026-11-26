@@ -1,9 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ProblemEntry, ProblemSourceType } from '../../types/schema';
 import {
-  DISPATCH_TARGET_LABELS,
   SEVERITY_VISUAL,
-  countClusterNotes,
+  getClusterOccurrenceTimeline,
   getClusterTotalHits,
   getDirectChildren,
   getEligibleClusterTargets,
@@ -15,11 +14,14 @@ import {
   hasActiveAction,
   hasActiveReminder,
   isProblemClassified,
+  isProblemWatching,
   resolveCategoryMeta,
+  resolveProblemLinkedActions,
   resolveProblemRoadmapPlanId,
   shouldPromptNoteOnHit
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
+import { ProblemPulseBar } from './ProblemPulseBar';
 import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
@@ -71,6 +73,9 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     problemCategories,
     problemSettings,
     strategyPlans,
+    weeklyPlans,
+    checklistItems,
+    selectedWeekId,
     updateProblem,
     recordProblemRecurrence,
     deleteProblem
@@ -84,6 +89,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const isClassified = isProblemClassified(problems, problem);
+  const watchingActive = isProblemWatching(problem);
   const severity = getProblemSeverity(problem);
   const severityVisual = SEVERITY_VISUAL[severity];
   const catMeta = resolveCategoryMeta(problem.category, problemCategories);
@@ -105,9 +111,16 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => getClusterTotalHits(problems, problem),
     [problems, problem]
   );
-  const noteCount = useMemo(
-    () => countClusterNotes(problems, problem),
+  const latestClues = useMemo(
+    () => getClusterOccurrenceTimeline(problems, problem).filter(o => o.note?.trim()).slice(0, 2),
     [problems, problem]
+  );
+  const linkedActions = useMemo(
+    () =>
+      problem.status === 'solved'
+        ? []
+        : resolveProblemLinkedActions(problem.id, weeklyPlans, checklistItems, todayDate, selectedWeekId),
+    [problem.id, problem.status, weeklyPlans, checklistItems, todayDate, selectedWeekId]
   );
   const parentProblem = useMemo(
     () => (problem.parentProblemId ? problems.find(p => p.id === problem.parentProblemId) : undefined),
@@ -197,7 +210,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
       <div className={`rounded-2xl border transition-all ${cardClass}`}>
         <div className={`${compact || nested ? 'p-3' : 'p-3.5 sm:p-4'} space-y-2`}>
           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
-            {/* LEFT: CLEAR SEVERITY + TITLE + STANCE */}
+            {/* LEFT: CLEAR SEVERITY + TITLE + STANCE + PULSE + CLUES */}
             <div
               className="flex-1 min-w-0 space-y-1.5 cursor-pointer"
               onClick={() => openWorkbench()}
@@ -236,9 +249,44 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 </span>
               </div>
 
-              {/* Clean Stance Summary (What am I doing about this?) */}
+              {/* 14-Day Pulse (on classified active cards) */}
+              {isClassified && problem.status !== 'solved' && !nested && (
+                <ProblemPulseBar
+                  problem={problem}
+                  allProblems={problems}
+                  todayDate={todayDate}
+                  compact
+                />
+              )}
+
+              {/* Active Stance Summary (Watching / Reminder / Live Linked Action Telemetry / Idle) */}
               {problem.status !== 'solved' && isClassified && (
-                <div className="space-y-1 text-xs">
+                <div className="space-y-1.5 text-xs">
+                  {watchingActive && (
+                    <div className="space-y-1">
+                      <div className="flex items-start space-x-1.5 text-sky-200/95">
+                        <Eye className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                        <span className="leading-snug font-medium">
+                          {problem.watchQuestion?.trim()
+                            ? `Watching: ${problem.watchQuestion.trim()}`
+                            : 'Actively Observing'}
+                        </span>
+                      </div>
+                      {latestClues.length > 0 && (
+                        <div className="pl-5 space-y-0.5">
+                          {latestClues.map((clue, idx) => (
+                            <div key={idx} className="text-[11px] text-slate-300 truncate">
+                              <span className="font-mono text-[10px] text-slate-500 mr-1.5">
+                                {clue.date.slice(5)}
+                              </span>
+                              <span>&ldquo;{clue.note}&rdquo;</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {reminderActive && (
                     <div className="flex items-start space-x-1.5 text-amber-200/95">
                       <Bell className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
@@ -253,40 +301,49 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     </div>
                   )}
 
-                  {actionActive && (
-                    <div className="flex items-start space-x-1.5 text-sky-200/95">
-                      <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
-                      <span className="leading-snug">
-                        <span>{actionText || 'Action installed'}</span>
-                        {(problem.dispatchedTo || []).length > 0 && (
-                          <span className="ml-1.5 text-[10px] text-emerald-300 font-semibold">
-                            (In {(problem.dispatchedTo || []).map(d => DISPATCH_TARGET_LABELS[d]).join(', ')})
-                          </span>
-                        )}
-                      </span>
+                  {(actionActive || linkedActions.length > 0) && (
+                    <div className="space-y-1">
+                      {actionText && (
+                        <div className="flex items-start space-x-1.5 text-sky-200/95">
+                          <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                          <span className="leading-snug">{actionText}</span>
+                        </div>
+                      )}
+                      {linkedActions.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pl-5">
+                          {linkedActions.map(act => (
+                            <span
+                              key={`${act.kind}_${act.id}`}
+                              className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold ${
+                                act.completed
+                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                                  : 'bg-slate-900 text-slate-300 border-slate-800'
+                              }`}
+                            >
+                              <span>{act.detail}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {!reminderActive && !actionActive && (
-                    <div className="inline-flex items-center space-x-1.5 text-[11px] text-slate-400">
-                      <Eye className="w-3.5 h-3.5 text-sky-400/80 shrink-0" />
-                      <span>
-                        Observing
-                        {noteCount > 0 ? ` · ${noteCount} ${noteCount === 1 ? 'note' : 'notes'} logged` : ' · gathering context before designing a solution'}
-                      </span>
+                  {!watchingActive && !reminderActive && !actionActive && linkedActions.length === 0 && (
+                    <div className="text-[11px] text-slate-500">
+                      Waiting in Backlog — click Open to observe or design a solution
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Solved summary: show what worked */}
+              {/* Solved summary */}
               {problem.status === 'solved' && (reminderText || actionText) && (
                 <div className="text-[11px] text-emerald-300/85 leading-snug">
                   What worked: {reminderText || actionText}
                 </div>
               )}
 
-              {/* Quiet Single-Line Context Metadata (Max 3–4 signals, zero badge soup) */}
+              {/* Quiet Single-Line Context Metadata */}
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-slate-500">
                 {isClassified && (
                   <span className="inline-flex items-center space-x-1 text-slate-400 font-medium">
@@ -303,7 +360,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 )}
 
                 <span className="font-mono text-[10px] text-slate-400">
-                  {clusterHits} {clusterHits === 1 ? 'hit' : 'hits'}
+                  {clusterHits} total {clusterHits === 1 ? 'hit' : 'hits'}
                   {periodOccurrenceCount !== undefined &&
                   periodOccurrenceCount !== clusterHits &&
                   periodOccurrenceCount > 0
@@ -345,9 +402,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     className="inline-flex items-center space-x-1 text-amber-300 hover:text-amber-200 font-bold text-[10px]"
                   >
                     <Layers className="w-3 h-3" />
-                    <span>
-                      {directChildren.length} grouped
-                    </span>
+                    <span>{directChildren.length} grouped</span>
                     {childrenOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   </button>
                 )}
@@ -358,7 +413,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
               )}
             </div>
 
-            {/* RIGHT: PLAIN-ENGLISH STAGE ACTIONS (Zero Mystery Icons!) */}
+            {/* RIGHT: PLAIN-ENGLISH STAGE ACTIONS */}
             <div className="flex flex-wrap items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
               {inboxMode || !isClassified ? (
                 <>
@@ -428,15 +483,14 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 </>
               ) : (
                 <>
-                  {/* Context-Note Toggle Pill (1-click per-problem control!) */}
                   {!nested && !compact && (
                     <button
                       type="button"
                       onClick={() => updateProblem(problem.id, { promptNoteOnHit: !promptNoteActive })}
                       title={
                         promptNoteActive
-                          ? 'Detail notes ON: clicking "Happened again" asks for a 1-line sentence (click to switch to silent count)'
-                          : 'Detail notes OFF: clicking "Happened again" silently counts +1 (click to ask for a 1-line sentence each time)'
+                          ? 'Detail notes ON (asks for a 1-line note on hit) — click to turn OFF'
+                          : 'Detail notes OFF (silent hit count) — click to turn ON'
                       }
                       className={`inline-flex items-center space-x-1 px-2 py-1.5 rounded-xl border text-[10px] font-bold transition-colors ${
                         promptNoteActive
@@ -458,7 +512,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                         : 'bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 hover:border-orange-500/40'
                     }`}
                   >
-                    {justLogged ? 'Logged ✓' : 'Happened again'}
+                    {justLogged ? 'Logged ✓' : watchingActive ? '+ Log clue' : 'Happened again'}
                   </button>
 
                   {!nested && !compact && !problem.isTopConstraint && (
@@ -485,7 +539,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
             </div>
           </div>
 
-          {/* INLINE 1-LINE NOTE PROMPT (only when per-problem toggle is ON and user tapped "Happened again") */}
+          {/* INLINE 1-LINE NOTE PROMPT */}
           {notePromptOpen && (
             <div
               className="flex flex-wrap sm:flex-nowrap items-center gap-2 pt-2 border-t border-slate-800/80"

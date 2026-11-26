@@ -14,6 +14,7 @@ import {
 } from '../../lib/checklistSchedule';
 import { AllowancesBoard } from './AllowancesBoard';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
+import { ProblemWorkbenchModal } from '../problems/ProblemWorkbenchModal';
 import {
   Activity,
   ArrowDownToLine,
@@ -29,7 +30,8 @@ import {
   Plus,
   Repeat,
   Timer,
-  Trash2
+  Trash2,
+  Wrench
 } from 'lucide-react';
 
 type ViewFilter = 'all' | 'recurring' | 'none' | 'tally' | 'allowances';
@@ -275,7 +277,8 @@ export const ChecklistView: React.FC = () => {
     getEntryForDate,
     saveDailyEntry,
     setActiveTab,
-    setPlanningSubTab
+    setPlanningSubTab,
+    problems
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
@@ -297,6 +300,7 @@ export const ChecklistView: React.FC = () => {
   const [draftTallyVolume, setDraftTallyVolume] = useState('');
   const [draftTallyUnit, setDraftTallyUnit] = useState('');
   const [pulledDailyNotice, setPulledDailyNotice] = useState<string | null>(null);
+  const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -819,6 +823,24 @@ export const ChecklistView: React.FC = () => {
                       title="Click to rename"
                     >
                       <span>{item.text}</span>
+                      {item.problemId && (() => {
+                        const linkedProb = problems.find((p) => p.id === item.problemId);
+                        if (!linkedProb) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveProblemId(linkedProb.id);
+                            }}
+                            title={`Fix for problem: ${linkedProb.title} — click to open Case File`}
+                            className="ml-2 inline-flex items-center gap-1 rounded-full border border-orange-500/35 bg-orange-500/15 hover:bg-orange-500/25 px-1.5 py-0.5 text-[10px] font-bold text-orange-300 align-middle transition-colors max-w-[160px]"
+                          >
+                            <Wrench className="h-2.5 w-2.5 shrink-0" />
+                            <span className="truncate">Fix: {linkedProb.title}</span>
+                          </button>
+                        );
+                      })()}
                       {item.recurrence === 'none' && item.sourceDailyDate && (
                         <span
                           className="ml-2 inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-300 align-middle"
@@ -1380,14 +1402,31 @@ export const ChecklistView: React.FC = () => {
                                 className="w-full rounded border border-cyan-500/50 bg-slate-900 px-2 py-0.5 text-sm font-semibold text-slate-100 outline-none"
                               />
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => startEditing(item)}
-                                className="w-full text-left text-sm font-bold text-slate-100 hover:text-cyan-200 transition-colors leading-snug"
-                                title="Click to rename"
-                              >
-                                {item.text}
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditing(item)}
+                                  className="w-full text-left text-sm font-bold text-slate-100 hover:text-cyan-200 transition-colors leading-snug"
+                                  title="Click to rename"
+                                >
+                                  {item.text}
+                                </button>
+                                {item.problemId && (() => {
+                                  const linkedProb = problems.find((p) => p.id === item.problemId);
+                                  if (!linkedProb) return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveProblemId(linkedProb.id)}
+                                      className="mt-1 inline-flex items-center gap-1 rounded-full border border-orange-500/35 bg-orange-500/15 hover:bg-orange-500/25 px-1.5 py-0.5 text-[10px] font-bold text-orange-300 max-w-full transition-colors"
+                                      title={`Fix for problem: ${linkedProb.title}`}
+                                    >
+                                      <Wrench className="h-2.5 w-2.5 shrink-0" />
+                                      <span className="truncate">Fix: {linkedProb.title}</span>
+                                    </button>
+                                  );
+                                })()}
+                              </>
                             )}
 
                             {/* Volume per Rep / Total Volume chip */}
@@ -1615,6 +1654,15 @@ export const ChecklistView: React.FC = () => {
           selectedWeekId={selectedWeekId}
           weekLabel={weekLabel}
           monthKey={monthKey}
+        />
+      )}
+
+      {activeProblemId && (
+        <ProblemWorkbenchModal
+          problemId={activeProblemId}
+          contextDate={selectedDate}
+          contextSourceType="daily"
+          onClose={() => setActiveProblemId(null)}
         />
       )}
     </div>

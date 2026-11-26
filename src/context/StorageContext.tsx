@@ -31,6 +31,8 @@ import {
   ProblemStatus,
   ProblemFixType,
   ProblemFixAttempt,
+  ProblemCheckIn,
+  ProblemCheckInOutcome,
   ProblemSourceType,
   ProblemOccurrence,
   ProblemDispatchTarget,
@@ -665,6 +667,8 @@ interface StorageContextType {
     impact?: ProblemImpact;
     severity?: ProblemSeverity;
     isTopConstraint?: boolean;
+    watching?: boolean;
+    watchQuestion?: string;
     promptNoteOnHit?: boolean;
     trigger?: string;
     rootCause?: string;
@@ -685,6 +689,16 @@ interface StorageContextType {
   updateProblem: (id: string, patch: Partial<ProblemEntry>) => void;
   recordProblemRecurrence: (id: string, occurrence: ProblemOccurrence) => void;
   recordProblemHeld: (id: string, date?: string) => void;
+  recordProblemCheckIn: (
+    id: string,
+    outcome: ProblemCheckInOutcome,
+    options?: {
+      date?: string;
+      sourceType?: ProblemSourceType;
+      sourceRef?: string;
+      note?: string;
+    }
+  ) => void;
   clusterIntoNewParent: (
     childId: string,
     parentTitle: string,
@@ -3504,6 +3518,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       impact: resolvedImpact,
       severity: resolvedSeverity,
       ...(input.isTopConstraint ? { isTopConstraint: true } : {}),
+      ...(typeof input.watching === 'boolean' ? { watching: input.watching } : {}),
+      ...(input.watchQuestion?.trim() ? { watchQuestion: input.watchQuestion.trim() } : {}),
       ...(typeof input.promptNoteOnHit === 'boolean' ? { promptNoteOnHit: input.promptNoteOnHit } : {}),
       ...(input.trigger?.trim() ? { trigger: input.trigger.trim() } : {}),
       ...(input.rootCause?.trim() ? { rootCause: input.rootCause.trim() } : {}),
@@ -3605,6 +3621,20 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
         if ('rootCause' in patch && !patch.rootCause?.trim()) {
           delete merged.rootCause;
+        }
+        if ('watchQuestion' in patch && !patch.watchQuestion?.trim()) {
+          delete merged.watchQuestion;
+        }
+        // Automatically activate Observation mode when pinning a Top 3 focus problem that has no active solution yet
+        if (
+          patch.isTopConstraint === true &&
+          merged.watching === undefined &&
+          !merged.isGuardrail &&
+          !merged.reminderText?.trim() &&
+          !merged.fixNote?.trim() &&
+          !(merged.dispatchedTo && merged.dispatchedTo.length > 0)
+        ) {
+          merged.watching = true;
         }
         // Entering Testing Fix: start verification clock & clear prior failure flag
         if (patch.status === 'testing' && p.status !== 'testing') {
@@ -3713,23 +3743,123 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
-  // Honest check-in ("Held today / Held this week"): logs that the reminder/fix held WITHOUT prematurely closing as Solved
-  const recordProblemHeld: StorageContextType['recordProblemHeld'] = (id, date) => {
+  // 3-way Daily / Weekly Review Check-In:
+  // 'effective'     -> logs a held day (never prematurely closes as Solved)
+  // 'not_triggered' -> marks nothing happened cleanly
+  // 'failed'        -> logs recurrence + optional clue note + re-opens Testing fixes (avoids duplicate same-day occurrence spam if toggled)
+  const recordProblemCheckIn: StorageContextType['recordProblemCheckIn'] = (id, outcome, options) => {
     const nowIso = new Date().toISOString();
-    const checkDate = date || getTodayDateString();
-    const next = problemsRef.current.map(p => {
-      if (p.id !== id) return p;
-      const existing = p.heldDates || [];
-      const nextHeld = existing.includes(checkDate) ? existing : [...existing, checkDate];
-      return {
+    const checkDate = options?.date || getTodayDateString();
+    const note = options?.note?.trim();
+    const sourceType: ProblemSourceType = options?.sourceType || 'daily';
+    const cur = problemsRef.current;
+    const target = cur.find(p => p.id === id);
+    const parentIdToCheck = target?.parentProblemId;
+
+    const handleFailureIfTesting = (p: ProblemEntry, failNote?: string): ProblemEntry => {
+      if (p.status !== 'testing') return p;
+      const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || checkDate).slice(0, 10);
+      const failedAttempt: ProblemFixAttempt = {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        fixText: p.fixNote?.trim() || 'Previous fix',
+        startedAt,
+        endedAt: checkDate,
+        outcome: 'failed',
+        daysHeld: daysBetweenDates(startedAt, checkDate),
+        ...(failNote ? { note: failNote } : {})
+      };
+      const nextP: ProblemEntry = {
         ...p,
-        heldDates: nextHeld,
-        lastHeldDate: checkDate,
+        status: 'open',
+        lastFixFailedAt: checkDate,
+        fixAttempts: [...(p.fixAttempts || []), failedAttempt],
         updatedAt: nowIso
       };
+      delete nextP.fixStartedAt;
+      return nextP;
+    };
+
+    const next = cur.map(p => {
+      if (p.id === id) {
+        const filteredCheckIns = (p.checkIns || []).filter(c => c.date !== checkDate);
+        const nextCheckIn: ProblemCheckIn = {
+          date: checkDate,
+          outcome,
+          ...(note ? { note } : {})
+        };
+        const nextCheckIns = [...filteredCheckIns, nextCheckIn].sort((a, b) =>
+          a.date.localeCompare(b.date)
+        );
+
+        const prevHeld = p.heldDates || [];
+        let nextHeldDates: string[];
+        if (outcome === 'effective') {
+          nextHeldDates = prevHeld.includes(checkDate) ? prevHeld : [...prevHeld, checkDate];
+        } else {
+          nextHeldDates = prevHeld.filter(d => d !== checkDate);
+        }
+        const sortedHeld = [...nextHeldDates].sort();
+        const latestHeld = sortedHeld[sortedHeld.length - 1];
+
+        let updated: ProblemEntry = {
+          ...p,
+          checkIns: nextCheckIns,
+          heldDates: sortedHeld,
+          ...(latestHeld ? { lastHeldDate: latestHeld } : {}),
+          updatedAt: nowIso
+        };
+        if (!latestHeld) {
+          delete updated.lastHeldDate;
+        }
+
+        if (outcome === 'failed') {
+          const alreadyLoggedToday = (p.occurrences || []).some(
+            o => o.date === checkDate && o.sourceType === sourceType && (o.note || '') === (note || '')
+          );
+          const nextOccurrences = alreadyLoggedToday
+            ? p.occurrences || []
+            : [
+                ...(p.occurrences || []),
+                {
+                  date: checkDate,
+                  sourceType,
+                  ...(options?.sourceRef ? { sourceRef: options.sourceRef } : {}),
+                  ...(note ? { note } : {})
+                }
+              ];
+          updated = {
+            ...updated,
+            status: p.status === 'solved' ? 'open' : p.status,
+            occurrences: nextOccurrences
+          };
+          delete updated.solvedAt;
+          updated = handleFailureIfTesting(updated, note);
+        }
+
+        return updated;
+      }
+
+      if (outcome === 'failed' && parentIdToCheck && p.id === parentIdToCheck) {
+        if (p.status === 'solved') {
+          const reopened: ProblemEntry = { ...p, status: 'open', updatedAt: nowIso };
+          delete reopened.solvedAt;
+          return reopened;
+        }
+        if (p.status === 'testing') {
+          return handleFailureIfTesting(p, target ? `Linked slip recurred: ${target.title}` : undefined);
+        }
+      }
+
+      return p;
     });
+
     commitProblems(next);
     markLocalMutation();
+  };
+
+  // Honest check-in ("Held today / Held this week"): logs that the reminder/fix held WITHOUT prematurely closing as Solved
+  const recordProblemHeld: StorageContextType['recordProblemHeld'] = (id, date) => {
+    recordProblemCheckIn(id, 'effective', { date });
   };
 
   const clusterIntoNewParent: StorageContextType['clusterIntoNewParent'] = (
@@ -3875,10 +4005,18 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         reps_board: 'tally'
       };
       const recurrence = recMap[destination];
-      const existing = checklistItemsRef.current.some(
+      const existingItem = checklistItemsRef.current.find(
         i => i.recurrence === recurrence && i.text.trim().toLowerCase() === normText
       );
-      if (!existing) {
+      if (existingItem) {
+        if (!existingItem.problemId) {
+          saveChecklistItems(
+            checklistItemsRef.current.map(i =>
+              i.id === existingItem.id ? { ...i, problemId: problem.id } : i
+            )
+          );
+        }
+      } else {
         let volumePerRep: number | undefined;
         let volumeUnit: string | undefined;
         if (recurrence === 'tally') {
@@ -3895,6 +4033,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           recurrence,
           completed: false,
           completedPeriods: [],
+          problemId: problem.id,
           ...(recurrence === 'tally' ? { totalCount: 0 } : {}),
           ...(volumePerRep !== undefined ? { volumePerRep, volumeUnit } : {}),
           createdAt: getTodayDateString()
@@ -4118,6 +4257,33 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (Object.keys(dayPatch).length > 0) {
       applyDailyEntryUpdate(curDate, dayPatch);
+    }
+
+    // Two-way sync: completing a dispatched One-Off checklist item linked to a Problem stamps fixTaskCompletedAt
+    const completedChecklistProblemIds: string[] = [];
+    items.forEach(chk => {
+      if (chk.recurrence !== 'none' || !chk.problemId || !chk.completed) return;
+      const prev = prevById.get(chk.id);
+      if (!prev || !prev.completed) {
+        completedChecklistProblemIds.push(chk.problemId);
+      }
+    });
+    if (completedChecklistProblemIds.length > 0) {
+      const fixSet = new Set(completedChecklistProblemIds);
+      const nowIso = new Date().toISOString();
+      let probChanged = false;
+      const nextProbs = problemsRef.current.map(p => {
+        if (!fixSet.has(p.id) || p.status === 'solved') return p;
+        probChanged = true;
+        return {
+          ...p,
+          fixTaskCompletedAt: realToday,
+          updatedAt: nowIso
+        };
+      });
+      if (probChanged) {
+        commitProblems(nextProbs);
+      }
     }
 
     markLocalMutation();
@@ -5408,10 +5574,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           new Set([...(secondary.heldDates || []), ...(primary.heldDates || [])])
         ).sort();
         const latestHeld = mergedHeldDates[mergedHeldDates.length - 1] || primary.lastHeldDate || secondary.lastHeldDate;
+        const checkInByDate = new Map<string, ProblemCheckIn>();
+        (secondary.checkIns || []).forEach(c => {
+          if (c?.date) checkInByDate.set(c.date, c);
+        });
+        (primary.checkIns || []).forEach(c => {
+          if (c?.date) checkInByDate.set(c.date, c);
+        });
+        const mergedCheckIns = Array.from(checkInByDate.values()).sort((a, b) =>
+          a.date.localeCompare(b.date)
+        );
         return {
           ...primary,
           ...(primary.classified !== undefined || secondary.classified !== undefined
             ? { classified: primary.classified ?? secondary.classified }
+            : {}),
+          ...(primary.watching !== undefined || secondary.watching !== undefined
+            ? { watching: primary.watching ?? secondary.watching }
+            : {}),
+          ...(primary.watchQuestion?.trim() || secondary.watchQuestion?.trim()
+            ? {
+                watchQuestion: primary.watchQuestion?.trim()
+                  ? primary.watchQuestion
+                  : secondary.watchQuestion
+              }
             : {}),
           ...(primary.promptNoteOnHit !== undefined || secondary.promptNoteOnHit !== undefined
             ? { promptNoteOnHit: primary.promptNoteOnHit ?? secondary.promptNoteOnHit }
@@ -5426,6 +5612,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           fixTaskCompletedAt: primary.fixTaskCompletedAt || secondary.fixTaskCompletedAt,
           verifyDays: primary.verifyDays ?? secondary.verifyDays,
           lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
+          ...(mergedCheckIns.length > 0 ? { checkIns: mergedCheckIns } : {}),
           ...(mergedHeldDates.length > 0 ? { heldDates: mergedHeldDates } : {}),
           ...(latestHeld ? { lastHeldDate: latestHeld } : {}),
           occurrences: mergedOccurrences,
@@ -5518,6 +5705,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...primary,
           ...(primary.sourceDailyDate || secondary.sourceDailyDate
             ? { sourceDailyDate: primary.sourceDailyDate || secondary.sourceDailyDate }
+            : {}),
+          ...(primary.problemId || secondary.problemId
+            ? { problemId: primary.problemId || secondary.problemId }
             : {}),
           completedPeriods: Array.from(periodSet),
           ...(mergedTotal !== undefined ? { totalCount: mergedTotal } : {})
@@ -6296,6 +6486,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateProblem,
       recordProblemRecurrence,
       recordProblemHeld,
+      recordProblemCheckIn,
       clusterIntoNewParent,
       deleteProblem,
       dispatchProblemFix,

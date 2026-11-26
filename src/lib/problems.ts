@@ -1,6 +1,9 @@
 import {
+  ChecklistItem,
   CustomProblemCategory,
+  OutcomeRootCause,
   ProblemCategory,
+  ProblemCheckInOutcome,
   ProblemColorKey,
   ProblemDispatchTarget,
   ProblemEntry,
@@ -10,7 +13,8 @@ import {
   ProblemSeverity,
   ProblemSourceType,
   ProblemStatus,
-  StrategyPlan
+  StrategyPlan,
+  WeeklyPlan
 } from '../types/schema';
 
 export interface ProblemScaleMeta {
@@ -760,11 +764,265 @@ export const getProblemActionText = (problem: ProblemEntry): string => {
 export const hasActiveAction = (problem: ProblemEntry): boolean =>
   Boolean((problem.dispatchedTo && problem.dispatchedTo.length > 0) || getProblemActionText(problem));
 
+// Explicit active Observation mode (distinct from idle backlog waiting)
+export const isProblemWatching = (problem: ProblemEntry): boolean => {
+  if (problem.status === 'solved') return false;
+  if (typeof problem.watching === 'boolean') return problem.watching;
+  // Backward-compatible default: Top 3 focus items without an active solution default to Watching
+  return Boolean(problem.isTopConstraint && !hasActiveReminder(problem) && !hasActiveAction(problem));
+};
+
 // Per-problem toggle: ask for a 1-line context sentence when logging a hit
-// Defaults ON for Top 3 Focus constraints, OFF for everything else, always overridable per problem!
+// Defaults ON for Top 3 Focus constraints & actively Observed items, OFF for everything else!
 export const shouldPromptNoteOnHit = (problem: ProblemEntry): boolean => {
   if (typeof problem.promptNoteOnHit === 'boolean') return problem.promptNoteOnHit;
-  return Boolean(problem.isTopConstraint);
+  return Boolean(problem.isTopConstraint || isProblemWatching(problem));
+};
+
+export const getProblemCheckInForDate = (
+  problem: ProblemEntry,
+  date: string
+): ProblemCheckInOutcome | null => {
+  const hit = (problem.checkIns || []).find(c => c.date === date);
+  if (hit) return hit.outcome;
+  if ((problem.heldDates || []).includes(date)) return 'effective';
+  return null;
+};
+
+export const missCauseToProblemCategory = (cause?: OutcomeRootCause): ProblemCategory => {
+  if (cause === 'energy') return 'energy';
+  if (cause === 'skill') return 'skill';
+  if (cause === 'clarity' || cause === 'scope' || cause === 'strategy') return 'strategy';
+  if (cause === 'time' || cause === 'external') return 'logistics';
+  return 'mindset';
+};
+
+export type PulseDayState = 'hit' | 'effective' | 'not_triggered' | 'quiet';
+
+export interface ProblemPulseDay {
+  date: string;
+  state: PulseDayState;
+}
+
+export interface ProblemPulseSummary {
+  days: ProblemPulseDay[]; // 14 days oldest -> newest ending at todayDate
+  hits7d: number;
+  hits14d: number;
+  effective14d: number;
+  daysSinceLastHit: number;
+  trend: 'hot' | 'active' | 'cooling' | 'quiet';
+  trendLabel: string;
+}
+
+const shiftIsoDate = (dateStr: string, deltaDays: number): string => {
+  const d = new Date(`${dateStr.slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateStr.slice(0, 10);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+export const getProblemPulse = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  todayDate: string
+): ProblemPulseSummary => {
+  const hitDateCounts = new Map<string, number>();
+  const recordDate = (d: string) => {
+    const clean = (d || '').slice(0, 10);
+    if (!clean) return;
+    hitDateCounts.set(clean, (hitDateCounts.get(clean) || 0) + 1);
+  };
+  (problem.occurrences || []).forEach(o => recordDate(o.date));
+  getDescendantProblems(allProblems, problem.id).forEach(desc => {
+    (desc.occurrences || []).forEach(o => recordDate(o.date));
+  });
+
+  const effectiveDates = new Set<string>(problem.heldDates || []);
+  const notTriggeredDates = new Set<string>();
+  const failedCheckInDates = new Set<string>();
+  (problem.checkIns || []).forEach(c => {
+    if (c.outcome === 'effective') effectiveDates.add(c.date);
+    else if (c.outcome === 'not_triggered') notTriggeredDates.add(c.date);
+    else if (c.outcome === 'failed') failedCheckInDates.add(c.date);
+  });
+
+  const days: ProblemPulseDay[] = [];
+  let hits7d = 0;
+  let hits14d = 0;
+  let effective14d = 0;
+
+  for (let offset = -13; offset <= 0; offset++) {
+    const dStr = shiftIsoDate(todayDate, offset);
+    const count = hitDateCounts.get(dStr) || 0;
+    const isHit = count > 0 || failedCheckInDates.has(dStr);
+    const isEffective = !isHit && effectiveDates.has(dStr);
+    const isNotTriggered = !isHit && !isEffective && notTriggeredDates.has(dStr);
+
+    if (isHit) {
+      const addCount = Math.max(1, count);
+      hits14d += addCount;
+      if (offset >= -6) hits7d += addCount;
+    } else if (isEffective) {
+      effective14d += 1;
+    }
+
+    days.push({
+      date: dStr,
+      state: isHit
+        ? 'hit'
+        : isEffective
+        ? 'effective'
+        : isNotTriggered
+        ? 'not_triggered'
+        : 'quiet'
+    });
+  }
+
+  const lastHit = getLastOccurrenceDate(problem);
+  const daysSinceLastHit = daysBetweenDates(lastHit, todayDate);
+
+  let trend: ProblemPulseSummary['trend'] = 'quiet';
+  let trendLabel = `Quiet ${daysSinceLastHit}d`;
+  if (hits7d >= 2) {
+    trend = 'hot';
+    trendLabel = `Hot (${hits7d}× in 7d)`;
+  } else if (hits7d === 1) {
+    trend = 'active';
+    trendLabel = 'Hit this week';
+  } else if (daysSinceLastHit >= 14) {
+    trend = 'quiet';
+    trendLabel = `Quiet ${daysSinceLastHit}d`;
+  } else if (hits14d > 0) {
+    trend = 'cooling';
+    trendLabel = 'Cooling (0× in 7d)';
+  }
+
+  return {
+    days,
+    hits7d,
+    hits14d,
+    effective14d,
+    daysSinceLastHit,
+    trend,
+    trendLabel
+  };
+};
+
+export interface LinkedProblemAction {
+  kind: 'weekly' | 'oneoff' | 'daily_habit' | 'weekly_habit' | 'reps';
+  id: string;
+  label: string;
+  detail: string;
+  completed?: boolean;
+  consistencyPct?: number;
+  doneCount?: number;
+  windowSize?: number;
+  reps?: number;
+}
+
+export const resolveProblemLinkedActions = (
+  problemId: string,
+  weeklyPlans: Record<string, WeeklyPlan>,
+  checklistItems: ChecklistItem[],
+  todayDate: string,
+  selectedWeekId: string
+): LinkedProblemAction[] => {
+  const results: LinkedProblemAction[] = [];
+
+  const sortedWeeks = Object.values(weeklyPlans).sort((a, b) => b.weekNumber - a.weekNumber);
+  sortedWeeks.forEach(wp => {
+    (wp.tasks || []).forEach(task => {
+      if (task.problemId === problemId) {
+        results.push({
+          kind: 'weekly',
+          id: task.id,
+          label: task.text,
+          detail: `W${wp.weekNumber} · ${task.completed ? 'Done ✓' : 'Open'}`,
+          completed: task.completed
+        });
+      }
+      (task.subTasks || []).forEach(sub => {
+        if (sub.problemId === problemId) {
+          results.push({
+            kind: 'weekly',
+            id: sub.id,
+            label: sub.text,
+            detail: `W${wp.weekNumber} · ${sub.completed ? 'Done ✓' : 'Open'}`,
+            completed: sub.completed
+          });
+        }
+      });
+    });
+  });
+
+  const curWeekNum = parseInt(selectedWeekId.replace('week_', ''), 10) || 1;
+
+  checklistItems.forEach(item => {
+    if (item.problemId !== problemId) return;
+    if (item.recurrence === 'none') {
+      results.push({
+        kind: 'oneoff',
+        id: item.id,
+        label: item.text,
+        detail: item.completed ? 'One-Off · Done ✓' : 'One-Off · Open',
+        completed: item.completed
+      });
+    } else if (item.recurrence === 'daily') {
+      const created = (item.createdAt || todayDate).slice(0, 10);
+      const sinceCreated = Math.max(1, daysBetweenDates(created, todayDate) + 1);
+      const windowSize = Math.min(14, sinceCreated);
+      const periodSet = new Set(item.completedPeriods || []);
+      let doneCount = 0;
+      for (let i = 0; i < windowSize; i++) {
+        if (periodSet.has(shiftIsoDate(todayDate, -i))) doneCount++;
+      }
+      const consistencyPct = Math.round((doneCount / windowSize) * 100);
+      results.push({
+        kind: 'daily_habit',
+        id: item.id,
+        label: item.text,
+        detail: `Daily Habit · ${consistencyPct}% (${doneCount}/${windowSize}d)`,
+        consistencyPct,
+        doneCount,
+        windowSize
+      });
+    } else if (item.recurrence === 'weekly') {
+      const windowSize = Math.min(6, Math.max(1, curWeekNum));
+      const periodSet = new Set(item.completedPeriods || []);
+      let doneCount = 0;
+      for (let i = 0; i < windowSize; i++) {
+        const wk = curWeekNum - i;
+        if (wk >= 1 && periodSet.has(`week_${wk}`)) doneCount++;
+      }
+      const consistencyPct = Math.round((doneCount / windowSize) * 100);
+      results.push({
+        kind: 'weekly_habit',
+        id: item.id,
+        label: item.text,
+        detail: `Weekly Habit · ${consistencyPct}% (${doneCount}/${windowSize}w)`,
+        consistencyPct,
+        doneCount,
+        windowSize
+      });
+    } else if (item.recurrence === 'tally') {
+      const reps =
+        typeof item.totalCount === 'number'
+          ? Math.max(0, Math.floor(item.totalCount))
+          : (item.completedPeriods || []).length;
+      results.push({
+        kind: 'reps',
+        id: item.id,
+        label: item.text,
+        detail: `${reps} ${reps === 1 ? 'rep' : 'reps'}`,
+        reps
+      });
+    }
+  });
+
+  return results;
 };
 
 // Explicit 4-stage classification helper (backward-compatible with legacy records)

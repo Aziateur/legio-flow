@@ -6,12 +6,11 @@ import {
 } from '../../types/schema';
 import { INITIAL_PROBLEM_CATEGORIES } from '../../types/defaults';
 import {
-  DISPATCH_TARGET_LABELS,
   PROBLEM_COLOR_STYLES,
   SEVERITY_VISUAL,
   clusterHasTag,
   computeProblemPriorityScore,
-  countClusterNotes,
+  getClusterOccurrenceTimeline,
   getClusterTotalHits,
   getFixVerificationProgress,
   getLastOccurrenceDate,
@@ -22,8 +21,10 @@ import {
   hasActiveReminder,
   hasExistingParent,
   isProblemClassified,
+  isProblemWatching,
   normalizeTag,
   resolveCategoryMeta,
+  resolveProblemLinkedActions,
   resolveProblemRoadmapPlanId,
   severityToImpact,
   shouldPromptNoteOnHit,
@@ -33,6 +34,7 @@ import { useStorage } from '../../context/StorageContext';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import { ProblemItemRow } from './ProblemItemRow';
+import { ProblemPulseBar } from './ProblemPulseBar';
 import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
@@ -58,7 +60,7 @@ import {
 } from 'lucide-react';
 
 type MainTabMode = 'classify' | 'backlog' | 'resolved';
-type ResponseFilter = 'all' | 'observing' | 'reminder' | 'action';
+type ResponseFilter = 'all' | 'watching' | 'reminder' | 'action' | 'waiting';
 type LedgerSort = 'severity' | 'frequency' | 'recent';
 
 const COLOR_KEYS: ProblemColorKey[] = [
@@ -83,6 +85,8 @@ export const ProblemsLedgerView: React.FC = () => {
     problemSettings,
     saveProblemSettings,
     strategyPlans,
+    weeklyPlans,
+    checklistItems,
     selectedDate,
     selectedWeekId,
     addProblem,
@@ -116,7 +120,7 @@ export const ProblemsLedgerView: React.FC = () => {
   const [topNoteDraft, setTopNoteDraft] = useState('');
   const [topLoggedId, setTopLoggedId] = useState<string | null>(null);
 
-  // Focused Single-Problem Workbench Modal
+  // Focused Single-Problem Case File Drawer
   const [workbenchState, setWorkbenchState] = useState<{
     problemId: string;
     initialTab?: WorkbenchTab;
@@ -172,7 +176,6 @@ export const ProblemsLedgerView: React.FC = () => {
       if (p.status === 'solved') {
         resolved.push(p);
       } else if (topFocusIds.has(p.id)) {
-        // Lives exclusively in Top 3 Active Focus above (no split-brain duplicate!)
         return;
       } else if (!isProblemClassified(problems, p)) {
         toClassify.push(p);
@@ -184,7 +187,6 @@ export const ProblemsLedgerView: React.FC = () => {
     return { toClassify, backlog, resolved };
   }, [topLevelProblems, problems, topFocusIds]);
 
-  // Candidates available to pin into an open Top 3 slot
   const pinnableCandidates = useMemo(
     () =>
       [...buckets.backlog].sort(
@@ -193,7 +195,6 @@ export const ProblemsLedgerView: React.FC = () => {
     [buckets.backlog, problems]
   );
 
-  // Root-cause breakdown across classified active problems
   const breakdown = useMemo(() => {
     const counts: Record<string, number> = {};
     let total = 0;
@@ -220,11 +221,13 @@ export const ProblemsLedgerView: React.FC = () => {
 
     const list = pool.filter(p => {
       if (activeTab === 'backlog') {
+        const isWatch = isProblemWatching(p);
         const hasRem = hasActiveReminder(p);
         const hasAct = hasActiveAction(p);
-        if (responseFilter === 'observing' && (hasRem || hasAct)) return false;
+        if (responseFilter === 'watching' && !isWatch) return false;
         if (responseFilter === 'reminder' && !hasRem) return false;
         if (responseFilter === 'action' && !hasAct) return false;
+        if (responseFilter === 'waiting' && (isWatch || hasRem || hasAct)) return false;
       }
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
       if (severityFilter !== 'all') {
@@ -236,12 +239,15 @@ export const ProblemsLedgerView: React.FC = () => {
       if (tagFilter !== 'all' && !clusterHasTag(problems, p, tagFilter)) return false;
       if (q) {
         const hitTitle = p.title.toLowerCase().includes(q);
+        const hitWatch = (p.watchQuestion || '').toLowerCase().includes(q);
         const hitFix = (p.fixNote || '').toLowerCase().includes(q);
         const hitRem = (p.reminderText || '').toLowerCase().includes(q);
         const hitCause = (p.rootCause || '').toLowerCase().includes(q);
         const hitTrigger = (p.trigger || '').toLowerCase().includes(q);
         const hitTag = (p.tags || []).some(t => t.toLowerCase().includes(q));
-        if (!hitTitle && !hitFix && !hitRem && !hitCause && !hitTrigger && !hitTag) return false;
+        if (!hitTitle && !hitWatch && !hitFix && !hitRem && !hitCause && !hitTrigger && !hitTag) {
+          return false;
+        }
       }
       return true;
     });
@@ -274,7 +280,6 @@ export const ProblemsLedgerView: React.FC = () => {
     sortBy
   ]);
 
-  // Visual severity tiers for Backlog when sorted by severity (instant visual triage!)
   const backlogTierGroups = useMemo(() => {
     if (activeTab !== 'backlog' || sortBy !== 'severity' || searchQuery.trim().length > 0) {
       return null;
@@ -289,7 +294,6 @@ export const ProblemsLedgerView: React.FC = () => {
     ].filter(g => g.items.length > 0);
   }, [activeTab, sortBy, searchQuery, displayedList]);
 
-  // Zero-friction raw capture — NO severity/category/scale fields at capture time!
   const handleQuickCapture = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = quickTitle.trim();
@@ -356,7 +360,6 @@ export const ProblemsLedgerView: React.FC = () => {
     setTimeout(() => setTopLoggedId(null), 1400);
   };
 
-  // Custom Category CRUD
   const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
     const label = newCatLabel.trim();
@@ -389,7 +392,7 @@ export const ProblemsLedgerView: React.FC = () => {
     (searchQuery.trim() ? 1 : 0);
 
   // ================================================================
-  // LVL 2 LITE MODE: Simple Friction Inbox (Zero Overwhelm)
+  // LVL 2 LITE MODE
   // ================================================================
   if (!caps.problemsConstraintEngine) {
     const activeLite = topLevelProblems
@@ -552,7 +555,7 @@ export const ProblemsLedgerView: React.FC = () => {
 
           <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
             <span>
-              Ready for Top 3 Active Focus, 4-stage problem solving, Reminders, and Observation timelines?
+              Ready for Top 3 Active Focus, Observing mode, 14-day pulse, Reminders &amp; live task links?
             </span>
             <button
               type="button"
@@ -606,7 +609,7 @@ export const ProblemsLedgerView: React.FC = () => {
               return (
                 <div
                   key={`slot_${slotIdx}`}
-                  className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col justify-between space-y-3 min-h-[168px]"
+                  className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col justify-between space-y-3 min-h-[180px]"
                 >
                   <div className="flex items-center space-x-2">
                     <span className="w-6 h-6 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center font-mono text-xs font-extrabold text-slate-500">
@@ -651,31 +654,34 @@ export const ProblemsLedgerView: React.FC = () => {
             const sevVis = SEVERITY_VISUAL[sev];
             const cat = resolveCategoryMeta(prob.category, problemCategories);
             const hits = getClusterTotalHits(problems, prob);
-            const notes = countClusterNotes(problems, prob);
             const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
             const failed = Boolean(prob.lastFixFailedAt && prob.status === 'open');
             const reminderText = getProblemReminderText(prob);
             const actionText = getProblemActionText(prob);
             const remActive = hasActiveReminder(prob);
             const actActive = hasActiveAction(prob);
+            const watchingActive = isProblemWatching(prob);
             const noteToggleOn = shouldPromptNoteOnHit(prob);
             const linkedRmId = resolveProblemRoadmapPlanId(prob, strategyPlans);
             const linkedRm = linkedRmId ? strategyPlans.find(sp => sp.id === linkedRmId) : undefined;
+            const latestClue = getClusterOccurrenceTimeline(problems, prob).find(o => o.note?.trim());
+            const linkedActs = resolveProblemLinkedActions(
+              prob.id,
+              weeklyPlans,
+              checklistItems,
+              todayDate,
+              selectedWeekId
+            );
 
             return (
               <div
                 key={prob.id}
                 className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 transition-all ${sevVis.cardTintClass} ${sevVis.leftBarClass}`}
               >
-                {/* Header & Title (Click opens Workbench directly!) */}
+                {/* Header & Title (Click opens Case File!) */}
                 <div
                   className="space-y-2.5 cursor-pointer"
-                  onClick={() =>
-                    setWorkbenchState({
-                      problemId: prob.id,
-                      initialTab: remActive || actActive ? 'solution' : 'observations'
-                    })
-                  }
+                  onClick={() => setWorkbenchState({ problemId: prob.id })}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -706,6 +712,13 @@ export const ProblemsLedgerView: React.FC = () => {
                     {prob.title}
                   </p>
 
+                  <ProblemPulseBar
+                    problem={prob}
+                    allProblems={problems}
+                    todayDate={todayDate}
+                    compact
+                  />
+
                   {linkedRm && (
                     <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/90">
                       <MapIcon className="w-3 h-3 shrink-0" />
@@ -713,8 +726,24 @@ export const ProblemsLedgerView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Active Response Summary (Clear & Human) */}
+                  {/* Active Response Summary */}
                   <div className="space-y-1.5 text-xs">
+                    {watchingActive && (
+                      <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/25 text-sky-100 space-y-1">
+                        <div className="flex items-start space-x-1.5 text-[11px] font-semibold">
+                          <Eye className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                          <span>
+                            {prob.watchQuestion?.trim() || 'Observing — logging clues across Daily & GWS'}
+                          </span>
+                        </div>
+                        {latestClue?.note && (
+                          <div className="pl-5 text-[10px] text-slate-300 truncate">
+                            {latestClue.date.slice(5)}: &ldquo;{latestClue.note}&rdquo;
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {remActive && (
                       <div className="flex items-start space-x-1.5 p-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-100">
                         <Bell className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
@@ -727,32 +756,42 @@ export const ProblemsLedgerView: React.FC = () => {
                       </div>
                     )}
 
-                    {actActive && (
-                      <div className="flex items-start space-x-1.5 p-2 rounded-xl bg-sky-500/10 border border-sky-500/25 text-sky-100">
-                        <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
-                        <span className="leading-snug text-[11px]">
-                          {actionText || 'Action installed'}
-                          {(prob.dispatchedTo || []).length > 0 && (
-                            <span className="block text-[10px] text-emerald-300 font-semibold mt-0.5">
-                              In {(prob.dispatchedTo || []).map(d => DISPATCH_TARGET_LABELS[d]).join(', ')}
-                            </span>
-                          )}
-                        </span>
+                    {(actActive || linkedActs.length > 0) && (
+                      <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/25 text-sky-100 space-y-1">
+                        {actionText && (
+                          <div className="flex items-start space-x-1.5 leading-snug text-[11px]">
+                            <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                            <span>{actionText}</span>
+                          </div>
+                        )}
+                        {linkedActs.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pl-5">
+                            {linkedActs.map(act => (
+                              <span
+                                key={`${act.kind}_${act.id}`}
+                                className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                                  act.completed
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                                    : 'bg-slate-900/90 text-slate-300 border-slate-700'
+                                }`}
+                              >
+                                {act.detail}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {!remActive && !actActive && (
-                      <div className="flex items-center space-x-1.5 p-2 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-300">
-                        <Eye className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                        <span>
-                          Observing · {notes} {notes === 1 ? 'note' : 'notes'} — click to design solution
-                        </span>
+                    {!watchingActive && !remActive && !actActive && linkedActs.length === 0 && (
+                      <div className="text-[11px] text-slate-400 p-2 rounded-xl bg-slate-900/70 border border-slate-800">
+                        Click to turn on Observing, set a Reminder, or link an Action
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Inline Hit-Note Input (when user clicked "Happened again" & note toggle is ON) */}
+                {/* Inline Hit-Note Input */}
                 {topNoteOpenId === prob.id && (
                   <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
                     <input
@@ -770,7 +809,7 @@ export const ProblemsLedgerView: React.FC = () => {
                           setTopNoteDraft('');
                         }
                       }}
-                      placeholder="What triggered it this time? (Enter)..."
+                      placeholder="What triggered it or happened? (Enter)..."
                       className="w-full bg-slate-950 border border-sky-500/45 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
                     />
                     <div className="flex items-center justify-end gap-1.5">
@@ -836,7 +875,7 @@ export const ProblemsLedgerView: React.FC = () => {
                             : 'bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 hover:border-orange-500/40'
                         }`}
                       >
-                        {topLoggedId === prob.id ? 'Logged ✓' : 'Happened again'}
+                        {topLoggedId === prob.id ? 'Logged ✓' : watchingActive ? '+ Log clue' : 'Happened again'}
                       </button>
 
                       <button
@@ -861,12 +900,7 @@ export const ProblemsLedgerView: React.FC = () => {
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() =>
-                          setWorkbenchState({
-                            problemId: prob.id,
-                            initialTab: remActive || actActive ? 'solution' : 'observations'
-                          })
-                        }
+                        onClick={() => setWorkbenchState({ problemId: prob.id })}
                         className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-bold"
                       >
                         Open
@@ -894,7 +928,6 @@ export const ProblemsLedgerView: React.FC = () => {
       {/* 2. ZERO-FRICTION CAPTURE + 3 CLEAR TABS (NO DUPLICATES!)         */}
       {/* ================================================================ */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        {/* Pure 1-Line Capture (Classify Later!) */}
         <form onSubmit={handleQuickCapture} className="space-y-2">
           <div className="flex items-center gap-2">
             <input
@@ -963,13 +996,14 @@ export const ProblemsLedgerView: React.FC = () => {
             </div>
 
             {activeTab === 'backlog' && (
-              <div className="flex items-center gap-1 text-[11px]">
+              <div className="flex flex-wrap items-center gap-1 text-[11px]">
                 {(
                   [
                     { id: 'all', label: 'All' },
-                    { id: 'observing', label: 'Observing' },
+                    { id: 'watching', label: 'Watching' },
                     { id: 'reminder', label: 'Reminders' },
-                    { id: 'action', label: 'Actions' }
+                    { id: 'action', label: 'Actions' },
+                    { id: 'waiting', label: 'Waiting' }
                   ] as const
                 ).map(st => (
                   <button
@@ -1018,7 +1052,7 @@ export const ProblemsLedgerView: React.FC = () => {
           </div>
         </div>
 
-        {/* SLIM ROOT-CAUSE BREAKDOWN BAR (Shown in Backlog when enabled) */}
+        {/* SLIM ROOT-CAUSE BREAKDOWN BAR */}
         {activeTab === 'backlog' && showBreakdownBar && breakdown.total > 0 && (
           <div className="space-y-2">
             <div className="h-2 w-full rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex">
@@ -1088,7 +1122,7 @@ export const ProblemsLedgerView: React.FC = () => {
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search problems, reminders, actions, notes, tags..."
+                  placeholder="Search problems, watch questions, reminders, actions, tags..."
                   className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/40 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
                 />
               </div>
@@ -1177,7 +1211,7 @@ export const ProblemsLedgerView: React.FC = () => {
               <div>
                 <div className="font-extrabold text-sm text-slate-100">Customize Problem Log</div>
                 <p className="text-[11px] text-slate-400">
-                  Configure your Top Focus limit, verification window, where Reminders appear, and custom categories.
+                  Configure Top Focus limit, verification window, where Reminders &amp; Watching strips appear, and categories.
                 </p>
               </div>
               <button
@@ -1241,17 +1275,17 @@ export const ProblemsLedgerView: React.FC = () => {
                   },
                   {
                     key: 'showPreFlightInDaily' as const,
-                    label: 'Show Reminders at top of Daily Plan',
+                    label: 'Show Reminders & Watching at top of Daily Plan',
                     val: problemSettings.showPreFlightInDaily !== false
                   },
                   {
                     key: 'showPreFlightInGws' as const,
-                    label: 'Show Reminders before GWS sprints',
+                    label: 'Show Reminders & Watching before GWS sprints',
                     val: problemSettings.showPreFlightInGws !== false
                   },
                   {
                     key: 'showPreFlightInWeekly' as const,
-                    label: 'Show Reminders at top of Weekly Plan',
+                    label: 'Show Reminders & Watching at top of Weekly Plan',
                     val: problemSettings.showPreFlightInWeekly !== false
                   }
                 ].map(toggle => (
@@ -1412,7 +1446,7 @@ export const ProblemsLedgerView: React.FC = () => {
           <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/25 text-xs text-slate-300 flex items-center space-x-2">
             <Inbox className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              End-of-day / weekly triage: click <strong className="text-amber-300">Classify</strong> to rate how bad it is &amp; choose a response, <strong className="text-slate-100">Merge into</strong> an existing problem, or <strong className="text-slate-100">Discard</strong> one-off noise.
+              End-of-day / weekly triage: click <strong className="text-amber-300">Classify</strong> to rate how bad it is &amp; choose whether to Watch or Solve, <strong className="text-slate-100">Merge into</strong> an existing problem, or <strong className="text-slate-100">Discard</strong> noise.
             </span>
           </div>
         )}
@@ -1491,7 +1525,7 @@ export const ProblemsLedgerView: React.FC = () => {
         )}
       </div>
 
-      {/* FOCUSED SINGLE-PROBLEM WORKBENCH MODAL */}
+      {/* SINGLE-CANVAS CASE FILE DRAWER */}
       {workbenchState && (
         <ProblemWorkbenchModal
           problemId={workbenchState.problemId}

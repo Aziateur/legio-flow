@@ -66,9 +66,11 @@ import { getLevelCapabilities } from '../../lib/levelFeatures';
 import {
   formatProblemsForReviewText,
   hasExistingParent,
+  missCauseToProblemCategory,
   problemOccurredInRange,
   problemOccurredOnDate
 } from '../../lib/problems';
+import { resolveDailyPriorityContext } from '../../lib/planHierarchy';
 import { 
   FileText, 
   Timer, 
@@ -280,6 +282,7 @@ export const ReviewHub: React.FC = () => {
 
   const caps = getLevelCapabilities(systemLevel);
   const [preferFastDailyReview, setPreferFastDailyReview] = useState(false);
+  const [trackedMissIds, setTrackedMissIds] = useState<Record<string, string>>({});
   const currentDailyEntry = getEntryForDate(selectedDate);
   const currentWeeklyPlan = weeklyPlans[selectedWeekId] || weeklyPlans['week_1'] || Object.values(weeklyPlans)[0];
 
@@ -2605,6 +2608,56 @@ export const ReviewHub: React.FC = () => {
                                     placeholder="What did you lack (skill, time, energy...) or what broke?"
                                     className="flex-1 min-w-0 bg-slate-900/80 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2.5 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
                                   />
+                                  {(audit.rootCause || audit.note?.trim()) && (
+                                    trackedMissIds[`d_${prio.id}`] ? (
+                                      <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/35 text-[10px] font-bold shrink-0">
+                                        ✓ In Problems
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const noteTrim = (audit.note || '').trim();
+                                          const causeMeta = audit.rootCause ? getMissCauseMeta(audit.rootCause) : undefined;
+                                          const candidateTitle =
+                                            noteTrim.length >= 4
+                                              ? noteTrim
+                                              : `Missed: ${prio.text.trim()}${causeMeta ? ` (${causeMeta.shortLabel})` : ''}`;
+                                          const existing = problems.find(
+                                            p => p.title.trim().toLowerCase() === candidateTitle.toLowerCase()
+                                          );
+                                          const ctx = resolveDailyPriorityContext(prio, weeklyPlans, strategyPlans, selectedWeekId);
+                                          const clueText = `Missed "${prio.text.trim()}" — ${causeMeta?.label || 'Unfinished'}${noteTrim ? `: ${noteTrim}` : ''}`;
+                                          if (existing) {
+                                            recordProblemRecurrence(existing.id, {
+                                              date: selectedDate,
+                                              sourceType: 'daily',
+                                              sourceRef: selectedDate,
+                                              note: clueText
+                                            });
+                                          } else {
+                                            addProblem({
+                                              title: candidateTitle,
+                                              category: missCauseToProblemCategory(audit.rootCause),
+                                              classified: false,
+                                              scale: 'friction',
+                                              severity: 2,
+                                              ...(ctx.roadmapPlan?.id ? { roadmapPlanId: ctx.roadmapPlan.id } : {}),
+                                              sourceType: 'daily',
+                                              date: selectedDate,
+                                              sourceRef: selectedDate,
+                                              note: clueText
+                                            });
+                                          }
+                                          setTrackedMissIds(prev => ({ ...prev, [`d_${prio.id}`]: candidateTitle }));
+                                        }}
+                                        className="px-2 py-1 rounded-lg bg-orange-500/15 hover:bg-orange-500/25 text-orange-300 border border-orange-500/35 text-[10px] font-bold shrink-0 transition-colors"
+                                        title="Turn this miss diagnosis into a tracked Problem (inherits Roadmap & keeps your diagnosis as the first clue)"
+                                      >
+                                        + Track as Problem
+                                      </button>
+                                    )
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -3403,6 +3456,55 @@ export const ReviewHub: React.FC = () => {
                             placeholder="Diagnose what was missing (skill, time, energy...)..."
                             className="flex-1 min-w-0 bg-slate-900/80 border border-slate-800 focus:border-amber-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none"
                           />
+                          {(audit.rootCause || audit.note?.trim()) && (
+                            trackedMissIds[`w_${t.id}`] ? (
+                              <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/35 text-[10px] font-bold shrink-0">
+                                ✓ In Problems
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const noteTrim = (audit.note || '').trim();
+                                  const causeMeta = audit.rootCause ? getMissCauseMeta(audit.rootCause) : undefined;
+                                  const candidateTitle =
+                                    noteTrim.length >= 4
+                                      ? noteTrim
+                                      : `Missed: ${t.text.trim()}${causeMeta ? ` (${causeMeta.shortLabel})` : ''}`;
+                                  const existing = problems.find(
+                                    p => p.title.trim().toLowerCase() === candidateTitle.toLowerCase()
+                                  );
+                                  const clueText = `Missed weekly goal "${t.text.trim()}" — ${causeMeta?.label || 'Unfinished'}${noteTrim ? `: ${noteTrim}` : ''}`;
+                                  if (existing) {
+                                    recordProblemRecurrence(existing.id, {
+                                      date: targetPlanForReview.endDate,
+                                      sourceType: 'weekly',
+                                      sourceRef: targetPlanForReview.id,
+                                      note: clueText
+                                    });
+                                  } else {
+                                    addProblem({
+                                      title: candidateTitle,
+                                      category: missCauseToProblemCategory(audit.rootCause),
+                                      classified: false,
+                                      scale: 'friction',
+                                      severity: 3,
+                                      ...(t.strategyPlanId ? { roadmapPlanId: t.strategyPlanId } : {}),
+                                      sourceType: 'weekly',
+                                      date: targetPlanForReview.endDate,
+                                      sourceRef: targetPlanForReview.id,
+                                      note: clueText
+                                    });
+                                  }
+                                  setTrackedMissIds(prev => ({ ...prev, [`w_${t.id}`]: candidateTitle }));
+                                }}
+                                className="px-2 py-1 rounded-lg bg-orange-500/15 hover:bg-orange-500/25 text-orange-300 border border-orange-500/35 text-[10px] font-bold shrink-0 transition-colors"
+                                title="Turn this miss diagnosis into a tracked Problem"
+                              >
+                                + Track as Problem
+                              </button>
+                            )
+                          )}
                         </div>
                       )}
 
