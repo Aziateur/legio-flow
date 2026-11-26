@@ -362,6 +362,7 @@ export interface ChecklistItem {
   scheduleWeekday?: number; // Optional weekly schedule day: 1=Mon..6=Sat, 0=Sun (undefined = Any day)
   scheduleDayOfMonth?: number | 'last'; // Optional monthly schedule day: 1..28 or 'last' (undefined = Any day)
   createdAt?: string; // YYYY-MM-DD when item was created (never retroactively marked missed before this date)
+  sourceDailyDate?: string; // YYYY-MM-DD when auto-captured from a standalone Daily Mission task
 }
 
 export type AllowancePeriod = 'daily' | 'weekly' | 'monthly';

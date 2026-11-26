@@ -83,13 +83,22 @@ const padPriorityRows = (nonEmptyRows: PriorityRow[], minSlots = 3): PriorityRow
   const rows = [...nonEmptyRows];
   while (rows.length < minSlots) {
     rows.push({
-      id: `prio_slot_${rows.length}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `prio_slot_${Date.now().toString(36)}_${rows.length}_${Math.random().toString(36).slice(2, 6)}`,
       text: '',
       completed: false
     });
   }
   return rows;
 };
+
+const getPriorityCoreSig = (rows: PriorityRow[]): string =>
+  rows
+    .filter(r => r.text.trim().length > 0)
+    .map(
+      r =>
+        `${r.id}|${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}|${r.pushedToDate || ''}|${r.pushedFromDate || ''}|${r.carriedDiagnosisCause || ''}|${r.carriedDiagnosisNote || ''}`
+    )
+    .join('\n');
 
 const getPriorityCanonicalSig = (rows: PriorityRow[]): string =>
   rows
@@ -109,7 +118,7 @@ interface ModularCardProps {
 }
 
 export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange, onAction }) => {
-  const { weeklyPlans, strategyPlans, dailyEntries, selectedWeekId } = useStorage();
+  const { weeklyPlans, strategyPlans, dailyEntries, checklistItems, selectedWeekId } = useStorage();
   const [groupPrioritiesByGoal, setGroupPrioritiesByGoal] = useState(false);
   const [localPriorityRows, setLocalPriorityRows] = useState<PriorityRow[]>(() =>
     field.type === 'numbered_list' ? padPriorityRows(parsePriorityValueToNonEmptyRows(value), 3) : []
@@ -124,6 +133,20 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
     const incomingSig = getPriorityCanonicalSig(incomingNonEmpty);
     const currentSig = getPriorityCanonicalSig(localPriorityRowsRef.current);
     if (incomingSig !== currentSig) {
+      // If only checklistItemId was auto-attached while typing, patch it in-place so cursor,
+      // trailing spaces, and open slots are never disturbed.
+      if (getPriorityCoreSig(incomingNonEmpty) === getPriorityCoreSig(localPriorityRowsRef.current)) {
+        const byId = new Map(incomingNonEmpty.map(r => [r.id, r]));
+        const patched = localPriorityRowsRef.current.map(r => {
+          const match = byId.get(r.id);
+          return match && match.checklistItemId !== r.checklistItemId
+            ? { ...r, checklistItemId: match.checklistItemId }
+            : r;
+        });
+        localPriorityRowsRef.current = patched;
+        setLocalPriorityRows(patched);
+        return;
+      }
       const nextPadded = padPriorityRows(incomingNonEmpty, 3);
       localPriorityRowsRef.current = nextPadded;
       setLocalPriorityRows(nextPadded);
@@ -367,18 +390,23 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
         };
 
         const handleItemChange = (index: number, text: string) => {
-          const next = displayRows.map((r, i) =>
-            i === index
-              ? {
-                  ...r,
-                  text,
-                  // Clear link & completed flag only when the user completely clears the row text
-                  completed: text.trim() ? r.completed : false,
-                  weeklyTaskId: text.trim() ? r.weeklyTaskId : undefined,
-                  subTaskId: text.trim() ? r.subTaskId : undefined
-                }
-              : r
-          );
+          const next = displayRows.map((r, i) => {
+            if (i !== index) return r;
+            const trimmed = text.trim();
+            const wasFilledNowCleared = !trimmed && r.text.trim().length > 0;
+            return {
+              ...r,
+              id: wasFilledNowCleared
+                ? `prio_slot_${Date.now().toString(36)}_${index}_${Math.random().toString(36).slice(2, 6)}`
+                : r.id,
+              text,
+              // Clear link & completed flag only when the user completely clears the row text
+              completed: trimmed ? r.completed : false,
+              weeklyTaskId: trimmed ? r.weeklyTaskId : undefined,
+              subTaskId: trimmed ? r.subTaskId : undefined,
+              checklistItemId: trimmed ? r.checklistItemId : undefined
+            };
+          });
           localPriorityRowsRef.current = next;
           setLocalPriorityRows(next);
           serializeAndSync(next);
@@ -432,6 +460,12 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
             row.text.trim().length > 0 && (row.weeklyTaskId || row.subTaskId)
               ? resolveDailyPriorityContext(row, weeklyPlans, strategyPlans, selectedWeekId)
               : null;
+          const linkedChecklistItem =
+            row.text.trim().length > 0 && row.checklistItemId
+              ? checklistItems.find(c => c.id === row.checklistItemId)
+              : undefined;
+          const isOneOffBacked =
+            !ctx?.roadmapPlan && !ctx?.weeklyTask && linkedChecklistItem?.recurrence === 'none';
           const carriedDiag =
             !row.completed && row.text.trim().length > 0
               ? resolveDailyCarriedDiagnosis(row, dailyEntries)
@@ -439,7 +473,7 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
           const causeMeta = carriedDiag?.cause ? getMissCauseMeta(carriedDiag.cause) : undefined;
           const showMetaLine =
             row.text.trim().length > 0 &&
-            ((!hideGroupBadges && (ctx?.roadmapPlan || ctx?.weeklyTask)) ||
+            ((!hideGroupBadges && (ctx?.roadmapPlan || ctx?.weeklyTask || isOneOffBacked)) ||
               (row.pushedFromDate && !row.completed) ||
               Boolean(carriedDiag));
 
@@ -567,6 +601,15 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                       </span>
                     </span>
                   )}
+                  {!hideGroupBadges && isOneOffBacked && (
+                    <span
+                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/25 text-sky-300 font-semibold"
+                      title="Remembered in Checklist → One-Off Tasks (syncs automatically; dismiss there if no longer relevant)"
+                    >
+                      <ListChecks className="w-2.5 h-2.5 text-sky-400 shrink-0" />
+                      <span>One-Off</span>
+                    </span>
+                  )}
                   {row.pushedFromDate && !row.completed && (
                     <span
                       className={`inline-flex items-center px-1.5 py-0.5 rounded-md border font-bold ${
@@ -622,7 +665,7 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                   ? ctx.roadmapPlan.title
                   : ctx.weeklyTask
                   ? ctx.weeklyTask.text
-                  : 'Standalone / Ad-hoc',
+                  : 'One-Off / Standalone',
                 subLabel:
                   ctx.roadmapPlan && ctx.weeklyTask && row.subTaskId ? ctx.weeklyTask.text : undefined,
                 isRoadmap: Boolean(ctx.roadmapPlan),

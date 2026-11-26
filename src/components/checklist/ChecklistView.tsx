@@ -76,7 +76,7 @@ const SECTIONS: SectionConfig[] = [
   {
     recurrence: 'none',
     title: 'One-Off Tasks',
-    subtitle: 'Non-recurring • Stays checked once done',
+    subtitle: 'Non-recurring & standalone Daily Mission tasks • Remembered here until done or dismissed',
     badgeClass: 'bg-slate-800 text-slate-300 border-slate-700',
     accentBorder: 'border-slate-800',
     streakUnit: '',
@@ -696,7 +696,11 @@ export const ChecklistView: React.FC = () => {
   const oneOffSection = SECTIONS.find((s) => s.recurrence === 'none')!;
 
   const renderSectionCard = (section: SectionConfig) => {
-    const items = checklistItems.filter((i) => i.recurrence === section.recurrence);
+    const rawItems = checklistItems.filter((i) => i.recurrence === section.recurrence);
+    const items =
+      section.recurrence === 'none'
+        ? [...rawItems.filter((i) => !i.completed), ...rawItems.filter((i) => i.completed)]
+        : rawItems;
     const sectionDone = items.filter(isItemDone).length;
     const sectionConsistencyValues =
       section.recurrence !== 'none'
@@ -815,6 +819,14 @@ export const ChecklistView: React.FC = () => {
                       title="Click to rename"
                     >
                       <span>{item.text}</span>
+                      {item.recurrence === 'none' && item.sourceDailyDate && (
+                        <span
+                          className="ml-2 inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-sky-300 align-middle"
+                          title={`Auto-remembered from ${item.sourceDailyDate} Daily Mission (dismiss anytime if no longer relevant)`}
+                        >
+                          Day {item.sourceDailyDate.slice(5)}
+                        </span>
+                      )}
                       {dueStatus === 'due_today' && (
                         <span className="ml-2 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 align-middle">
                           Due Today
@@ -926,8 +938,17 @@ export const ChecklistView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleDeleteItem(item.id)}
-                    className="shrink-0 text-slate-600 opacity-0 transition-opacity hover:text-rose-400 group-hover:opacity-100"
-                    aria-label="Delete task"
+                    className={`shrink-0 text-slate-500 transition-opacity hover:text-rose-400 ${
+                      item.recurrence === 'none'
+                        ? 'opacity-70 sm:opacity-45 sm:group-hover:opacity-100'
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}
+                    title={
+                      item.recurrence === 'none'
+                        ? 'Dismiss / delete task (will not reappear)'
+                        : 'Delete task'
+                    }
+                    aria-label={item.recurrence === 'none' ? 'Dismiss task' : 'Delete task'}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

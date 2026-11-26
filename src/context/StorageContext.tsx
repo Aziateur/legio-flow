@@ -2471,6 +2471,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return nextPlan;
   };
 
+  const isTextLinkedToWeeklyOrRoadmap = (
+    normText: string,
+    date: string,
+    allWeeklyPlans: Record<string, WeeklyPlan>,
+    allStrategyPlans: StrategyPlan[],
+    fallbackWeekId: string
+  ): boolean => {
+    if (!normText) return false;
+    const targetPlan = findBestWeeklyPlanForDate(date, allWeeklyPlans, fallbackWeekId);
+    if (targetPlan) {
+      for (const task of targetPlan.tasks || []) {
+        if (task.text.trim().toLowerCase() === normText) return true;
+        if (task.subTasks?.some(sub => sub.text.trim().toLowerCase() === normText)) return true;
+      }
+    }
+    for (const sp of allStrategyPlans || []) {
+      if (sp.status === 'not_pursuing') continue;
+      for (const stage of sp.stages || []) {
+        if (stage.proximalGoals?.some(pg => pg.text.trim().toLowerCase() === normText)) return true;
+      }
+    }
+    return false;
+  };
+
   const saveDailyEntry = (date: string, updates: Partial<DailyEntry>) => {
     const { prevEntry, nextEntry } = applyDailyEntryUpdate(date, updates);
 
@@ -2547,20 +2571,165 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             propagateWeeklyTaskCompletionUpward(targetPlan, savedW);
           }
         }
+      }
 
-        // Two-way sync: if any toggled priority came from Checklist (Weekly / Monthly / One-Off / Daily), sync its completion!
-        const checklistToggles = toggledItems.filter(i => i.checklistItemId);
+      // Identity-Driven Placement: Standalone Daily Mission tasks (not on Weekly Plan or Roadmap)
+      // automatically appear in Checklist -> One-Off Tasks so unfinished ad-hoc tasks are never lost.
+      // Deleting a task in One-Off Tasks tombstones its ID so it never resurrects.
+      let workingChecklist = checklistItemsRef.current;
+      let checklistMutated = false;
+      let entryItemsMutated = false;
+
+      const linkedNextItems: DailyPriorityItem[] = nextItems.map((item): DailyPriorityItem => {
+        const trimmed = item.text.trim();
+        const norm = trimmed.toLowerCase();
+        if (trimmed.length < 2 || item.weeklyTaskId || item.subTaskId) return item;
+
+        const derivedId = `chk_day_${date}_${item.id}`;
+
+        if (item.checklistItemId) {
+          const chkIdx = workingChecklist.findIndex(c => c.id === item.checklistItemId);
+          if (chkIdx >= 0) {
+            const existingChk = workingChecklist[chkIdx];
+            const isAutoCreatedTodayStub =
+              existingChk.id === derivedId && existingChk.recurrence === 'none' && existingChk.sourceDailyDate === date;
+
+            // If user finished typing text that already belongs to Weekly Plan or Roadmap,
+            // collapse the auto-created One-Off stub cleanly so it doesn't duplicate into Checklist.
+            if (
+              isAutoCreatedTodayStub &&
+              isTextLinkedToWeeklyOrRoadmap(
+                norm,
+                date,
+                weeklyPlansRef.current,
+                strategyPlansRef.current,
+                selectedWeekIdRef.current
+              )
+            ) {
+              workingChecklist = workingChecklist.filter((_, idx) => idx !== chkIdx);
+              checklistMutated = true;
+              entryItemsMutated = true;
+              const { checklistItemId: _drop, ...rest } = item;
+              return rest;
+            }
+
+            // If user finished typing text that matches an ALREADY existing Checklist item (e.g. from a prior day),
+            // collapse the new stub and re-bind directly to the existing Checklist item (zero duplicates!).
+            if (isAutoCreatedTodayStub) {
+              const duplicateTarget = workingChecklist.find(
+                (c, idx) => idx !== chkIdx && c.text.trim().toLowerCase() === norm
+              );
+              if (duplicateTarget) {
+                workingChecklist = workingChecklist.filter((_, idx) => idx !== chkIdx);
+                checklistMutated = true;
+                entryItemsMutated = true;
+                return { ...item, checklistItemId: duplicateTarget.id };
+              }
+            }
+
+            if (existingChk.recurrence === 'none' && existingChk.text !== trimmed) {
+              workingChecklist = workingChecklist.map((c, idx) =>
+                idx === chkIdx ? { ...c, text: trimmed } : c
+              );
+              checklistMutated = true;
+            }
+          }
+          // If chkIdx === -1, user deleted/cleared it from One-Off Tasks -> never resurrect
+          return item;
+        }
+
+        if (deletedIdsRef.current[derivedId]) {
+          return item;
+        }
+
+        if (
+          isTextLinkedToWeeklyOrRoadmap(
+            norm,
+            date,
+            weeklyPlansRef.current,
+            strategyPlansRef.current,
+            selectedWeekIdRef.current
+          )
+        ) {
+          return item;
+        }
+
+        const existingMatch = workingChecklist.find(c => c.text.trim().toLowerCase() === norm);
+        if (existingMatch) {
+          entryItemsMutated = true;
+          return { ...item, checklistItemId: existingMatch.id };
+        }
+
+        const newOneOff: ChecklistItem = {
+          id: derivedId,
+          categoryId: 'cat_oneoff',
+          text: trimmed,
+          recurrence: 'none',
+          completed: !!item.completed,
+          completedPeriods: [],
+          createdAt: date,
+          sourceDailyDate: date
+        };
+        workingChecklist = [...workingChecklist, newOneOff];
+        checklistMutated = true;
+        entryItemsMutated = true;
+        return { ...item, checklistItemId: derivedId };
+      });
+
+      // Clean up tiny abandoned 2-char typing stubs if the user immediately cleared the slot on the same day
+      const activeIds = new Set(linkedNextItems.map(i => i.id));
+      prevItems.forEach(prevItem => {
+        if (activeIds.has(prevItem.id)) return;
+        const prevTrimmed = prevItem.text.trim();
+        const stubId = `chk_day_${date}_${prevItem.id}`;
+        if (
+          prevTrimmed.length <= 2 &&
+          (prevItem.checklistItemId === stubId || workingChecklist.some(c => c.id === stubId))
+        ) {
+          const filtered = workingChecklist.filter(
+            c =>
+              !(
+                c.id === stubId &&
+                c.recurrence === 'none' &&
+                !c.completed &&
+                c.createdAt === date &&
+                c.text.trim().length <= 2
+              )
+          );
+          if (filtered.length !== workingChecklist.length) {
+            workingChecklist = filtered;
+            checklistMutated = true;
+          }
+        }
+      });
+
+      if (entryItemsMutated) {
+        const curEntry = dailyEntriesRef.current[date];
+        if (curEntry) {
+          commitDailyEntries({
+            ...dailyEntriesRef.current,
+            [date]: {
+              ...curEntry,
+              priorityItems: linkedNextItems
+            }
+          });
+        }
+      }
+
+      // Two-way sync: if any toggled priority is linked to Checklist (Weekly / Monthly / One-Off / Daily), sync its completion!
+      if (toggledItems.length > 0) {
+        const toggledIdSet = new Set(toggledItems.map(t => t.id));
+        const checklistToggles = linkedNextItems.filter(i => i.checklistItemId && toggledIdSet.has(i.id));
         if (checklistToggles.length > 0) {
           const targetWeek = findBestWeeklyPlanForDate(date, weeklyPlansRef.current, selectedWeekIdRef.current);
           const weekIdForDate = targetWeek?.id || selectedWeekIdRef.current;
           const monthKeyForDate = date.slice(0, 7);
-          let chkChanged = false;
-          const nextChecklist = checklistItemsRef.current.map(chk => {
+          const nextChecklist = workingChecklist.map(chk => {
             const hit = checklistToggles.find(t => t.checklistItemId === chk.id);
             if (!hit) return chk;
             if (chk.recurrence === 'none') {
               if (chk.completed === hit.completed) return chk;
-              chkChanged = true;
+              checklistMutated = true;
               return { ...chk, completed: hit.completed };
             }
             if (chk.recurrence === 'daily' || chk.recurrence === 'weekly' || chk.recurrence === 'monthly') {
@@ -2573,20 +2742,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               const existing = chk.completedPeriods || [];
               const hasKey = existing.includes(pKey);
               if (hit.completed && !hasKey) {
-                chkChanged = true;
+                checklistMutated = true;
                 return { ...chk, completedPeriods: [...existing, pKey] };
               }
               if (!hit.completed && hasKey) {
-                chkChanged = true;
+                checklistMutated = true;
                 return { ...chk, completedPeriods: existing.filter(p => p !== pKey) };
               }
             }
             return chk;
           });
-          if (chkChanged) {
-            commitChecklistItems(nextChecklist);
-          }
+          workingChecklist = nextChecklist;
         }
+      }
+
+      if (checklistMutated) {
+        commitChecklistItems(workingChecklist);
       }
     }
 
@@ -3804,8 +3975,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const saveChecklistItems = (items: ChecklistItem[]) => {
+    const prevList = checklistItemsRef.current;
+    const prevById = new Map(prevList.map(i => [i.id, i]));
     const nextIds = new Set(items.map(i => i.id));
-    const removed = checklistItemsRef.current
+    const removed = prevList
       .filter(i => !nextIds.has(i.id))
       .map(i => i.id);
     if (removed.length > 0) recordDeletedIds(removed);
@@ -3831,12 +4004,54 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
-    // Two-way sync: propagate Weekly / Monthly / One-Off checklist toggles to any linked priority on selectedDate
-    if (existingDay) {
-      const dayItems = getPriorityItemsForEntry(existingDay);
+    // Detect renamed One-Off items so linked Daily Mission items stay synced in text
+    const renamedOneOffs = new Map<string, string>();
+    items.forEach(chk => {
+      if (chk.recurrence !== 'none') return;
+      const prev = prevById.get(chk.id);
+      if (prev && prev.text.trim() !== chk.text.trim() && chk.text.trim().length > 0) {
+        renamedOneOffs.set(chk.id, chk.text.trim());
+      }
+    });
+
+    if (renamedOneOffs.size > 0) {
+      const currentDailyMap = dailyEntriesRef.current;
+      let anyRenameChanged = false;
+      const nextDailyMap: Record<string, DailyEntry> = { ...currentDailyMap };
+      Object.entries(currentDailyMap).forEach(([dKey, entry]) => {
+        const pItems = getPriorityItemsForEntry(entry);
+        let dChanged = false;
+        const updatedPItems = pItems.map(p => {
+          if (!p.checklistItemId) return p;
+          const nextText = renamedOneOffs.get(p.checklistItemId);
+          if (nextText && p.text.trim() !== nextText) {
+            dChanged = true;
+            anyRenameChanged = true;
+            return { ...p, text: nextText };
+          }
+          return p;
+        });
+        if (dChanged) {
+          nextDailyMap[dKey] = {
+            ...entry,
+            priorityItems: updatedPItems,
+            planNotes: formatPriorityItemsToPlanNotes(updatedPItems),
+            updatedAt: new Date().toISOString()
+          };
+        }
+      });
+      if (anyRenameChanged) {
+        commitDailyEntries(nextDailyMap);
+      }
+    }
+
+    // Two-way sync: propagate Weekly / Monthly / One-Off checklist toggles to any linked non-pushed priority on selectedDate
+    const latestDay = dailyEntriesRef.current[curDate];
+    if (latestDay) {
+      const dayItems = getPriorityItemsForEntry(latestDay);
       let priosChanged = false;
       const nextDayItems = dayItems.map(pItem => {
-        if (!pItem.checklistItemId) return pItem;
+        if (!pItem.checklistItemId || pItem.pushedToDate) return pItem;
         const chk = items.find(i => i.id === pItem.checklistItemId);
         if (!chk || chk.recurrence === 'tally') return pItem;
         const isDoneNow =
@@ -4591,6 +4806,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (!sMatch) return pItem;
           return {
             ...pItem,
+            weeklyTaskId: pItem.weeklyTaskId || sMatch.weeklyTaskId,
+            subTaskId: pItem.subTaskId || sMatch.subTaskId,
+            checklistItemId: pItem.checklistItemId || sMatch.checklistItemId,
             pushedToDate: pItem.pushedToDate !== undefined ? pItem.pushedToDate : sMatch.pushedToDate,
             pushedFromDate: pItem.pushedFromDate || sMatch.pushedFromDate,
             carriedDiagnosisCause: pItem.carriedDiagnosisCause || sMatch.carriedDiagnosisCause,
@@ -5244,6 +5462,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             : primary.totalCount;
         return {
           ...primary,
+          ...(primary.sourceDailyDate || secondary.sourceDailyDate
+            ? { sourceDailyDate: primary.sourceDailyDate || secondary.sourceDailyDate }
+            : {}),
           completedPeriods: Array.from(periodSet),
           ...(mergedTotal !== undefined ? { totalCount: mergedTotal } : {})
         };
@@ -5679,6 +5900,117 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!user) return;
     await loadUserCloudState(user.id);
   };
+
+  // Idempotent retroactive backfill: capture existing unfinished standalone Daily Mission items
+  // (not on Weekly Plan or Roadmap, not already completed on a later day, and not dismissed in deletedIds)
+  // into Checklist -> One-Off Tasks and bind their checklistItemId so they are remembered until done or dismissed.
+  useEffect(() => {
+    const runBackfill = () => {
+      if (isPullingRef.current) return;
+      if (authUserRef.current && !hasCompletedInitialCloudSyncRef.current) return;
+
+      const curDaily = dailyEntriesRef.current;
+      const curChecklist = checklistItemsRef.current;
+      const curWeekly = weeklyPlansRef.current;
+      const curRoadmaps = strategyPlansRef.current;
+      const curDeleted = deletedIdsRef.current;
+      const fallbackWeek = selectedWeekIdRef.current;
+
+      const completedStandaloneTexts = new Set<string>();
+      Object.values(curDaily).forEach(entry => {
+        getPriorityItemsForEntry(entry).forEach(item => {
+          if (item.completed && item.text.trim().length >= 2) {
+            completedStandaloneTexts.add(item.text.trim().toLowerCase());
+          }
+        });
+      });
+
+      const checklistByNorm = new Map<string, ChecklistItem>();
+      curChecklist.forEach(c => {
+        const norm = c.text.trim().toLowerCase();
+        if (norm && !checklistByNorm.has(norm)) {
+          checklistByNorm.set(norm, c);
+        }
+      });
+
+      const newOneOffs: ChecklistItem[] = [];
+      let nextDaily: Record<string, DailyEntry> | null = null;
+
+      const sortedDates = Object.keys(curDaily).sort((a, b) => a.localeCompare(b));
+      sortedDates.forEach(date => {
+        const entry = curDaily[date];
+        if (!entry) return;
+        const items = getPriorityItemsForEntry(entry);
+        if (items.length === 0) return;
+
+        let entryChanged = false;
+        const updatedItems = items.map(item => {
+          if (item.completed || item.weeklyTaskId || item.subTaskId || item.checklistItemId) {
+            return item;
+          }
+          const trimmed = item.text.trim();
+          const norm = trimmed.toLowerCase();
+          if (trimmed.length < 2) return item;
+          if (completedStandaloneTexts.has(norm)) return item;
+          if (isTextLinkedToWeeklyOrRoadmap(norm, date, curWeekly, curRoadmaps, fallbackWeek)) {
+            return item;
+          }
+
+          const derivedId = `chk_day_${date}_${item.id}`;
+          if (curDeleted[derivedId]) return item;
+
+          const existing = checklistByNorm.get(norm);
+          if (existing) {
+            entryChanged = true;
+            return { ...item, checklistItemId: existing.id };
+          }
+
+          const created: ChecklistItem = {
+            id: derivedId,
+            categoryId: 'cat_oneoff',
+            text: trimmed,
+            recurrence: 'none',
+            completed: false,
+            completedPeriods: [],
+            createdAt: date,
+            sourceDailyDate: date
+          };
+          newOneOffs.push(created);
+          checklistByNorm.set(norm, created);
+          entryChanged = true;
+          return { ...item, checklistItemId: derivedId };
+        });
+
+        if (entryChanged) {
+          if (!nextDaily) nextDaily = { ...curDaily };
+          nextDaily[date] = {
+            ...entry,
+            priorityItems: updatedItems,
+            updatedAt: new Date().toISOString()
+          };
+        }
+      });
+
+      if (newOneOffs.length > 0) {
+        commitChecklistItems([...curChecklist, ...newOneOffs]);
+      }
+      if (nextDaily) {
+        commitDailyEntries(nextDaily);
+      }
+      if (newOneOffs.length > 0 || nextDaily) {
+        markLocalMutation();
+      }
+    };
+
+    if (authUser && syncStatus === 'synced' && hasCompletedInitialCloudSyncRef.current) {
+      runBackfill();
+      return;
+    }
+    if (!authUser) {
+      const timer = setTimeout(runBackfill, getSupabaseClient() ? 900 : 0);
+      return () => clearTimeout(timer);
+    }
+  }, [authUser?.id, syncStatus]);
 
   const isMissingAdminRpcError = (err: any): boolean => {
     const msg = String(err?.message || '').toLowerCase();
