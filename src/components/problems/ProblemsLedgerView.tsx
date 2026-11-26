@@ -12,7 +12,6 @@ import {
   computeProblemPriorityScore,
   getClusterOccurrenceTimeline,
   getClusterTotalHits,
-  getFixVerificationProgress,
   getLastOccurrenceDate,
   getProblemActionText,
   getProblemReminderText,
@@ -99,7 +98,7 @@ export const ProblemsLedgerView: React.FC = () => {
   const caps = getLevelCapabilities(systemLevel);
 
   const maxTop = problemSettings.maxTopConstraints || 3;
-  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
+  const defaultVerifyTarget = problemSettings.defaultVerifyTarget || 5;
   const showBreakdownBar = problemSettings.showBreakdownBar !== false;
 
   const [activeTab, setActiveTab] = useState<MainTabMode>('backlog');
@@ -655,8 +654,7 @@ export const ProblemsLedgerView: React.FC = () => {
             const sevVis = SEVERITY_VISUAL[sev];
             const cat = resolveCategoryMeta(prob.category, problemCategories);
             const hits = getClusterTotalHits(problems, prob);
-            const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
-            const testing = getSolutionTestingSummary(prob);
+            const testing = getSolutionTestingSummary(prob, defaultVerifyTarget);
             const reminderText = getProblemReminderText(prob);
             const actionText = getProblemActionText(prob);
             const remActive = hasActiveReminder(prob);
@@ -841,9 +839,9 @@ export const ProblemsLedgerView: React.FC = () => {
                       >
                         {testing.label}
                       </span>
-                      {testing.latestTweak && (
+                      {testing.latestPendingTweak && (
                         <div className="text-[10px] text-violet-300 truncate">
-                          Tweak: &ldquo;{testing.latestTweak.note}&rdquo;
+                          Tweak idea: &ldquo;{testing.latestPendingTweak.note}&rdquo;
                         </div>
                       )}
                     </div>
@@ -856,18 +854,20 @@ export const ProblemsLedgerView: React.FC = () => {
                     </div>
                   )}
 
-                  {ver.isTesting && testing.effectiveCount > 0 && testing.state !== 'failed' && (
+                  {testing.hasSolution && testing.effectiveCount > 0 && testing.state !== 'failed' && (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[10px] font-mono">
-                        <span className={ver.readyToVerify ? 'text-emerald-300 font-bold' : 'text-sky-300'}>
-                          {ver.readyToVerify ? '✓ Ready to resolve' : `${ver.daysClean}/${ver.targetDays}d window`}
+                        <span className={testing.readyToResolve ? 'text-emerald-300 font-bold' : 'text-sky-300'}>
+                          {testing.readyToResolve
+                            ? `✓ Proven (${testing.effectiveCount}/${testing.targetCount}×)`
+                            : `${testing.effectiveCount}/${testing.targetCount}× worked`}
                         </span>
-                        <span className="text-slate-500">{ver.pct}%</span>
+                        <span className="text-slate-500">{testing.pct}%</span>
                       </div>
                       <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
                         <div
-                          className={`h-full rounded-full ${ver.readyToVerify ? 'bg-emerald-400' : 'bg-sky-400'}`}
-                          style={{ width: `${ver.pct}%` }}
+                          className={`h-full rounded-full ${testing.readyToResolve ? 'bg-emerald-400' : 'bg-sky-400'}`}
+                          style={{ width: `${testing.pct}%` }}
                         />
                       </div>
                     </div>
@@ -915,7 +915,7 @@ export const ProblemsLedgerView: React.FC = () => {
                         Open
                       </button>
 
-                      {ver.readyToVerify && testing.effectiveCount > 0 && testing.state !== 'failed' && (
+                      {testing.readyToResolve && (
                         <button
                           type="button"
                           onClick={() => updateProblem(prob.id, { status: 'solved', classified: true })}
@@ -1255,20 +1255,20 @@ export const ProblemsLedgerView: React.FC = () => {
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-slate-300">Default Verification Window</span>
+                  <span className="font-bold text-slate-300">Default Proof Target (Worked reps)</span>
                   <div className="flex items-center gap-1">
-                    {[7, 14, 30].map(d => (
+                    {[3, 5, 10].map(target => (
                       <button
-                        key={d}
+                        key={target}
                         type="button"
-                        onClick={() => saveProblemSettings({ ...problemSettings, defaultVerifyDays: d })}
+                        onClick={() => saveProblemSettings({ ...problemSettings, defaultVerifyTarget: target })}
                         className={`px-2.5 py-1 rounded-lg font-mono font-bold border ${
-                          defaultVerifyDays === d
+                          defaultVerifyTarget === target
                             ? 'bg-sky-500 text-slate-950 border-sky-400'
                             : 'bg-slate-900 text-slate-400 border-slate-800'
                         }`}
                       >
-                        {d}d
+                        {target}×
                       </button>
                     ))}
                   </div>

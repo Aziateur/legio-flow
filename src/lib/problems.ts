@@ -814,34 +814,53 @@ export interface ProblemPulseSummary {
   trendLabel: string;
 }
 
-export type SolutionTestingState = 'none' | 'untested' | 'holding' | 'tweaked' | 'failed';
+export type SolutionTestingState = 'none' | 'untested' | 'holding' | 'tweaked' | 'ready' | 'failed';
 
 export interface SolutionTestingSummary {
   hasSolution: boolean;
   state: SolutionTestingState;
+  version: number;
+  targetCount: number;
   effectiveCount: number;
-  tweakCount: number;
+  pendingTweakCount: number;
   notTriggeredCount: number;
   failedCount: number;
-  latestTweak?: { date: string; note: string };
+  pct: number;
+  readyToResolve: boolean;
+  latestPendingTweak?: { date: string; note: string };
   label: string;
   shortLabel: string;
   badgeClass: string;
 }
 
+export interface SolutionPeriodSummary {
+  workedCount: number;
+  quietCount: number;
+  failedCount: number;
+  tweaks: Array<{ date: string; note: string; applied: boolean }>;
+  totalCheckIns: number;
+}
+
 export const getSolutionTestingSummary = (
-  problem: ProblemEntry
+  problem: ProblemEntry,
+  defaultVerifyTarget = 5
 ): SolutionTestingSummary => {
+  const targetCount = Math.max(1, problem.verifyTarget || defaultVerifyTarget || 5);
+  const version = 1 + (problem.fixAttempts?.length || 0);
   const hasSolution =
     hasActiveReminder(problem) || hasActiveAction(problem) || problem.status === 'testing';
   if (problem.status === 'solved' || !hasSolution) {
     return {
       hasSolution: false,
       state: 'none',
+      version,
+      targetCount,
       effectiveCount: 0,
-      tweakCount: 0,
+      pendingTweakCount: 0,
       notTriggeredCount: 0,
       failedCount: 0,
+      pct: 0,
+      readyToResolve: false,
       label: '',
       shortLabel: '',
       badgeClass: ''
@@ -858,94 +877,174 @@ export const getSolutionTestingSummary = (
     }
   });
 
-  let latestTweak: { date: string; note: string } | undefined;
+  let pendingTweakCount = 0;
+  let latestPendingTweak: { date: string; note: string } | undefined;
   (problem.checkIns || []).forEach(c => {
     const clean = (c.date || '').slice(0, 10);
     if (clean && (!sinceDate || clean >= sinceDate)) {
       byDate.set(clean, c.outcome);
-      if (c.outcome === 'tweaked' && c.note?.trim()) {
-        if (!latestTweak || clean >= latestTweak.date) {
-          latestTweak = { date: clean, note: c.note.trim() };
+      const tNote = (c.tweakNote || (c.outcome === 'tweaked' ? c.note : '') || '').trim();
+      if (!c.tweakApplied && (Boolean(tNote) || c.outcome === 'tweaked')) {
+        pendingTweakCount += 1;
+        if (tNote && (!latestPendingTweak || clean >= latestPendingTweak.date)) {
+          latestPendingTweak = { date: clean, note: tNote };
         }
       }
     }
   });
 
   let effectiveCount = 0;
-  let tweakCount = 0;
   let notTriggeredCount = 0;
   let failedCount = 0;
   byDate.forEach(outcome => {
     if (outcome === 'effective') effectiveCount += 1;
-    else if (outcome === 'tweaked') tweakCount += 1;
     else if (outcome === 'not_triggered') notTriggeredCount += 1;
     else if (outcome === 'failed') failedCount += 1;
   });
 
-  if (Boolean(problem.lastFixFailedAt && problem.status === 'open')) {
+  const pct = Math.min(100, Math.round((effectiveCount / targetCount) * 100));
+  const isFailed = Boolean(problem.lastFixFailedAt && problem.status === 'open');
+  const readyToResolve = !isFailed && effectiveCount >= targetCount && pendingTweakCount === 0;
+
+  if (isFailed) {
     return {
       hasSolution: true,
       state: 'failed',
+      version,
+      targetCount,
       effectiveCount,
-      tweakCount,
+      pendingTweakCount,
       notTriggeredCount,
       failedCount,
-      ...(latestTweak ? { latestTweak } : {}),
-      label: `Failed (${problem.lastFixFailedAt!.slice(5)}) · Needs rethink`,
+      pct,
+      readyToResolve: false,
+      ...(latestPendingTweak ? { latestPendingTweak } : {}),
+      label: `v${version} · Failed (${problem.lastFixFailedAt!.slice(5)}) — Needs rethink`,
       shortLabel: 'Failed · Rethink',
       badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/35'
     };
   }
 
-  if (effectiveCount === 0 && tweakCount === 0) {
+  if (effectiveCount === 0 && pendingTweakCount === 0) {
     return {
       hasSolution: true,
       state: 'untested',
+      version,
+      targetCount,
       effectiveCount,
-      tweakCount,
+      pendingTweakCount,
       notTriggeredCount,
       failedCount,
+      pct: 0,
+      readyToResolve: false,
       label:
         notTriggeredCount > 0
-          ? `Not tested yet · ${notTriggeredCount}d didn't come up`
+          ? `Not tested yet · ${notTriggeredCount}d quiet`
           : 'Testing · Not enough data yet',
       shortLabel: 'Not tested yet',
       badgeClass: 'bg-slate-800/90 text-slate-300 border-slate-700'
     };
   }
 
-  if (tweakCount > 0) {
-    const tweakWord = tweakCount === 1 ? 'tweak' : 'tweaks';
+  if (pendingTweakCount > 0) {
+    const ideaWord = pendingTweakCount === 1 ? 'tweak idea' : 'tweak ideas';
     return {
       hasSolution: true,
       state: 'tweaked',
+      version,
+      targetCount,
       effectiveCount,
-      tweakCount,
+      pendingTweakCount,
       notTriggeredCount,
       failedCount,
-      ...(latestTweak ? { latestTweak } : {}),
+      pct,
+      readyToResolve: false,
+      ...(latestPendingTweak ? { latestPendingTweak } : {}),
       label:
         effectiveCount > 0
-          ? `Testing · Worked ${effectiveCount}× · ${tweakCount} ${tweakWord}`
-          : `Testing · ${tweakCount} ${tweakWord} to improve`,
-      shortLabel:
-        effectiveCount > 0
-          ? `Worked ${effectiveCount}× · ${tweakCount} ${tweakWord}`
-          : `${tweakCount} ${tweakWord}`,
+          ? `Worked ${effectiveCount}/${targetCount}× · ${pendingTweakCount} ${ideaWord}`
+          : `${pendingTweakCount} ${ideaWord} to apply`,
+      shortLabel: effectiveCount > 0 ? `${effectiveCount}/${targetCount}× · Tweak` : 'Tweak idea',
       badgeClass: 'bg-violet-500/15 text-violet-300 border-violet-500/35'
+    };
+  }
+
+  if (readyToResolve) {
+    return {
+      hasSolution: true,
+      state: 'ready',
+      version,
+      targetCount,
+      effectiveCount,
+      pendingTweakCount: 0,
+      notTriggeredCount,
+      failedCount,
+      pct: 100,
+      readyToResolve: true,
+      label: `✓ Proven (${effectiveCount}/${targetCount}× worked) — Ready to resolve`,
+      shortLabel: `✓ Proven ${effectiveCount}/${targetCount}×`,
+      badgeClass: 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
     };
   }
 
   return {
     hasSolution: true,
     state: 'holding',
+    version,
+    targetCount,
     effectiveCount,
-    tweakCount,
+    pendingTweakCount: 0,
     notTriggeredCount,
     failedCount,
-    label: `Testing · Worked ${effectiveCount}×${notTriggeredCount > 0 ? ` (${notTriggeredCount} quiet)` : ''}`,
-    shortLabel: `Worked ${effectiveCount}×`,
+    pct,
+    readyToResolve: false,
+    label: `Testing · Worked ${effectiveCount}/${targetCount}×${notTriggeredCount > 0 ? ` (${notTriggeredCount} quiet)` : ''}`,
+    shortLabel: `Worked ${effectiveCount}/${targetCount}×`,
     badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+  };
+};
+
+export const getSolutionPeriodSummary = (
+  problem: ProblemEntry,
+  startDate: string,
+  endDate: string
+): SolutionPeriodSummary => {
+  const byDate = new Map<string, ProblemCheckInOutcome>();
+  const tweaks: Array<{ date: string; note: string; applied: boolean }> = [];
+
+  (problem.heldDates || []).forEach(d => {
+    const clean = (d || '').slice(0, 10);
+    if (clean && clean >= startDate && clean <= endDate) {
+      byDate.set(clean, 'effective');
+    }
+  });
+
+  (problem.checkIns || []).forEach(c => {
+    const clean = (c.date || '').slice(0, 10);
+    if (clean && clean >= startDate && clean <= endDate) {
+      byDate.set(clean, c.outcome);
+      const tNote = (c.tweakNote || (c.outcome === 'tweaked' ? c.note : '') || '').trim();
+      if (tNote) {
+        tweaks.push({ date: clean, note: tNote, applied: Boolean(c.tweakApplied) });
+      }
+    }
+  });
+
+  let workedCount = 0;
+  let quietCount = 0;
+  let failedCount = 0;
+  byDate.forEach(outcome => {
+    if (outcome === 'effective') workedCount += 1;
+    else if (outcome === 'not_triggered') quietCount += 1;
+    else if (outcome === 'failed') failedCount += 1;
+  });
+
+  return {
+    workedCount,
+    quietCount,
+    failedCount,
+    tweaks: tweaks.sort((a, b) => b.date.localeCompare(a.date)),
+    totalCheckIns: workedCount + quietCount + failedCount
   };
 };
 
@@ -995,9 +1094,9 @@ export const getProblemPulse = (
     const dStr = shiftIsoDate(todayDate, offset);
     const count = hitDateCounts.get(dStr) || 0;
     const isHit = count > 0 || failedCheckInDates.has(dStr);
-    const isTweaked = !isHit && tweakedDates.has(dStr);
-    const isEffective = !isHit && !isTweaked && effectiveDates.has(dStr);
-    const isNotTriggered = !isHit && !isTweaked && !isEffective && notTriggeredDates.has(dStr);
+    const isEffective = !isHit && effectiveDates.has(dStr);
+    const isTweaked = !isHit && !isEffective && tweakedDates.has(dStr);
+    const isNotTriggered = !isHit && !isEffective && !isTweaked && notTriggeredDates.has(dStr);
 
     if (isHit) {
       const addCount = Math.max(1, count);
@@ -1011,10 +1110,10 @@ export const getProblemPulse = (
       date: dStr,
       state: isHit
         ? 'hit'
-        : isTweaked
-        ? 'tweaked'
         : isEffective
         ? 'effective'
+        : isTweaked
+        ? 'tweaked'
         : isNotTriggered
         ? 'not_triggered'
         : 'quiet'

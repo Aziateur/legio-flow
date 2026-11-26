@@ -44,6 +44,8 @@ import {
   daysBetweenDates,
   defaultScaleForSource,
   getDescendantProblems,
+  getProblemActionText,
+  getProblemReminderText,
   guessProblemCategory,
   normalizeTag,
   problemHasTag,
@@ -691,12 +693,25 @@ interface StorageContextType {
   recordProblemHeld: (id: string, date?: string) => void;
   recordProblemCheckIn: (
     id: string,
-    outcome: ProblemCheckInOutcome,
+    outcome: ProblemCheckInOutcome | null,
     options?: {
       date?: string;
       sourceType?: ProblemSourceType;
       sourceRef?: string;
       note?: string;
+    }
+  ) => void;
+  noteProblemTweak: (id: string, note: string, options?: { date?: string }) => void;
+  reviseProblemSolution: (
+    id: string,
+    revision: {
+      reminderText?: string;
+      fixNote?: string;
+      trigger?: string;
+      note?: string;
+      restartTest?: boolean;
+      date?: string;
+      markTweaksAppliedOnly?: boolean;
     }
   ) => void;
   clusterIntoNewParent: (
@@ -3743,11 +3758,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     markLocalMutation();
   };
 
-  // 4-way Daily / Weekly Review Check-In:
-  // 'effective'     -> logs a held day (never prematurely closes as Solved)
-  // 'not_triggered' -> marks nothing happened cleanly (neutral; doesn't prove fix works)
-  // 'tweaked'       -> logs an improvement note without failing or resetting the active experiment
-  // 'failed'        -> logs recurrence + optional clue note + re-opens Testing fixes (avoids duplicate same-day occurrence spam if toggled)
+  // Reversible 3-verdict check-in ('effective' | 'not_triggered' | 'failed' | null to clear)
+  // Preserves any tweakNote / tweakApplied on the same date, and undoes same-day misclicked failures cleanly.
   const recordProblemCheckIn: StorageContextType['recordProblemCheckIn'] = (id, outcome, options) => {
     const nowIso = new Date().toISOString();
     const checkDate = options?.date || getTodayDateString();
@@ -3782,15 +3794,39 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const next = cur.map(p => {
       if (p.id === id) {
+        const existingOnDate = (p.checkIns || []).find(c => c.date === checkDate);
+        const preservedTweakNote = existingOnDate?.tweakNote?.trim() || undefined;
+        const preservedTweakApplied = existingOnDate?.tweakApplied;
         const filteredCheckIns = (p.checkIns || []).filter(c => c.date !== checkDate);
-        const nextCheckIn: ProblemCheckIn = {
-          date: checkDate,
-          outcome,
-          ...(note ? { note } : {})
-        };
-        const nextCheckIns = [...filteredCheckIns, nextCheckIn].sort((a, b) =>
-          a.date.localeCompare(b.date)
-        );
+
+        let nextCheckIns: ProblemCheckIn[];
+        if (outcome === null) {
+          if (preservedTweakNote) {
+            nextCheckIns = [
+              ...filteredCheckIns,
+              {
+                date: checkDate,
+                outcome: 'tweaked' as ProblemCheckInOutcome,
+                note: preservedTweakNote,
+                tweakNote: preservedTweakNote,
+                ...(preservedTweakApplied ? { tweakApplied: true } : {})
+              }
+            ].sort((a, b) => a.date.localeCompare(b.date));
+          } else {
+            nextCheckIns = filteredCheckIns;
+          }
+        } else {
+          const nextCheckIn: ProblemCheckIn = {
+            date: checkDate,
+            outcome,
+            ...(note ? { note } : existingOnDate?.note ? { note: existingOnDate.note } : {}),
+            ...(preservedTweakNote ? { tweakNote: preservedTweakNote } : {}),
+            ...(preservedTweakApplied ? { tweakApplied: true } : {})
+          };
+          nextCheckIns = [...filteredCheckIns, nextCheckIn].sort((a, b) =>
+            a.date.localeCompare(b.date)
+          );
+        }
 
         const prevHeld = p.heldDates || [];
         let nextHeldDates: string[];
@@ -3813,14 +3849,48 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           delete updated.lastHeldDate;
         }
 
+        // Undo same-day failure transition if switching away from or clearing a same-day 'failed' verdict
+        if (existingOnDate?.outcome === 'failed' && outcome !== 'failed') {
+          const occs = [...(updated.occurrences || [])];
+          for (let i = occs.length - 1; i >= 0; i--) {
+            if (occs[i].date === checkDate && occs[i].sourceType === sourceType) {
+              occs.splice(i, 1);
+              break;
+            }
+          }
+          updated.occurrences = occs;
+
+          const attempts = [...(updated.fixAttempts || [])];
+          const lastAtt = attempts[attempts.length - 1];
+          if (lastAtt && lastAtt.outcome === 'failed' && lastAtt.endedAt === checkDate) {
+            attempts.pop();
+            updated.fixAttempts = attempts;
+            updated.status = 'testing';
+            updated.fixStartedAt = lastAtt.startedAt;
+            delete updated.lastFixFailedAt;
+          } else if (updated.lastFixFailedAt === checkDate) {
+            delete updated.lastFixFailedAt;
+            const hasActiveSol = Boolean(
+              updated.reminderText?.trim() ||
+                updated.isGuardrail ||
+                updated.fixType === 'rule_guardrail' ||
+                updated.fixNote?.trim() ||
+                (updated.dispatchedTo && updated.dispatchedTo.length > 0)
+            );
+            if (hasActiveSol && updated.status === 'open') {
+              updated.status = 'testing';
+            }
+          }
+        }
+
         if (outcome === 'failed') {
-          const alreadyLoggedToday = (p.occurrences || []).some(
+          const alreadyLoggedToday = (updated.occurrences || []).some(
             o => o.date === checkDate && o.sourceType === sourceType && (o.note || '') === (note || '')
           );
           const nextOccurrences = alreadyLoggedToday
-            ? p.occurrences || []
+            ? updated.occurrences || []
             : [
-                ...(p.occurrences || []),
+                ...(updated.occurrences || []),
                 {
                   date: checkDate,
                   sourceType,
@@ -3830,7 +3900,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
               ];
           updated = {
             ...updated,
-            status: p.status === 'solved' ? 'open' : p.status,
+            status: updated.status === 'solved' ? 'open' : updated.status,
             occurrences: nextOccurrences
           };
           delete updated.solvedAt;
@@ -3866,6 +3936,200 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     commitProblems(next);
     markLocalMutation();
+  };
+
+  // Jot a tweak idea onto checkDate WITHOUT altering or overwriting today's Worked/Quiet/Failed verdict
+  const noteProblemTweak: StorageContextType['noteProblemTweak'] = (id, note, options) => {
+    const trimmed = note.trim();
+    if (!trimmed) return;
+    const nowIso = new Date().toISOString();
+    const checkDate = options?.date || getTodayDateString();
+    const cur = problemsRef.current;
+
+    const next = cur.map(p => {
+      if (p.id !== id) return p;
+      const existing = (p.checkIns || []).find(c => c.date === checkDate);
+      const others = (p.checkIns || []).filter(c => c.date !== checkDate);
+      const updatedEntry: ProblemCheckIn = existing
+        ? {
+            ...existing,
+            tweakNote: trimmed,
+            tweakApplied: false
+          }
+        : {
+            date: checkDate,
+            outcome: 'tweaked',
+            note: trimmed,
+            tweakNote: trimmed,
+            tweakApplied: false
+          };
+      return {
+        ...p,
+        checkIns: [...others, updatedEntry].sort((a, b) => a.date.localeCompare(b.date)),
+        updatedAt: nowIso
+      };
+    });
+
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  // Revise/rewrite an active Reminder or Action cleanly: archives v1 if active, clears pending tweak flags,
+  // restarts or resumes testing when recovering from failure, and syncs linked tasks/habits.
+  const reviseProblemSolution: StorageContextType['reviseProblemSolution'] = (id, revision) => {
+    const cur = problemsRef.current;
+    const problem = cur.find(p => p.id === id);
+    if (!problem) return;
+
+    const nowIso = new Date().toISOString();
+    const revDate = revision.date || getTodayDateString();
+
+    if (revision.markTweaksAppliedOnly) {
+      const next = cur.map(p => {
+        if (p.id !== id) return p;
+        return {
+          ...p,
+          checkIns: (p.checkIns || []).map(c =>
+            c.tweakNote?.trim() || c.outcome === 'tweaked' ? { ...c, tweakApplied: true } : c
+          ),
+          updatedAt: nowIso
+        };
+      });
+      commitProblems(next);
+      markLocalMutation();
+      return;
+    }
+
+    const oldRem = getProblemReminderText(problem);
+    const oldAct = getProblemActionText(problem);
+    const nextRem = 'reminderText' in revision ? (revision.reminderText || '').trim() : oldRem;
+    const nextAct = 'fixNote' in revision ? (revision.fixNote || '').trim() : oldAct;
+    const revNote = revision.note?.trim();
+
+    const remChanged = 'reminderText' in revision && Boolean(oldRem) && Boolean(nextRem) && nextRem !== oldRem;
+    const actChanged = 'fixNote' in revision && Boolean(oldAct) && Boolean(nextAct) && nextAct !== oldAct;
+    const oldSummary = [oldRem, oldAct].filter(Boolean).join(' + ');
+    const newSummary = [nextRem, nextAct].filter(Boolean).join(' + ');
+
+    const shouldArchiveReplaced =
+      problem.status === 'testing' && (remChanged || actChanged) && Boolean(oldSummary) && oldSummary !== newSummary;
+
+    const next = cur.map(p => {
+      if (p.id !== id) return p;
+
+      let updatedCheckIns = (p.checkIns || []).map(c =>
+        c.tweakNote?.trim() || c.outcome === 'tweaked' ? { ...c, tweakApplied: true } : c
+      );
+
+      const shouldRestart = p.status === 'open' || Boolean(revision.restartTest);
+      if (shouldRestart) {
+        updatedCheckIns = updatedCheckIns.filter(c => !(c.date === revDate && c.outcome === 'failed'));
+      }
+
+      if (revNote) {
+        const existingRev = updatedCheckIns.find(c => c.date === revDate);
+        const others = updatedCheckIns.filter(c => c.date !== revDate);
+        if (existingRev) {
+          updatedCheckIns = [
+            ...others,
+            { ...existingRev, tweakNote: revNote, tweakApplied: true }
+          ].sort((a, b) => a.date.localeCompare(b.date));
+        } else {
+          updatedCheckIns = [
+            ...others,
+            { date: revDate, outcome: 'tweaked' as ProblemCheckInOutcome, note: revNote, tweakNote: revNote, tweakApplied: true }
+          ].sort((a, b) => a.date.localeCompare(b.date));
+        }
+      }
+
+      const nextAttempts = [...(p.fixAttempts || [])];
+      if (shouldArchiveReplaced) {
+        const startedAt = (p.fixStartedAt || p.updatedAt || p.createdAt || revDate).slice(0, 10);
+        nextAttempts.push({
+          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+          fixText: oldSummary,
+          startedAt,
+          endedAt: revDate,
+          outcome: 'replaced',
+          daysHeld: daysBetweenDates(startedAt, revDate),
+          ...(revNote ? { note: revNote } : {})
+        });
+      }
+
+      const nextP: ProblemEntry = {
+        ...p,
+        classified: true,
+        ...('trigger' in revision ? { trigger: (revision.trigger || '').trim() } : {}),
+        ...('reminderText' in revision
+          ? {
+              isGuardrail: Boolean(nextRem),
+              reminderText: nextRem
+            }
+          : {}),
+        ...('fixNote' in revision ? { fixNote: nextAct } : {}),
+        ...(nextAttempts.length > 0 ? { fixAttempts: nextAttempts } : {}),
+        ...(updatedCheckIns.length > 0 ? { checkIns: updatedCheckIns } : { checkIns: [] }),
+        updatedAt: nowIso
+      };
+
+      if (!nextP.trigger?.trim()) delete nextP.trigger;
+      if (!nextP.reminderText?.trim()) delete nextP.reminderText;
+      if (!nextP.fixNote?.trim()) delete nextP.fixNote;
+
+      if (shouldRestart) {
+        nextP.status = 'testing';
+        nextP.fixStartedAt = revDate;
+        delete nextP.lastFixFailedAt;
+        delete nextP.solvedAt;
+      }
+
+      return nextP;
+    });
+
+    commitProblems(next);
+    markLocalMutation();
+
+    // Sync linked Weekly Tasks & Checklist Items when Action text was revised
+    if ('fixNote' in revision && oldAct && nextAct && oldAct.toLowerCase() !== nextAct.toLowerCase()) {
+      const oldLower = oldAct.toLowerCase();
+      const hasLinkedChecklist = checklistItemsRef.current.some(
+        i => i.problemId === id && i.text.trim().toLowerCase() === oldLower
+      );
+      if (hasLinkedChecklist) {
+        saveChecklistItems(
+          checklistItemsRef.current.map(i =>
+            i.problemId === id && i.text.trim().toLowerCase() === oldLower
+              ? { ...i, text: nextAct }
+              : i
+          )
+        );
+      }
+
+      Object.values(weeklyPlansRef.current).forEach(wp => {
+        let changed = false;
+        const updatedTasks = (wp.tasks || []).map(task => {
+          let t = task;
+          if (t.problemId === id && t.text.trim().toLowerCase() === oldLower) {
+            t = { ...t, text: nextAct };
+            changed = true;
+          }
+          if (t.subTasks && t.subTasks.length > 0) {
+            const updatedSubs = t.subTasks.map(sub => {
+              if (sub.problemId === id && sub.text.trim().toLowerCase() === oldLower) {
+                changed = true;
+                return { ...sub, text: nextAct };
+              }
+              return sub;
+            });
+            t = { ...t, subTasks: updatedSubs };
+          }
+          return t;
+        });
+        if (changed) {
+          saveWeeklyPlan({ ...wp, tasks: updatedTasks });
+        }
+      });
+    }
   };
 
   // Honest check-in ("Held today / Held this week"): logs that the reminder/fix held WITHOUT prematurely closing as Solved
@@ -5586,12 +5850,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ).sort();
         const latestHeld = mergedHeldDates[mergedHeldDates.length - 1] || primary.lastHeldDate || secondary.lastHeldDate;
         const checkInByDate = new Map<string, ProblemCheckIn>();
-        (secondary.checkIns || []).forEach(c => {
-          if (c?.date) checkInByDate.set(c.date, c);
-        });
-        (primary.checkIns || []).forEach(c => {
-          if (c?.date) checkInByDate.set(c.date, c);
-        });
+        const mergeCheckIn = (incoming: ProblemCheckIn) => {
+          if (!incoming?.date) return;
+          const prevC = checkInByDate.get(incoming.date);
+          if (!prevC) {
+            checkInByDate.set(incoming.date, incoming);
+          } else {
+            const mergedTweakNote = incoming.tweakNote?.trim() || prevC.tweakNote?.trim();
+            const mergedTweakApplied = Boolean(incoming.tweakApplied || prevC.tweakApplied);
+            checkInByDate.set(incoming.date, {
+              ...prevC,
+              ...incoming,
+              ...(mergedTweakNote ? { tweakNote: mergedTweakNote } : {}),
+              ...(mergedTweakApplied ? { tweakApplied: true } : {})
+            });
+          }
+        };
+        (secondary.checkIns || []).forEach(mergeCheckIn);
+        (primary.checkIns || []).forEach(mergeCheckIn);
         const mergedCheckIns = Array.from(checkInByDate.values()).sort((a, b) =>
           a.date.localeCompare(b.date)
         );
@@ -5622,6 +5898,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           fixStartedAt: primary.fixStartedAt || secondary.fixStartedAt,
           fixTaskCompletedAt: primary.fixTaskCompletedAt || secondary.fixTaskCompletedAt,
           verifyDays: primary.verifyDays ?? secondary.verifyDays,
+          verifyTarget: primary.verifyTarget ?? secondary.verifyTarget,
           lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
           ...(mergedCheckIns.length > 0 ? { checkIns: mergedCheckIns } : {}),
           ...(mergedHeldDates.length > 0 ? { heldDates: mergedHeldDates } : {}),
@@ -6498,6 +6775,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       recordProblemRecurrence,
       recordProblemHeld,
       recordProblemCheckIn,
+      noteProblemTweak,
+      reviseProblemSolution,
       clusterIntoNewParent,
       deleteProblem,
       dispatchProblemFix,

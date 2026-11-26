@@ -15,7 +15,6 @@ import {
   getClusterOccurrenceTimeline,
   getDirectChildren,
   getEligibleClusterTargets,
-  getFixVerificationProgress,
   getProblemActionText,
   getProblemCheckInForDate,
   getProblemReminderText,
@@ -78,7 +77,7 @@ interface ProblemWorkbenchModalProps {
   onClose: () => void;
 }
 
-const VERIFY_DAY_OPTIONS = [7, 14, 30];
+const PROOF_TARGETS = [3, 5, 10];
 
 const ACTION_DESTINATIONS: Array<{
   target: ProblemDispatchTarget;
@@ -122,6 +121,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     updateProblem,
     recordProblemRecurrence,
     recordProblemCheckIn,
+    noteProblemTweak,
+    reviseProblemSolution,
     clusterIntoNewParent,
     deleteProblem,
     dispatchProblemFix
@@ -136,8 +137,15 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
   const [reminderDraft, setReminderDraft] = useState(problem ? getProblemReminderText(problem) : '');
   const [actionDraft, setActionDraft] = useState(problem ? getProblemActionText(problem) : '');
   const [clueDraft, setClueDraft] = useState('');
-  const [tweakOpen, setTweakOpen] = useState(false);
-  const [tweakDraft, setTweakDraft] = useState('');
+  const [tweakMode, setTweakMode] = useState<'closed' | 'idea' | 'revise'>('closed');
+  const [tweakIdeaDraft, setTweakIdeaDraft] = useState('');
+  const [reviseRemDraft, setReviseRemDraft] = useState('');
+  const [reviseActDraft, setReviseActDraft] = useState('');
+  const [reviseNoteDraft, setReviseNoteDraft] = useState('');
+  const [reviseRestartTest, setReviseRestartTest] = useState(false);
+  const [observingExpanded, setObservingExpanded] = useState<boolean>(() =>
+    problem ? !hasActiveReminder(problem) && !hasActiveAction(problem) && problem.status !== 'testing' : true
+  );
   const [tagInput, setTagInput] = useState('');
   const [newParentTitle, setNewParentTitle] = useState('');
   const [severityPickerOpen, setSeverityPickerOpen] = useState(false);
@@ -155,8 +163,13 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     setReminderDraft(getProblemReminderText(problem));
     setActionDraft(getProblemActionText(problem));
     setSeverityPickerOpen(false);
-    setTweakOpen(false);
-    setTweakDraft('');
+    setTweakMode('closed');
+    setTweakIdeaDraft('');
+    setReviseRemDraft('');
+    setReviseActDraft('');
+    setReviseNoteDraft('');
+    setReviseRestartTest(false);
+    setObservingExpanded(!hasActiveReminder(problem) && !hasActiveAction(problem) && problem.status !== 'testing');
   }, [problem?.id]);
 
   useEffect(() => {
@@ -180,15 +193,14 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
   const severityVisual = SEVERITY_VISUAL[severity];
   const catMeta = resolveCategoryMeta(problem.category, problemCategories);
   const maxTop = problemSettings.maxTopConstraints || 3;
-  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
+  const defaultVerifyTarget = problemSettings.defaultVerifyTarget || 5;
   const currentTopCount = problems.filter(p => p.isTopConstraint && p.status !== 'solved').length;
 
   const watchingActive = isProblemWatching(problem);
   const promptNoteActive = shouldPromptNoteOnHit(problem);
   const reminderActive = hasActiveReminder(problem);
   const actionActive = hasActiveAction(problem);
-  const verification = getFixVerificationProgress(problem, todayDate, defaultVerifyDays);
-  const testingSummary = getSolutionTestingSummary(problem);
+  const testingSummary = getSolutionTestingSummary(problem, defaultVerifyTarget);
   const timeline = getClusterOccurrenceTimeline(problems, problem);
   const directChildren = getDirectChildren(problems, problem.id);
   const parentProblem = problem.parentProblemId
@@ -222,6 +234,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
       date: item.date,
       sourceLabel: SOURCE_LABELS[item.sourceType] || item.sourceType,
       note: item.note,
+      tweakNote: undefined as string | undefined,
+      tweakApplied: false,
       fromSlipTitle: item.fromSlipTitle
     })),
     ...(problem.checkIns || [])
@@ -232,6 +246,8 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
         date: c.date,
         sourceLabel: 'Check-In',
         note: c.note,
+        tweakNote: c.tweakNote,
+        tweakApplied: Boolean(c.tweakApplied),
         fromSlipTitle: undefined
       }))
   ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -336,6 +352,19 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     const trimmed = reminderDraft.trim();
     const nextActive = overrideActive !== undefined ? overrideActive : Boolean(trimmed);
     const trimmedTrigger = triggerDraft.trim();
+    const existingRem = getProblemReminderText(problem);
+
+    if (nextActive && reminderActive && existingRem && (trimmed || problem.title) !== existingRem) {
+      const finalRem = trimmed || problem.title;
+      reviseProblemSolution(problem.id, {
+        reminderText: finalRem,
+        ...(trimmedTrigger !== (problem.trigger || '').trim() ? { trigger: trimmedTrigger } : {}),
+        date: todayDate
+      });
+      showToast('Reminder revised cleanly');
+      return;
+    }
+
     updateProblem(problem.id, {
       classified: true,
       isGuardrail: nextActive,
@@ -354,7 +383,16 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
 
   const handleSaveActionNote = () => {
     const trimmed = actionDraft.trim();
-    if (trimmed === getProblemActionText(problem)) return;
+    const existingAct = getProblemActionText(problem);
+    if (trimmed === existingAct) return;
+    if (actionActive && existingAct && trimmed) {
+      reviseProblemSolution(problem.id, {
+        fixNote: trimmed,
+        date: todayDate
+      });
+      showToast('Action revised & synced');
+      return;
+    }
     updateProblem(problem.id, {
       classified: true,
       fixNote: trimmed,
@@ -779,6 +817,36 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                   <span>{problem.isTopConstraint ? 'Top 3 Focus' : 'Pin Top 3'}</span>
                 </button>
               )}
+              {confirmDelete ? (
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      deleteProblem(problem.id);
+                      onClose();
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-xs font-extrabold"
+                  >
+                    Delete?
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  className="p-1.5 rounded-xl bg-slate-900 hover:bg-rose-500/15 text-slate-500 hover:text-rose-400 border border-slate-800 transition-colors"
+                  title="Delete problem"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}
@@ -824,98 +892,115 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
               </div>
             </div>
           ) : (
-            /* CLASSIFIED SINGLE-CANVAS CASE FILE (No internal tabs!) */
-            <>
-              {/* SECTION 1: ACTIVE STANCE (3 Combineable Cards) */}
-              <div className="space-y-3">
-                <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
-                  Your Active Response <span className="font-normal text-slate-500">(combine freely)</span>
-                </div>
-
-                {/* CARD A: ACTIVELY OBSERVING */}
-                <div
-                  className={`p-4 rounded-2xl border space-y-3 transition-colors ${
-                    watchingActive
-                      ? 'bg-sky-500/5 border-sky-500/35'
-                      : 'bg-slate-950/75 border-slate-800'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center space-x-2">
-                      <Eye className={`w-4 h-4 ${watchingActive ? 'text-sky-400' : 'text-slate-500'}`} />
-                      <div>
-                        <div className="text-xs sm:text-sm font-extrabold text-slate-100">
-                          Actively Observing
-                        </div>
-                        <p className="text-[11px] text-slate-400">
-                          {watchingActive
-                            ? 'Shows in Daily Plan, GWS, Weekly & Reviews with 1-click + Log clue'
-                            : 'Turn ON if you don’t fully understand this yet — keeps it visible until you crack it'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={watchingActive}
-                      onClick={handleToggleWatching}
-                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-                        watchingActive ? 'bg-sky-500' : 'bg-slate-700'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          watchingActive ? 'translate-x-6' : 'translate-x-1'
+            /* CLASSIFIED SINGLE-CANVAS CASE FILE (Dynamic Solution-First Ordering!) */
+            (() => {
+              const observingCard = (collapsible: boolean) => {
+                const isExpanded = !collapsible || observingExpanded;
+                return (
+                  <div
+                    className={`p-3.5 sm:p-4 rounded-2xl border space-y-2.5 transition-colors ${
+                      watchingActive
+                        ? 'bg-sky-500/5 border-sky-500/35'
+                        : 'bg-slate-950/75 border-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => collapsible && setObservingExpanded(v => !v)}
+                        className={`flex items-center space-x-2 text-left min-w-0 flex-1 ${
+                          collapsible ? 'cursor-pointer' : 'cursor-default'
                         }`}
-                      />
-                    </button>
-                  </div>
-
-                  {watchingActive && (
-                    <div className="space-y-2.5 pt-1">
-                      <input
-                        type="text"
-                        value={watchQuestionDraft}
-                        onChange={e => setWatchQuestionDraft(e.target.value)}
-                        onBlur={() => {
-                          if (watchQuestionDraft.trim() !== (problem.watchQuestion || '').trim()) {
-                            updateProblem(problem.id, { watchQuestion: watchQuestionDraft.trim() });
-                          }
+                      >
+                        <Eye className={`w-4 h-4 shrink-0 ${watchingActive ? 'text-sky-400' : 'text-slate-500'}`} />
+                        <div className="min-w-0">
+                          <div className="text-xs sm:text-sm font-extrabold text-slate-100 flex items-center gap-2">
+                            <span>Actively Observing</span>
+                            {collapsible && (
+                              <span className="text-[10px] font-semibold text-slate-400">
+                                {isExpanded ? 'Hide' : watchingActive ? 'ON · Show question' : 'OFF'}
+                              </span>
+                            )}
+                          </div>
+                          {(!collapsible || isExpanded) && (
+                            <p className="text-[11px] text-slate-400">
+                              {watchingActive
+                                ? 'Shows in Daily Plan, GWS, Weekly & Reviews with 1-click + Log clue'
+                                : 'Turn ON if you don’t fully understand this yet — keeps it visible until you crack it'}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={watchingActive}
+                        onClick={() => {
+                          handleToggleWatching();
+                          if (!watchingActive) setObservingExpanded(true);
                         }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            updateProblem(problem.id, { watchQuestion: watchQuestionDraft.trim() });
-                            showToast('Watch question saved');
-                          }
-                        }}
-                        placeholder="What are you looking out for? (e.g. Notice what I was doing 5m before avoiding this)..."
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
-                      />
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                          watchingActive ? 'bg-sky-500' : 'bg-slate-700'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            watchingActive ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
                     </div>
-                  )}
 
-                  {/* Per-problem note-on-hit toggle */}
-                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/70 text-[11px]">
-                    <span className="inline-flex items-center space-x-1.5 text-slate-400">
-                      <MessageSquarePlus className="w-3.5 h-3.5 text-sky-400" />
-                      <span>Ask for a 1-line note whenever this fires</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => updateProblem(problem.id, { promptNoteOnHit: !promptNoteActive })}
-                      className={`px-2.5 py-0.5 rounded-lg border font-bold text-[10px] ${
-                        promptNoteActive
-                          ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
-                          : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
-                      }`}
-                    >
-                      {promptNoteActive ? 'ON' : 'OFF'}
-                    </button>
+                    {isExpanded && (
+                      <>
+                        {watchingActive && (
+                          <div className="space-y-2.5 pt-1">
+                            <input
+                              type="text"
+                              value={watchQuestionDraft}
+                              onChange={e => setWatchQuestionDraft(e.target.value)}
+                              onBlur={() => {
+                                if (watchQuestionDraft.trim() !== (problem.watchQuestion || '').trim()) {
+                                  updateProblem(problem.id, { watchQuestion: watchQuestionDraft.trim() });
+                                }
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  updateProblem(problem.id, { watchQuestion: watchQuestionDraft.trim() });
+                                  showToast('Watch question saved');
+                                }
+                              }}
+                              placeholder="What are you looking out for? (e.g. Notice what I was doing 5m before avoiding this)..."
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/70 text-[11px]">
+                          <span className="inline-flex items-center space-x-1.5 text-slate-400">
+                            <MessageSquarePlus className="w-3.5 h-3.5 text-sky-400" />
+                            <span>Ask for a 1-line note whenever this fires</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => updateProblem(problem.id, { promptNoteOnHit: !promptNoteActive })}
+                            className={`px-2.5 py-0.5 rounded-lg border font-bold text-[10px] ${
+                              promptNoteActive
+                                ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                                : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
+                            }`}
+                          >
+                            {promptNoteActive ? 'ON' : 'OFF'}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
+                );
+              };
 
-                {/* CARD B: REMINDER / MENTAL SHIFT */}
+              const reminderCard = (
                 <div
                   className={`p-4 rounded-2xl border space-y-3 transition-colors ${
                     reminderActive
@@ -990,8 +1075,9 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                     </div>
                   </div>
                 </div>
+              );
 
-                {/* CARD C: CONCRETE ACTION / ROUTINE FIX + LIVE LINKED TELEMETRY */}
+              const actionCard = (
                 <div
                   className={`p-4 rounded-2xl border space-y-3 transition-colors ${
                     actionActive || linkedActions.length > 0
@@ -1013,7 +1099,6 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Live Telemetry of Dispatched Items */}
                   {linkedActions.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {linkedActions.map(act => (
@@ -1091,44 +1176,139 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                     })}
                   </div>
                 </div>
+              );
 
-                {(reminderActive || actionActive) && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-slate-950/75 border border-slate-800 text-xs">
+              const proofBar = testingSummary.hasSolution && (
+                <div className="px-3.5 py-2.5 rounded-2xl bg-slate-950/75 border border-slate-800 space-y-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center space-x-1.5">
-                      <span className="text-[11px] text-slate-400">Clean goal:</span>
-                      {VERIFY_DAY_OPTIONS.map(days => {
-                        const active = (problem.verifyDays || defaultVerifyDays) === days;
+                      <span className="text-[11px] text-slate-400">Proof target:</span>
+                      {PROOF_TARGETS.map(target => {
+                        const active = (problem.verifyTarget || defaultVerifyTarget) === target;
                         return (
                           <button
-                            key={days}
+                            key={target}
                             type="button"
-                            onClick={() => updateProblem(problem.id, { verifyDays: days })}
+                            onClick={() => updateProblem(problem.id, { verifyTarget: target })}
                             className={`px-2 py-0.5 rounded-lg font-mono text-[10px] font-bold border ${
                               active
                                 ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
                                 : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
                             }`}
                           >
-                            {days}d
+                            {target}×
                           </button>
                         );
                       })}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {testingSummary.hasSolution && (
-                        <span className={`px-2 py-0.5 rounded-lg border text-[11px] font-bold ${testingSummary.badgeClass}`}>
-                          {testingSummary.label}
-                        </span>
-                      )}
-                      {verification.isTesting && (
-                        <span className="font-mono text-[10px] text-slate-500">
-                          started {verification.daysClean}/{verification.targetDays}d
-                        </span>
+                      <span className={`px-2 py-0.5 rounded-lg border text-[11px] font-bold ${testingSummary.badgeClass}`}>
+                        {testingSummary.label}
+                      </span>
+                      {testingSummary.readyToResolve && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateProblem(problem.id, { status: 'solved', classified: true });
+                            onClose();
+                          }}
+                          className="px-2.5 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-[11px]"
+                        >
+                          ✓ Resolve
+                        </button>
                       )}
                     </div>
                   </div>
-                )}
-              </div>
+                  {testingSummary.effectiveCount > 0 && testingSummary.state !== 'failed' && (
+                    <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          testingSummary.readyToResolve ? 'bg-emerald-400' : 'bg-sky-400'
+                        }`}
+                        style={{ width: `${testingSummary.pct}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+
+              return (
+                <>
+                  {/* SECTION 1: ACTIVE STANCE (Active solution leads when present!) */}
+                  <div className="space-y-3">
+                    <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
+                      {testingSummary.hasSolution
+                        ? `Active Solution · v${testingSummary.version}`
+                        : 'Your Active Response'}
+                    </div>
+
+                    {testingSummary.hasSolution && testingSummary.state === 'failed' && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/35 text-xs">
+                        <span className="text-rose-200 font-medium">
+                          Previous fix failed on {problem.lastFixFailedAt?.slice(5)}. Adjust your Reminder, Trigger, or Action below, then restart testing.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            reviseProblemSolution(problem.id, { restartTest: true, date: todayDate });
+                            showToast(`Started testing v${testingSummary.version + 1}`);
+                          }}
+                          className="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shrink-0"
+                        >
+                          Start testing v{testingSummary.version + 1}
+                        </button>
+                      </div>
+                    )}
+
+                    {testingSummary.hasSolution && testingSummary.latestPendingTweak && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-violet-500/10 border border-violet-500/35 text-xs">
+                        <span className="text-violet-200 min-w-0 flex-1">
+                          <strong>Pending tweak ({testingSummary.latestPendingTweak.date.slice(5)}):</strong>{' '}
+                          &ldquo;{testingSummary.latestPendingTweak.note}&rdquo;
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReviseRemDraft(getProblemReminderText(problem));
+                              setReviseActDraft(getProblemActionText(problem));
+                              setReviseNoteDraft(testingSummary.latestPendingTweak?.note || '');
+                              setReviseRestartTest(testingSummary.state === 'failed');
+                              setTweakMode('revise');
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-bold text-[11px]"
+                          >
+                            Apply tweak
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              reviseProblemSolution(problem.id, { markTweaksAppliedOnly: true });
+                              showToast('Marked tweak as applied');
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-bold text-[11px]"
+                          >
+                            Mark applied
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {testingSummary.hasSolution ? (
+                      <>
+                        {reminderCard}
+                        {actionCard}
+                        {proofBar}
+                        {observingCard(true)}
+                      </>
+                    ) : (
+                      <>
+                        {observingCard(false)}
+                        {reminderCard}
+                        {actionCard}
+                      </>
+                    )}
+                  </div>
 
               {/* SECTION 2: CLUES & EVIDENCE (Always visible right below while designing solutions!) */}
               <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3.5">
@@ -1240,6 +1420,16 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                               : 'Logged occurrence'}
                           </p>
                         )}
+                        {entry.tweakNote?.trim() && entry.kind !== 'tweaked' && (
+                          <p
+                            className={`text-[11px] mt-1 leading-snug ${
+                              entry.tweakApplied ? 'text-slate-400' : 'text-violet-300'
+                            }`}
+                          >
+                            {entry.tweakApplied ? 'Tweak applied: ' : 'Tweak idea: '}
+                            &ldquo;{entry.tweakNote}&rdquo;
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1307,173 +1497,263 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                   </div>
                 )}
               </div>
-            </>
+                </>
+              );
+            })()
           )}
         </div>
 
-        {/* STICKY FOOTER: INLINE TWEAK INPUT + 4-WAY CHECK-IN FOR CONTEXT DATE + LIFECYCLE */}
+        {/* STICKY FOOTER: TWEAK / REVISE DRAWER + 3-VERDICT TOGGLEABLE CHECK-IN + RESOLVE */}
         <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-950/75 space-y-2.5 shrink-0">
-          {tweakOpen && problem.status !== 'solved' && (
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 p-2.5 rounded-xl bg-violet-500/10 border border-violet-500/35">
-              <input
-                type="text"
-                autoFocus
-                value={tweakDraft}
-                onChange={e => setTweakDraft(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const trimmed = tweakDraft.trim();
-                    recordProblemCheckIn(problem.id, 'tweaked', {
-                      date: contextDate,
-                      sourceType: contextSourceType,
-                      sourceRef: contextSourceRef,
-                      ...(trimmed ? { note: trimmed } : {})
-                    });
-                    setTweakOpen(false);
-                    setTweakDraft('');
-                    showToast('Saved tweak for ' + contextDate.slice(5));
-                  }
-                  if (e.key === 'Escape') {
-                    setTweakOpen(false);
-                    setTweakDraft('');
-                  }
-                }}
-                placeholder="What tweak would make this solution work better? (Enter to save)..."
-                className="flex-1 min-w-[180px] bg-slate-950 border border-violet-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const trimmed = tweakDraft.trim();
-                  recordProblemCheckIn(problem.id, 'tweaked', {
-                    date: contextDate,
-                    sourceType: contextSourceType,
-                    sourceRef: contextSourceRef,
-                    ...(trimmed ? { note: trimmed } : {})
-                  });
-                  setTweakOpen(false);
-                  setTweakDraft('');
-                  showToast('Saved tweak for ' + contextDate.slice(5));
-                }}
-                className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-extrabold text-xs shrink-0"
-              >
-                Save tweak
-              </button>
-              <button
-                type="button"
-                disabled={!tweakDraft.trim()}
-                onClick={() => {
-                  const trimmed = tweakDraft.trim();
-                  if (!trimmed) return;
-                  recordProblemCheckIn(problem.id, 'tweaked', {
-                    date: contextDate,
-                    sourceType: contextSourceType,
-                    sourceRef: contextSourceRef,
-                    note: trimmed
-                  });
-                  const curRem = getProblemReminderText(problem);
-                  const curAct = getProblemActionText(problem);
-                  const patch: Record<string, unknown> = {};
-                  if (reminderActive && curRem) {
-                    const updatedRem = `${curRem} — ${trimmed}`;
-                    patch.isGuardrail = true;
-                    patch.reminderText = updatedRem;
-                    setReminderDraft(updatedRem);
-                  } else if (actionActive && curAct) {
-                    const updatedAct = `${curAct} — ${trimmed}`;
-                    patch.fixNote = updatedAct;
-                    setActionDraft(updatedAct);
-                  } else if (curRem) {
-                    const updatedRem = `${curRem} — ${trimmed}`;
-                    patch.isGuardrail = true;
-                    patch.reminderText = updatedRem;
-                    setReminderDraft(updatedRem);
-                  } else {
-                    patch.fixNote = trimmed;
-                    setActionDraft(trimmed);
-                  }
-                  if (problem.status === 'open') {
-                    patch.status = 'testing';
-                    patch.fixStartedAt = todayDate;
-                  }
-                  updateProblem(problem.id, patch);
-                  setTweakOpen(false);
-                  setTweakDraft('');
-                  showToast('Saved tweak & updated active solution');
-                }}
-                className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-200 border border-amber-500/40 font-extrabold text-xs shrink-0"
-              >
-                Save &amp; update fix
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTweakOpen(false);
-                  setTweakDraft('');
-                }}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
-              >
-                Cancel
-              </button>
+          {tweakMode !== 'closed' && problem.status !== 'solved' && (
+            <div className="p-3 rounded-xl bg-slate-900 border border-violet-500/35 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex rounded-lg bg-slate-950 border border-slate-800 p-0.5 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setTweakMode('idea')}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      tweakMode === 'idea'
+                        ? 'bg-violet-500 text-slate-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Jot tweak idea
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviseRemDraft(getProblemReminderText(problem));
+                      setReviseActDraft(getProblemActionText(problem));
+                      setReviseRestartTest(testingSummary.state === 'failed');
+                      setTweakMode('revise');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      tweakMode === 'revise'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Edit &amp; apply fix
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTweakMode('closed')}
+                  className="text-xs font-bold text-slate-400 hover:text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+
+              {tweakMode === 'idea' ? (
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={tweakIdeaDraft}
+                    onChange={e => setTweakIdeaDraft(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && tweakIdeaDraft.trim()) {
+                        e.preventDefault();
+                        noteProblemTweak(problem.id, tweakIdeaDraft, { date: contextDate });
+                        setTweakIdeaDraft('');
+                        setTweakMode('closed');
+                        showToast('Tweak idea saved (kept your day verdict intact)');
+                      }
+                      if (e.key === 'Escape') setTweakMode('closed');
+                    }}
+                    placeholder="What tweak would sharpen this solution? (keeps today's verdict)..."
+                    className="flex-1 min-w-[180px] bg-slate-950 border border-violet-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={!tweakIdeaDraft.trim()}
+                    onClick={() => {
+                      noteProblemTweak(problem.id, tweakIdeaDraft, { date: contextDate });
+                      setTweakIdeaDraft('');
+                      setTweakMode('closed');
+                      showToast('Tweak idea saved (kept your day verdict intact)');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+                  >
+                    Save idea
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {(reminderActive || reviseRemDraft.trim() || (!actionActive && !reviseActDraft.trim())) && (
+                    <input
+                      type="text"
+                      value={reviseRemDraft}
+                      onChange={e => setReviseRemDraft(e.target.value)}
+                      placeholder="Active Reminder / Mental Shift text..."
+                      className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                    />
+                  )}
+                  {(actionActive || reviseActDraft.trim()) && (
+                    <input
+                      type="text"
+                      value={reviseActDraft}
+                      onChange={e => setReviseActDraft(e.target.value)}
+                      placeholder="Active Concrete Action / Habit text..."
+                      className="w-full bg-slate-950 border border-sky-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                    />
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={reviseNoteDraft}
+                      onChange={e => setReviseNoteDraft(e.target.value)}
+                      placeholder="What changed / why? (optional)..."
+                      className="flex-1 min-w-[160px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                    />
+                    {testingSummary.state !== 'failed' && (
+                      <label className="inline-flex items-center space-x-1.5 text-[11px] text-slate-300 cursor-pointer select-none px-1">
+                        <input
+                          type="checkbox"
+                          checked={reviseRestartTest}
+                          onChange={e => setReviseRestartTest(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-0"
+                        />
+                        <span>Start fresh (v{testingSummary.version + 1})</span>
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      disabled={!reviseRemDraft.trim() && !reviseActDraft.trim()}
+                      onClick={() => {
+                        reviseProblemSolution(problem.id, {
+                          ...(reminderActive || reviseRemDraft.trim()
+                            ? { reminderText: reviseRemDraft.trim() }
+                            : {}),
+                          ...(actionActive || reviseActDraft.trim()
+                            ? { fixNote: reviseActDraft.trim() }
+                            : {}),
+                          ...(reviseNoteDraft.trim() ? { note: reviseNoteDraft.trim() } : {}),
+                          restartTest: reviseRestartTest,
+                          date: todayDate
+                        });
+                        if (reminderActive || reviseRemDraft.trim()) {
+                          setReminderDraft(reviseRemDraft.trim());
+                        }
+                        if (actionActive || reviseActDraft.trim()) {
+                          setActionDraft(reviseActDraft.trim());
+                        }
+                        setTweakMode('closed');
+                        setReviseNoteDraft('');
+                        showToast('Saved revised solution cleanly');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+                    >
+                      Save revised fix
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
               {problem.status !== 'solved' ? (
                 <>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     {contextDate.slice(5)}:
                   </span>
                   {testingSummary.hasSolution ? (
                     <>
+                      <div className="inline-flex items-center rounded-xl bg-slate-900 border border-slate-800 p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOutcome = checkInVerdict === 'effective' ? null : 'effective';
+                            recordProblemCheckIn(problem.id, nextOutcome, {
+                              date: contextDate,
+                              sourceType: contextSourceType,
+                              sourceRef: contextSourceRef
+                            });
+                            showToast(
+                              nextOutcome
+                                ? 'Marked Worked for ' + contextDate.slice(5)
+                                : 'Cleared check-in for ' + contextDate.slice(5)
+                            );
+                          }}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
+                            checkInVerdict === 'effective'
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'text-emerald-300 hover:bg-emerald-500/15'
+                          }`}
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Worked</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOutcome =
+                              checkInVerdict === 'not_triggered' ? null : 'not_triggered';
+                            recordProblemCheckIn(problem.id, nextOutcome, {
+                              date: contextDate,
+                              sourceType: contextSourceType,
+                              sourceRef: contextSourceRef
+                            });
+                            showToast(
+                              nextOutcome
+                                ? "Logged Didn't come up on " + contextDate.slice(5)
+                                : 'Cleared check-in for ' + contextDate.slice(5)
+                            );
+                          }}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
+                            checkInVerdict === 'not_triggered'
+                              ? 'bg-slate-200 text-slate-950'
+                              : 'text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <Minus className="w-3 h-3" />
+                          <span>Didn&apos;t come up</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOutcome = checkInVerdict === 'failed' ? null : 'failed';
+                            recordProblemCheckIn(problem.id, nextOutcome, {
+                              date: contextDate,
+                              sourceType: contextSourceType,
+                              sourceRef: contextSourceRef,
+                              note: nextOutcome ? clueDraft.trim() || undefined : undefined
+                            });
+                            if (nextOutcome) setClueDraft('');
+                            showToast(
+                              nextOutcome
+                                ? 'Logged Failed on ' + contextDate.slice(5)
+                                : 'Undid Failed on ' + contextDate.slice(5)
+                            );
+                          }}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
+                            checkInVerdict === 'failed'
+                              ? 'bg-rose-500 text-slate-950'
+                              : 'text-rose-300 hover:bg-rose-500/15'
+                          }`}
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Failed</span>
+                        </button>
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => {
-                          recordProblemCheckIn(problem.id, 'effective', {
-                            date: contextDate,
-                            sourceType: contextSourceType,
-                            sourceRef: contextSourceRef
-                          });
-                          showToast('Marked Worked for ' + contextDate.slice(5));
+                          if (tweakMode === 'closed') {
+                            setReviseRemDraft(getProblemReminderText(problem));
+                            setReviseActDraft(getProblemActionText(problem));
+                            setTweakMode('idea');
+                          } else {
+                            setTweakMode('closed');
+                          }
                         }}
                         className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                          checkInVerdict === 'effective'
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                            : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800'
-                        }`}
-                      >
-                        <Check className="w-3 h-3" />
-                        <span>Worked</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          recordProblemCheckIn(problem.id, 'not_triggered', {
-                            date: contextDate,
-                            sourceType: contextSourceType,
-                            sourceRef: contextSourceRef
-                          });
-                          showToast("Logged Didn't come up on " + contextDate.slice(5));
-                        }}
-                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                          checkInVerdict === 'not_triggered'
-                            ? 'bg-slate-200 text-slate-950 border-slate-100'
-                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
-                        }`}
-                      >
-                        <Minus className="w-3 h-3" />
-                        <span>Didn&apos;t come up</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTweakOpen(v => !v);
-                          setTweakDraft('');
-                        }}
-                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                          checkInVerdict === 'tweaked' || tweakOpen
+                          tweakMode !== 'closed'
                             ? 'bg-violet-500 text-slate-950 border-violet-400'
                             : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
                         }`}
@@ -1481,39 +1761,24 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                         <Pencil className="w-3 h-3" />
                         <span>Tweak</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          recordProblemCheckIn(problem.id, 'failed', {
-                            date: contextDate,
-                            sourceType: contextSourceType,
-                            sourceRef: contextSourceRef,
-                            note: clueDraft.trim() || undefined
-                          });
-                          setClueDraft('');
-                          showToast('Logged Failed on ' + contextDate.slice(5));
-                        }}
-                        className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
-                          checkInVerdict === 'failed'
-                            ? 'bg-rose-500 text-slate-950 border-rose-400'
-                            : 'bg-slate-900 hover:bg-rose-500/15 text-rose-300 border-slate-800'
-                        }`}
-                      >
-                        <X className="w-3 h-3" />
-                        <span>Failed</span>
-                      </button>
                     </>
                   ) : (
                     <>
                       <button
                         type="button"
                         onClick={() => {
-                          recordProblemCheckIn(problem.id, 'not_triggered', {
+                          const nextOutcome =
+                            checkInVerdict === 'not_triggered' ? null : 'not_triggered';
+                          recordProblemCheckIn(problem.id, nextOutcome, {
                             date: contextDate,
                             sourceType: contextSourceType,
                             sourceRef: contextSourceRef
                           });
-                          showToast("Logged Didn't come up on " + contextDate.slice(5));
+                          showToast(
+                            nextOutcome
+                              ? "Logged Didn't come up on " + contextDate.slice(5)
+                              : 'Cleared check-in'
+                          );
                         }}
                         className={`inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-colors ${
                           checkInVerdict === 'not_triggered'
@@ -1544,18 +1809,6 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                       </button>
                     </>
                   )}
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateProblem(problem.id, { status: 'solved', classified: true });
-                      onClose();
-                    }}
-                    className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 text-xs font-extrabold ml-1"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Mark Resolved</span>
-                  </button>
                 </>
               ) : (
                 <button
@@ -1572,38 +1825,23 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
               )}
             </div>
 
-            <div>
-              {confirmDelete ? (
-                <div className="inline-flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      deleteProblem(problem.id);
-                      onClose();
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-xs font-extrabold"
-                  >
-                    Confirm Delete
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(false)}
-                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete</span>
-                </button>
-              )}
-            </div>
+            {problem.status !== 'solved' && (
+              <button
+                type="button"
+                onClick={() => {
+                  updateProblem(problem.id, { status: 'solved', classified: true });
+                  onClose();
+                }}
+                className={`inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-colors ${
+                  testingSummary.readyToResolve
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                    : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Mark Resolved</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -49,12 +49,14 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
     problemSettings,
     recordProblemRecurrence,
     recordProblemCheckIn,
-    updateProblem,
+    noteProblemTweak,
+    reviseProblemSolution,
     setActiveTab,
     setReviewSubTab
   } = useStorage();
 
   const caps = getLevelCapabilities(systemLevel);
+  const defaultVerifyTarget = problemSettings.defaultVerifyTarget || 5;
 
   const storageKey = `legio_reminders_open_${context}_v2`;
   const [open, setOpen] = useState<boolean>(() => {
@@ -66,8 +68,9 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
   });
   const [feedbackById, setFeedbackById] = useState<Record<string, string>>({});
   const [clueTargetId, setClueTargetId] = useState<string | null>(null);
-  const [clueMode, setClueMode] = useState<'clue' | 'failed' | 'tweak'>('clue');
+  const [clueMode, setClueMode] = useState<'clue' | 'failed' | 'tweak_idea' | 'revise'>('clue');
   const [clueDraft, setClueDraft] = useState('');
+  const [reviseFixDraft, setReviseFixDraft] = useState('');
   const [activeCaseProblemId, setActiveCaseProblemId] = useState<string | null>(null);
 
   const enabled =
@@ -122,43 +125,34 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
 
   const commitInlineNote = (
     id: string,
-    mode: 'clue' | 'failed' | 'tweak',
-    note?: string,
-    applyToFix = false
+    mode: 'clue' | 'failed' | 'tweak_idea' | 'revise',
+    note?: string
   ) => {
     const trimmed = note?.trim();
-    if (mode === 'tweak') {
-      recordProblemCheckIn(id, 'tweaked', {
-        date,
-        sourceType: src,
-        ...(sourceRef ? { sourceRef } : {}),
-        ...(trimmed ? { note: trimmed } : {})
-      });
-      if (applyToFix && trimmed) {
-        const prob = problems.find(p => p.id === id);
-        if (prob) {
-          const curRem = getProblemReminderText(prob);
-          const curAct = getProblemActionText(prob);
-          const patch: Record<string, unknown> = {};
-          if (hasActiveReminder(prob) && curRem) {
-            patch.isGuardrail = true;
-            patch.reminderText = `${curRem} — ${trimmed}`;
-          } else if (hasActiveAction(prob) && curAct) {
-            patch.fixNote = `${curAct} — ${trimmed}`;
-          } else if (curRem) {
-            patch.isGuardrail = true;
-            patch.reminderText = `${curRem} — ${trimmed}`;
-          } else {
-            patch.fixNote = trimmed;
-          }
-          if (prob.status === 'open') {
-            patch.status = 'testing';
-            patch.fixStartedAt = todayDate;
-          }
-          updateProblem(prob.id, patch);
-        }
+    if (mode === 'tweak_idea') {
+      if (trimmed) {
+        noteProblemTweak(id, trimmed, { date });
+        flash(id, 'Tweak idea saved');
       }
-      flash(id, applyToFix && trimmed ? 'Tweak saved & fix updated' : 'Tweak saved');
+    } else if (mode === 'revise') {
+      const prob = problems.find(p => p.id === id);
+      const nextText = reviseFixDraft.trim();
+      if (prob && nextText) {
+        if (hasActiveReminder(prob) || getProblemReminderText(prob)) {
+          reviseProblemSolution(id, {
+            reminderText: nextText,
+            ...(trimmed ? { note: trimmed } : {}),
+            date: todayDate
+          });
+        } else {
+          reviseProblemSolution(id, {
+            fixNote: nextText,
+            ...(trimmed ? { note: trimmed } : {}),
+            date: todayDate
+          });
+        }
+        flash(id, 'Solution updated');
+      }
     } else if (mode === 'failed') {
       recordProblemCheckIn(id, 'failed', {
         date,
@@ -178,11 +172,20 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
     }
     setClueTargetId(null);
     setClueDraft('');
+    setReviseFixDraft('');
   };
 
   const handleFailedClick = (id: string) => {
     const prob = problems.find(p => p.id === id);
-    if (prob && shouldPromptNoteOnHit(prob)) {
+    if (!prob) return;
+    if (getProblemCheckInForDate(prob, date) === 'failed') {
+      recordProblemCheckIn(id, null, { date, sourceType: src, sourceRef });
+      setClueTargetId(null);
+      setClueDraft('');
+      flash(id, 'Cleared check-in');
+      return;
+    }
+    if (shouldPromptNoteOnHit(prob)) {
       if (clueTargetId === id && clueMode === 'failed') {
         setClueTargetId(null);
         setClueDraft('');
@@ -197,12 +200,13 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
   };
 
   const handleTweakClick = (id: string) => {
-    if (clueTargetId === id && clueMode === 'tweak') {
+    if (clueTargetId === id && (clueMode === 'tweak_idea' || clueMode === 'revise')) {
       setClueTargetId(null);
       setClueDraft('');
+      setReviseFixDraft('');
     } else {
       setClueTargetId(id);
-      setClueMode('tweak');
+      setClueMode('tweak_idea');
       setClueDraft('');
     }
   };
@@ -285,11 +289,13 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                   const sevVis = SEVERITY_VISUAL[getProblemSeverity(item)];
                   const reminder = getProblemReminderText(item);
                   const action = getProblemActionText(item);
+                  const checkInEntry = (item.checkIns || []).find(c => c.date === date);
                   const verdict = getProblemCheckInForDate(item, date);
-                  const testing = getSolutionTestingSummary(item);
+                  const testing = getSolutionTestingSummary(item, defaultVerifyTarget);
                   const alsoWatching = isProblemWatching(item);
                   const flashMsg = feedbackById[item.id];
-                  const isTweakOpenForThis = clueTargetId === item.id && clueMode === 'tweak';
+                  const isTweakOpenForThis =
+                    clueTargetId === item.id && (clueMode === 'tweak_idea' || clueMode === 'revise');
                   return (
                     <div
                       key={item.id}
@@ -353,8 +359,9 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                           <button
                             type="button"
                             onClick={() => {
-                              recordProblemCheckIn(item.id, 'effective', { date, sourceType: src, sourceRef });
-                              flash(item.id, 'Worked');
+                              const nextOutcome = verdict === 'effective' ? null : 'effective';
+                              recordProblemCheckIn(item.id, nextOutcome, { date, sourceType: src, sourceRef });
+                              flash(item.id, nextOutcome ? 'Worked' : 'Cleared');
                             }}
                             className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
                               verdict === 'effective'
@@ -364,18 +371,6 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                           >
                             <Check className="w-3 h-3" />
                             <span>Worked</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleTweakClick(item.id)}
-                            className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
-                              verdict === 'tweaked' || isTweakOpenForThis
-                                ? 'bg-violet-500 text-slate-950 border-violet-400'
-                                : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
-                            }`}
-                          >
-                            <Pencil className="w-3 h-3" />
-                            <span>Tweak</span>
                           </button>
                           <button
                             type="button"
@@ -389,82 +384,154 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                             <X className="w-3 h-3" />
                             <span>Failed</span>
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => handleTweakClick(item.id)}
+                            title="Jot a tweak idea or edit active fix"
+                            className={`inline-flex items-center px-2 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                              Boolean(checkInEntry?.tweakNote) || isTweakOpenForThis
+                                ? 'bg-violet-500 text-slate-950 border-violet-400'
+                                : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
+                            }`}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
 
                       {clueTargetId === item.id && (
-                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 pt-2 border-t border-slate-800/80">
-                          <input
-                            type="text"
-                            autoFocus
-                            value={clueDraft}
-                            onChange={e => setClueDraft(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                commitInlineNote(item.id, clueMode, clueDraft, false);
-                              }
-                              if (e.key === 'Escape') {
-                                setClueTargetId(null);
-                                setClueDraft('');
-                              }
-                            }}
-                            placeholder={
-                              clueMode === 'tweak'
-                                ? 'What tweak would make this reminder/fix stronger? (Enter)...'
-                                : clueMode === 'failed'
-                                ? 'What happened / why didn’t the reminder hold? (Enter)...'
-                                : 'What clue did you notice? (Enter)...'
-                            }
-                            className={`flex-1 min-w-[180px] bg-slate-900 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none border ${
-                              clueMode === 'tweak' ? 'border-violet-500/40' : 'border-sky-500/40'
-                            }`}
-                          />
-                          {clueMode === 'tweak' ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => commitInlineNote(item.id, 'tweak', clueDraft, false)}
-                                className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 text-slate-950 font-extrabold text-xs shrink-0"
-                              >
-                                Save tweak
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!clueDraft.trim()}
-                                onClick={() => commitInlineNote(item.id, 'tweak', clueDraft, true)}
-                                className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-200 border border-amber-500/40 font-extrabold text-xs shrink-0"
-                              >
-                                Save &amp; update fix
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setClueTargetId(null);
-                                  setClueDraft('');
-                                }}
-                                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 border border-slate-800 text-xs font-bold shrink-0"
-                              >
-                                Cancel
-                              </button>
-                            </>
+                        <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                          {clueMode === 'revise' ? (
+                            <div className="space-y-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                                Edit Active Reminder / Fix
+                              </div>
+                              <input
+                                type="text"
+                                autoFocus
+                                value={reviseFixDraft}
+                                onChange={e => setReviseFixDraft(e.target.value)}
+                                placeholder="Rewrite your reminder or concrete fix clearly..."
+                                className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                              />
+                              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={clueDraft}
+                                  onChange={e => setClueDraft(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      commitInlineNote(item.id, 'revise', clueDraft);
+                                    }
+                                    if (e.key === 'Escape') {
+                                      setClueTargetId(null);
+                                      setClueDraft('');
+                                      setReviseFixDraft('');
+                                    }
+                                  }}
+                                  placeholder="Optional reason / what changed..."
+                                  className="flex-1 min-w-[160px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!reviseFixDraft.trim()}
+                                  onClick={() => commitInlineNote(item.id, 'revise', clueDraft)}
+                                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+                                >
+                                  Save fix
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setClueTargetId(null);
+                                    setClueDraft('');
+                                    setReviseFixDraft('');
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 border border-slate-800 text-xs font-bold shrink-0"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
                           ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => commitInlineNote(item.id, clueMode, clueDraft)}
-                                className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => commitInlineNote(item.id, clueMode)}
-                                className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 border border-slate-800 text-xs font-bold shrink-0"
-                              >
-                                Skip note
-                              </button>
-                            </>
+                            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                              <input
+                                type="text"
+                                autoFocus
+                                value={clueDraft}
+                                onChange={e => setClueDraft(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitInlineNote(item.id, clueMode, clueDraft);
+                                  }
+                                  if (e.key === 'Escape') {
+                                    setClueTargetId(null);
+                                    setClueDraft('');
+                                  }
+                                }}
+                                placeholder={
+                                  clueMode === 'tweak_idea'
+                                    ? 'Jot tweak idea (keeps today’s verdict intact)...'
+                                    : clueMode === 'failed'
+                                    ? 'What happened / why didn’t the reminder hold? (Enter)...'
+                                    : 'What clue did you notice? (Enter)...'
+                                }
+                                className={`flex-1 min-w-[180px] bg-slate-900 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none border ${
+                                  clueMode === 'tweak_idea' ? 'border-violet-500/40' : 'border-sky-500/40'
+                                }`}
+                              />
+                              {clueMode === 'tweak_idea' ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={!clueDraft.trim()}
+                                    onClick={() => commitInlineNote(item.id, 'tweak_idea', clueDraft)}
+                                    className="px-3 py-1.5 rounded-xl bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+                                  >
+                                    Save idea
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReviseFixDraft(reminder || action || '');
+                                      setClueMode('revise');
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-extrabold text-xs shrink-0"
+                                  >
+                                    Edit fix now
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setClueTargetId(null);
+                                      setClueDraft('');
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 border border-slate-800 text-xs font-bold shrink-0"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => commitInlineNote(item.id, clueMode, clueDraft)}
+                                    className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => commitInlineNote(item.id, clueMode)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 border border-slate-800 text-xs font-bold shrink-0"
+                                  >
+                                    Skip note
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}

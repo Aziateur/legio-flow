@@ -6,7 +6,6 @@ import {
   getClusterTotalHits,
   getDirectChildren,
   getEligibleClusterTargets,
-  getFixVerificationProgress,
   getLastOccurrenceDate,
   getProblemActionText,
   getProblemReminderText,
@@ -100,8 +99,8 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const actionActive = hasActiveAction(problem);
   const lastDate = getLastOccurrenceDate(problem);
   const maxTop = problemSettings.maxTopConstraints || 3;
-  const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
-  const verification = getFixVerificationProgress(problem, todayDate, defaultVerifyDays);
+  const defaultVerifyTarget = problemSettings.defaultVerifyTarget || 5;
+  const testingSummary = getSolutionTestingSummary(problem, defaultVerifyTarget);
 
   const directChildren = useMemo(
     () => getDirectChildren(problems, problem.id),
@@ -138,7 +137,6 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => problems.filter(p => p.isTopConstraint && p.status !== 'solved').length,
     [problems]
   );
-  const testingSummary = getSolutionTestingSummary(problem);
 
   const openWorkbench = (tab?: WorkbenchTab) => {
     const resolvedTab: WorkbenchTab =
@@ -375,11 +373,6 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     className={`px-1.5 py-0.5 rounded-md border text-[10px] font-bold ${testingSummary.badgeClass}`}
                   >
                     {testingSummary.label}
-                    {verification.readyToVerify &&
-                    testingSummary.effectiveCount > 0 &&
-                    testingSummary.state !== 'failed'
-                      ? ' · Ready to resolve'
-                      : ''}
                   </span>
                 )}
 

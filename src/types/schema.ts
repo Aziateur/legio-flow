@@ -495,7 +495,8 @@ export interface ProblemFixAttempt {
 
 export interface ProblemSettings {
   maxTopConstraints?: number;      // Default 3 (1-5)
-  defaultVerifyDays?: number;      // Default 14 (7 / 14 / 30)
+  defaultVerifyDays?: number;      // Legacy calendar window (deprecated)
+  defaultVerifyTarget?: number;    // Default 5 (3 / 5 / 10 confirmed Worked reps)
   showBreakdownBar?: boolean;      // Default true
   showPreFlightInDaily?: boolean;  // Default true
   showPreFlightInGws?: boolean;    // Default true
@@ -509,6 +510,8 @@ export interface ProblemCheckIn {
   date: string; // YYYY-MM-DD
   outcome: ProblemCheckInOutcome;
   note?: string;
+  tweakNote?: string;
+  tweakApplied?: boolean;
 }
 
 export interface ProblemEntry {
@@ -539,7 +542,8 @@ export interface ProblemEntry {
   fixNote?: string;
   fixStartedAt?: string; // YYYY-MM-DD when the active fix experiment started
   fixTaskCompletedAt?: string; // YYYY-MM-DD when a dispatched Weekly fix task/sub-goal was checked off
-  verifyDays?: number; // Clean days required before prompting Verified Solved (default 14)
+  verifyDays?: number; // Legacy clean days window (deprecated)
+  verifyTarget?: number; // Confirmed Worked reps required before Ready to Resolve (default 5)
   fixAttempts?: ProblemFixAttempt[]; // Experiment history of failed/replaced/verified fixes
   lastFixFailedAt?: string; // Set automatically when +1 recurs while Testing Fix
   dispatchedTo?: ProblemDispatchTarget[];

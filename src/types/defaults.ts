@@ -435,6 +435,7 @@ export const INITIAL_PROBLEM_CATEGORIES: CustomProblemCategory[] = [
 export const DEFAULT_PROBLEM_SETTINGS: ProblemSettings = {
   maxTopConstraints: 3,
   defaultVerifyDays: 14,
+  defaultVerifyTarget: 5,
   showBreakdownBar: true,
   showPreFlightInDaily: true,
   showPreFlightInGws: true,
