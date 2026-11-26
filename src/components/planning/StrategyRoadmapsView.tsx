@@ -20,12 +20,14 @@ import {
   getWeeklyGoalsAssignedToRoadmap,
   isActiveStrategyPlan,
   isPossibleStrategyPlan,
+  isRoadmapItemInTaskList,
   isRoadmapItemInWeeklyPlan,
+  pullRoadmapItemIntoTaskList,
   pullRoadmapItemIntoWeeklyPlan,
   sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { PARK_REASON_META } from '../../lib/energyAnalytics';
-import { daysBetweenDates, normalizeTag } from '../../lib/problems';
+import { daysBetweenDates, problemMatchesRoadmap } from '../../lib/problems';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import {
   BookOpen,
@@ -450,19 +452,11 @@ export const StrategyRoadmapsView: React.FC = () => {
   };
 
   const isGoalInActiveMonth = (text: string, strategyGoalId?: string): boolean => {
-    if (strategyGoalId && activeMonthPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
-      return true;
-    }
-    const norm = text.trim().toLowerCase();
-    return !!norm && activeMonthPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+    return isRoadmapItemInTaskList(activeMonthPlan.tasks, text, strategyGoalId);
   };
 
   const isGoalInActiveQuarter = (text: string, strategyGoalId?: string): boolean => {
-    if (strategyGoalId && activeQuarterPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
-      return true;
-    }
-    const norm = text.trim().toLowerCase();
-    return !!norm && activeQuarterPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+    return isRoadmapItemInTaskList(activeQuarterPlan.tasks, text, strategyGoalId);
   };
 
   const handlePullGoalToMonth = (
@@ -481,23 +475,25 @@ export const StrategyRoadmapsView: React.FC = () => {
       setPlanningSubTab('monthly');
       return;
     }
+    const { nextTasks, landedInsideTask } = pullRoadmapItemIntoTaskList(activeMonthPlan.tasks, {
+      idPrefix: 'mgoal',
+      text: trimmed,
+      completed: links?.completed,
+      sourceLabel: links?.sourceLabel,
+      strategyPlanId: links?.strategyPlanId,
+      strategyStageId: links?.strategyStageId,
+      strategyGoalId: links?.strategyGoalId
+    });
     saveMonthlyPlan({
       ...activeMonthPlan,
-      tasks: [
-        ...activeMonthPlan.tasks,
-        {
-          id: `mgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          text: trimmed,
-          completed: Boolean(links?.completed),
-          ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
-          ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
-          ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
-          ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
-        }
-      ]
+      tasks: nextTasks
     });
-    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeMonthKey} Monthly Plan`);
-    setTimeout(() => setPullNotice(null), 2400);
+    setPullNotice(
+      landedInsideTask
+        ? `Added "${trimmed.slice(0, 28)}${trimmed.length > 28 ? '…' : ''}" inside "${landedInsideTask.text.slice(0, 26)}${landedInsideTask.text.length > 26 ? '…' : ''}" (${activeMonthKey})`
+        : `Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeMonthKey} Monthly Plan`
+    );
+    setTimeout(() => setPullNotice(null), 2600);
   };
 
   const handlePullGoalToQuarter = (
@@ -516,23 +512,25 @@ export const StrategyRoadmapsView: React.FC = () => {
       setPlanningSubTab('quarterly');
       return;
     }
+    const { nextTasks, landedInsideTask } = pullRoadmapItemIntoTaskList(activeQuarterPlan.tasks, {
+      idPrefix: 'qgoal',
+      text: trimmed,
+      completed: links?.completed,
+      sourceLabel: links?.sourceLabel,
+      strategyPlanId: links?.strategyPlanId,
+      strategyStageId: links?.strategyStageId,
+      strategyGoalId: links?.strategyGoalId
+    });
     saveQuarterlyPlan({
       ...activeQuarterPlan,
-      tasks: [
-        ...activeQuarterPlan.tasks,
-        {
-          id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          text: trimmed,
-          completed: Boolean(links?.completed),
-          ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
-          ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
-          ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
-          ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
-        }
-      ]
+      tasks: nextTasks
     });
-    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeQuarterKey} Quarterly Plan`);
-    setTimeout(() => setPullNotice(null), 2400);
+    setPullNotice(
+      landedInsideTask
+        ? `Added "${trimmed.slice(0, 28)}${trimmed.length > 28 ? '…' : ''}" inside "${landedInsideTask.text.slice(0, 26)}${landedInsideTask.text.length > 26 ? '…' : ''}" (${activeQuarterKey})`
+        : `Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to ${activeQuarterKey} Quarterly Plan`
+    );
+    setTimeout(() => setPullNotice(null), 2600);
   };
 
   const resolveTargetWeeklyGoalId = (planId?: string, stageId?: string): string | '__new__' | undefined => {
@@ -1736,16 +1734,17 @@ export const StrategyRoadmapsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Linked Plan Blockers (Problems tagged with this Roadmap Plan) */}
+              {/* Linked Plan Blockers (Problems bound by stable Roadmap ID + legacy tag fallback) */}
               <ProblemLoggerPanel
-                key={`roadmap_probs_${activePlan.id}_${activePlan.title}`}
+                key={`roadmap_probs_${activePlan.id}`}
                 mode="roadmap"
-                title={`Linked Problems (#${activePlan.title || 'Plan'})`}
-                subtitle="Problems tagged with this plan from any review automatically surface here so you see what's blocking your next gate."
+                title={`Linked Problems (${activePlan.title || 'Plan'})`}
+                subtitle="Problems linked to this roadmap survive renames and automatically route fixes into this roadmap's Weekly Goal."
                 sourceType="roadmap"
                 date={selectedDate}
                 sourceRef={activePlan.title}
                 filterTag={activePlan.title}
+                roadmapPlanId={activePlan.id}
                 targetWeekId={activeWeeklyPlan?.id || selectedWeekId}
                 defaultCollapsed={true}
               />
@@ -1848,15 +1847,11 @@ export const StrategyRoadmapsView: React.FC = () => {
                                     (activePlan.createdAt || todayDate).slice(0, 10);
                                   const daysOnStage = daysBetweenDates(startRef, todayDate);
                                   const isStalled = daysOnStage >= 21 && completedGoals === 0;
-                                  const normTitle = normalizeTag(activePlan.title);
-                                  const activeTaggedProblems = normTitle
-                                    ? problems.filter(
-                                        p =>
-                                          p.status !== 'solved' &&
-                                          ((p.tags || []).some(t => normalizeTag(t) === normTitle) ||
-                                            p.title.toLowerCase().includes(activePlan.title.trim().toLowerCase()))
-                                      ).length
-                                    : 0;
+                                  const activeTaggedProblems = problems.filter(
+                                    p =>
+                                      p.status !== 'solved' &&
+                                      problemMatchesRoadmap(p, activePlan.id, activePlan.title)
+                                  ).length;
                                   return (
                                     <>
                                       <span

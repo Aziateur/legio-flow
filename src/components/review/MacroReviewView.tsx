@@ -375,7 +375,9 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
     lifePillars,
     startDate,
     endDate,
-    currentPlan.topFocuses
+    currentPlan.topFocuses,
+    weeklyPlans,
+    dailyEntries
   );
 
   // Energy, Nervous System, Alignment & Automatic < 6 Warning Flags for Quarter / Year
@@ -2147,7 +2149,13 @@ export const MacroReviewView: React.FC<MacroReviewViewProps> = ({
                 const isTargetedThisPeriod = (currentPlan.targetGateRefs || []).some(
                   r => r.planId === sp.id
                 );
-                const domainProblems = getProblemsForRoadmapInRange(problems, sp.title, startDate, endDate);
+                const domainProblems = getProblemsForRoadmapInRange(
+                  problems,
+                  sp.title,
+                  startDate,
+                  endDate,
+                  sp.id
+                );
                 const audit = roadmapAudits[sp.id] || {};
 
                 return (

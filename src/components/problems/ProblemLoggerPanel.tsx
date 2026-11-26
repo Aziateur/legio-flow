@@ -9,6 +9,7 @@ import {
   PROBLEM_SEVERITIES,
   clusterHasSourceType,
   clusterHasTag,
+  clusterMatchesRoadmap,
   clusterOccurredInRange,
   clusterOccurredOnDate,
   computeProblemPriorityScore,
@@ -49,6 +50,7 @@ interface ProblemLoggerPanelProps {
   sourceRef?: string;
   dateRange?: { startDate: string; endDate: string };
   filterTag?: string;
+  roadmapPlanId?: string;
   filterSourceType?: ProblemSourceType;
   targetWeekId?: string;
   showAuditStrip?: boolean;
@@ -70,6 +72,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   sourceRef,
   dateRange,
   filterTag,
+  roadmapPlanId,
   filterSourceType,
   targetWeekId,
   showAuditStrip = false,
@@ -135,8 +138,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const { displayedProblems, hiddenSlipCount } = useMemo(() => {
     let list: ProblemEntry[] = [];
 
-    if (mode === 'roadmap' && filterTag) {
-      list = topLevelProblems.filter(p => clusterHasTag(problems, p, filterTag));
+    if (mode === 'roadmap' && (roadmapPlanId || filterTag)) {
+      list = topLevelProblems.filter(p =>
+        roadmapPlanId
+          ? clusterMatchesRoadmap(problems, p, roadmapPlanId, filterTag)
+          : clusterHasTag(problems, p, filterTag!)
+      );
     } else if (mode === 'weekly_triage') {
       list = topLevelProblems.filter(p => p.status !== 'solved');
     } else if (filterSourceType) {
@@ -171,6 +178,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   }, [
     mode,
     filterTag,
+    roadmapPlanId,
     filterSourceType,
     topLevelProblems,
     problems,
@@ -221,9 +229,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
         sourceType,
         ...(sourceRef ? { sourceRef } : {})
       });
-      if (finalTags.length > 0) {
+      if (finalTags.length > 0 || (roadmapPlanId && !existingMatch.roadmapPlanId)) {
         const mergedTags = Array.from(new Set([...existingMatch.tags, ...finalTags]));
-        updateProblem(existingMatch.id, { tags: mergedTags });
+        updateProblem(existingMatch.id, {
+          tags: mergedTags,
+          ...(roadmapPlanId && !existingMatch.roadmapPlanId ? { roadmapPlanId } : {})
+        });
       }
     } else {
       addProblem({
@@ -237,6 +248,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             : defaultScale,
         severity: internalSeverity,
         impact: severityToImpact(internalSeverity),
+        ...(roadmapPlanId ? { roadmapPlanId } : {}),
         tags: finalTags,
         sourceType,
         date,

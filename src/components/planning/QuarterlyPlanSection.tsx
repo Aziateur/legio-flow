@@ -1,13 +1,18 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useStorage } from '../../context/StorageContext';
 import { TaskItem, TargetGateRef } from '../../types/schema';
 import { getMonthInfo, getQuarterInfo, shiftQuarterKey } from '../../lib/macroAnalytics';
 import {
   STRATEGY_PRIORITY_META,
+  absorbOrphanedRoadmapGoals,
+  getActiveStageForPlan,
   getCommittedGatesForQuarter,
   getMonthlyChildrenOfQuarterlyTask,
   getMonthsForQuarter,
   isActiveStrategyPlan,
+  isRoadmapItemInTaskList,
+  pullRoadmapItemIntoTaskList,
+  resolvePeriodTaskCarriedDiagnosis,
   sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
@@ -56,6 +61,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     saveMonthlyPlan,
     getYearlyPlan,
     strategyPlans,
+    reviews,
     todayDate,
     selectedDate,
     setActiveTab,
@@ -111,9 +117,34 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
     [activeQuarterPlan, strategyPlans]
   );
 
-  // Parent link options for Quarterly Outcomes (Yearly Outcomes at LVL 5 + Committed Roadmap Gates at LVL 4+)
+  // Parent link options for Quarterly Outcomes (Active Roadmaps at LVL 4+ & Yearly Objectives at LVL 5)
   const parentOptions = useMemo<ParentLinkOption[]>(() => {
     const opts: ParentLinkOption[] = [];
+    const seen = new Set<string>();
+    if (caps.roadmaps) {
+      activeStrategyPlans.forEach(sp => {
+        const stageInfo = getActiveStageForPlan(sp);
+        const val = `roadmap:${sp.id}|${stageInfo?.stage.id || ''}`;
+        if (seen.has(val)) return;
+        seen.add(val);
+        const pPrefix = sp.priority ? `[${STRATEGY_PRIORITY_META[sp.priority].code}] ` : '';
+        opts.push({
+          value: val,
+          label: `${pPrefix}${sp.title || 'Untitled Roadmap'}${stageInfo ? ` · Stage ${stageInfo.stageIndex}` : ''}`,
+          group: 'Active Roadmaps'
+        });
+      });
+      committedGates.forEach(cg => {
+        const val = `roadmap:${cg.plan.id}|${cg.stage.id}`;
+        if (seen.has(val)) return;
+        seen.add(val);
+        opts.push({
+          value: val,
+          label: `${cg.plan.title} · Stage ${cg.stageIndex} (${qInfo.quarterKey} Gate)`,
+          group: 'Active Roadmaps'
+        });
+      });
+    }
     if (caps.modelAQuarterToYear) {
       linkedYearPlan.tasks
         .filter(t => t.status !== 'parked')
@@ -125,22 +156,34 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
           });
         });
     }
-    if (caps.roadmaps) {
-      committedGates.forEach(cg => {
-        opts.push({
-          value: `gate:${cg.plan.id}|${cg.stage.id}`,
-          label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
-          group: 'Committed Roadmap Gates'
-        });
-      });
-    }
     return opts;
-  }, [linkedYearPlan.tasks, committedGates, qInfo.year, caps.modelAQuarterToYear, caps.roadmaps]);
+  }, [
+    activeStrategyPlans,
+    committedGates,
+    linkedYearPlan.tasks,
+    qInfo.quarterKey,
+    qInfo.year,
+    caps.modelAQuarterToYear,
+    caps.roadmaps
+  ]);
 
   const encodeTaskParent = (t: TaskItem): string => {
     if (t.yearlyTaskId) return `yearly:${t.yearlyTaskId}`;
-    if (t.strategyPlanId && t.strategyStageId) return `gate:${t.strategyPlanId}|${t.strategyStageId}`;
+    if (t.strategyPlanId) return `roadmap:${t.strategyPlanId}|${t.strategyStageId || ''}`;
     return '';
+  };
+
+  const getFallbackParentLabel = (t: TaskItem): string | null => {
+    const enc = encodeTaskParent(t);
+    if (!enc || parentOptions.some(o => o.value === enc)) return null;
+    if (t.strategyPlanId) {
+      const sp = strategyPlans.find(p => p.id === t.strategyPlanId);
+      if (sp) {
+        const stIdx = t.strategyStageId ? sp.stages.findIndex(s => s.id === t.strategyStageId) : -1;
+        return `${sp.title || 'Roadmap'}${stIdx >= 0 ? ` · Stage ${stIdx}` : ''}`;
+      }
+    }
+    return t.sourceLabel || null;
   };
 
   const decodeParentPatch = (encoded: string): Partial<TaskItem> => {
@@ -149,7 +192,9 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
         yearlyTaskId: undefined,
         strategyPlanId: undefined,
         strategyStageId: undefined,
-        sourceLabel: undefined
+        strategyGoalId: undefined,
+        sourceLabel: undefined,
+        parentLinkMode: undefined
       };
     }
     if (encoded.startsWith('yearly:')) {
@@ -157,22 +202,49 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
         yearlyTaskId: encoded.slice(7),
         strategyPlanId: undefined,
         strategyStageId: undefined,
+        strategyGoalId: undefined,
         parentLinkMode: 'step'
       };
     }
-    if (encoded.startsWith('gate:')) {
-      const [planId, stageId] = encoded.slice(5).split('|');
-      const plan = strategyPlans.find(p => p.id === planId);
+    if (encoded.startsWith('roadmap:') || encoded.startsWith('gate:')) {
+      const raw = encoded.startsWith('roadmap:') ? encoded.slice(8) : encoded.slice(5);
+      const [planId, rawStageId] = raw.split('|');
+      const sp = strategyPlans.find(p => p.id === planId);
+      const stageInfo = sp ? getActiveStageForPlan(sp) : null;
+      const stageId = rawStageId || stageInfo?.stage.id || undefined;
+      const stageIdx = sp && stageId ? sp.stages.findIndex(s => s.id === stageId) : -1;
       return {
         yearlyTaskId: undefined,
         strategyPlanId: planId,
         strategyStageId: stageId,
-        sourceLabel: plan ? `${plan.title}` : undefined,
+        strategyGoalId: undefined,
+        sourceLabel: sp ? `${sp.title}${stageIdx >= 0 ? ` · Stage ${stageIdx}` : ''}` : undefined,
         parentLinkMode: 'step'
       };
     }
     return {};
   };
+
+  // Auto-absorb orphaned pulled Roadmap proximal goals into assigned Quarterly outcomes
+  useEffect(() => {
+    const { nextTasks, moved } = absorbOrphanedRoadmapGoals(
+      activeQuarterPlan.tasks,
+      undefined,
+      undefined,
+      { autoCompleteParent: false }
+    );
+    if (moved.length === 0) return;
+    saveQuarterlyPlan({
+      ...activeQuarterPlan,
+      tasks: nextTasks
+    });
+    setStepNotice(
+      moved.length === 1
+        ? `Grouped "${moved[0].orphanText.slice(0, 24)}…" inside "${moved[0].parentText.slice(0, 24)}…"`
+        : `Grouped ${moved.length} roadmap milestones inside assigned quarterly outcomes`
+    );
+    setTimeout(() => setStepNotice(null), 2600);
+  }, [activeQuarterPlan.id, activeQuarterPlan.tasks]);
 
   const childMonthOptions = useMemo(
     () =>
@@ -194,9 +266,16 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
       ...(newOutcomeKpi.trim() ? { kpiTarget: newOutcomeKpi.trim() } : {}),
       ...parentPatch
     };
+    const combined = [...activeQuarterPlan.tasks, nextTask];
+    const { nextTasks } =
+      parentPatch.strategyPlanId && !parentPatch.yearlyTaskId
+        ? absorbOrphanedRoadmapGoals(combined, parentPatch.strategyPlanId, nextTask.id, {
+            autoCompleteParent: false
+          })
+        : { nextTasks: combined };
     saveQuarterlyPlan({
       ...activeQuarterPlan,
-      tasks: [...activeQuarterPlan.tasks, nextTask]
+      tasks: nextTasks
     });
     setNewOutcomeInput('');
     setNewOutcomeKpi('');
@@ -204,9 +283,29 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
   };
 
   const handleUpdateOutcome = (id: string, patch: Partial<TaskItem>) => {
+    const patched = activeQuarterPlan.tasks.map(t => (t.id === id ? { ...t, ...patch } : t));
+    if (patch.strategyPlanId && !patch.yearlyTaskId) {
+      const { nextTasks, moved } = absorbOrphanedRoadmapGoals(
+        patched,
+        patch.strategyPlanId,
+        id,
+        { autoCompleteParent: false }
+      );
+      saveQuarterlyPlan({
+        ...activeQuarterPlan,
+        tasks: nextTasks
+      });
+      if (moved.length > 0) {
+        setStepNotice(
+          `Assigned Roadmap & grouped ${moved.length} pulled milestone${moved.length > 1 ? 's' : ''} inside`
+        );
+        setTimeout(() => setStepNotice(null), 2600);
+      }
+      return;
+    }
     saveQuarterlyPlan({
       ...activeQuarterPlan,
-      tasks: activeQuarterPlan.tasks.map(t => (t.id === id ? { ...t, ...patch } : t))
+      tasks: patched
     });
   };
 
@@ -225,16 +324,34 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
       t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
     );
     if (!alreadyInNext) {
+      const qReview = reviews.find(
+        r => r.periodType === 'quarterly' && r.periodKey === selectedQuarterKey
+      );
+      const originAudit = qReview?.outcomeAudits?.[task.id];
+      const unfinishedSubs = (task.subTasks || [])
+        .filter(s => !s.completed)
+        .map(s => ({
+          id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          text: s.text,
+          completed: false,
+          ...(s.strategyPlanId ? { strategyPlanId: s.strategyPlanId } : {}),
+          ...(s.strategyStageId ? { strategyStageId: s.strategyStageId } : {}),
+          ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {})
+        }));
       const pushedCopy: TaskItem = {
         id: `qgoal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         text: task.text.trim(),
         completed: false,
         pushedFromPeriod: selectedQuarterKey,
+        ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
+        ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+        ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {}),
         ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
         ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
         ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
         ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
         ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
         ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
       };
       saveQuarterlyPlan({
@@ -563,6 +680,29 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                   qInfo.quarterKey,
                   monthlyPlans
                 );
+                const assignedPlan =
+                  task.strategyPlanId && !task.strategyGoalId
+                    ? strategyPlans.find(sp => sp.id === task.strategyPlanId)
+                    : undefined;
+                const assignedStage = assignedPlan
+                  ? (task.strategyStageId
+                      ? assignedPlan.stages.find(s => s.id === task.strategyStageId)
+                      : undefined) || getActiveStageForPlan(assignedPlan)?.stage
+                  : undefined;
+                const assignedStageIdx =
+                  assignedPlan && assignedStage
+                    ? assignedPlan.stages.findIndex(s => s.id === assignedStage.id)
+                    : -1;
+                const unpulledGoals = assignedStage
+                  ? assignedStage.proximalGoals.filter(
+                      pg => !isRoadmapItemInTaskList(activeQuarterPlan.tasks, pg.text, pg.id)
+                    )
+                  : [];
+                const carriedDiag = resolvePeriodTaskCarriedDiagnosis(task, 'quarterly', {
+                  quarterlyPlans,
+                  reviews
+                });
+
                 return (
                   <HierarchyOutcomeCard
                     key={task.id}
@@ -570,6 +710,7 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                     accent="cyan"
                     parentOptions={parentOptions}
                     selectedParentValue={encodeTaskParent(task)}
+                    fallbackParentLabel={getFallbackParentLabel(task)}
                     onChangeParent={val => handleUpdateOutcome(task.id, decodeParentPatch(val))}
                     childrenSteps={monthlySteps}
                     childUnitLabel="Monthly"
@@ -590,6 +731,35 @@ export const QuarterlyPlanSection: React.FC<QuarterlyPlanSectionProps> = ({
                     onDelete={() => handleDeleteOutcome(task.id)}
                     nextPeriodLabel={nextQuarterKey}
                     onPushToNextPeriod={() => handlePushOutcomeToNextQuarter(task)}
+                    carriedDiagnosis={carriedDiag}
+                    onToggleSubTask={subId =>
+                      handleUpdateOutcome(task.id, {
+                        subTasks: (task.subTasks || []).map(s =>
+                          s.id === subId ? { ...s, completed: !s.completed } : s
+                        )
+                      })
+                    }
+                    onDeleteSubTask={subId =>
+                      handleUpdateOutcome(task.id, {
+                        subTasks: (task.subTasks || []).filter(s => s.id !== subId)
+                      })
+                    }
+                    assignedRoadmapTitle={assignedPlan?.title}
+                    unpulledRoadmapGoals={unpulledGoals}
+                    onPullRoadmapGoal={pg => {
+                      if (!assignedPlan || !assignedStage) return;
+                      const { nextTasks } = pullRoadmapItemIntoTaskList(activeQuarterPlan.tasks, {
+                        idPrefix: 'qgoal',
+                        text: pg.text,
+                        completed: pg.completed,
+                        sourceLabel: `${assignedPlan.title}${assignedStageIdx >= 0 ? ` · Stage ${assignedStageIdx}` : ''}`,
+                        strategyPlanId: assignedPlan.id,
+                        strategyStageId: assignedStage.id,
+                        strategyGoalId: pg.id,
+                        targetTaskId: task.id
+                      });
+                      saveQuarterlyPlan({ ...activeQuarterPlan, tasks: nextTasks });
+                    }}
                   />
                 );
               })}

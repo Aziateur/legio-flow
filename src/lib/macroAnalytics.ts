@@ -7,7 +7,8 @@ import {
   StrategyPlan,
   WeeklyPlan
 } from '../types/schema';
-import { hasExistingParent, normalizeTag, problemOccurredInRange } from './problems';
+import { hasExistingParent, normalizeTag, problemMatchesRoadmap, problemOccurredInRange } from './problems';
+import { resolveSessionRoadmapPlanId } from './planHierarchy';
 
 export const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -306,12 +307,15 @@ export const getProblemsForRoadmapInRange = (
   problems: ProblemEntry[],
   planTitle: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  planId?: string
 ): ProblemEntry[] => {
   const normPlan = normalizeTag(planTitle);
-  if (!normPlan) return [];
+  if (!normPlan && !planId) return [];
   return problems.filter(p => {
     if (!problemOccurredInRange(p, startDate, endDate)) return false;
+    if (planId && problemMatchesRoadmap(p, planId, planTitle)) return true;
+    if (!normPlan) return false;
     const tagMatch = (p.tags || []).some(t => {
       const nt = normalizeTag(t);
       return nt === normPlan || nt.includes(normPlan) || normPlan.includes(nt);
@@ -408,7 +412,9 @@ export const computeGwsAllocationInRange = (
   lifePillars: LifePillar[],
   startDate: string,
   endDate: string,
-  activeTopFocuses?: string[]
+  activeTopFocuses?: string[],
+  weeklyPlans?: Record<string, WeeklyPlan>,
+  dailyEntries?: Record<string, DailyEntry>
 ): GwsAllocationSummary => {
   const inRange = gwsSessions.filter(s => s.date >= startDate && s.date <= endDate);
   const planMap = new Map(strategyPlans.map(sp => [sp.id, sp.title]));
@@ -430,15 +436,19 @@ export const computeGwsAllocationInRange = (
     let label = 'Untagged / Ad-hoc';
     let kind: GwsAllocationBucket['kind'] = 'untagged';
 
+    const effectiveRoadmapId =
+      s.roadmapPlanId ||
+      (weeklyPlans ? resolveSessionRoadmapPlanId(s, weeklyPlans, dailyEntries) : undefined);
+
     if (s.focusTag?.trim()) {
       const clean = s.focusTag.trim();
       key = `focus:${clean.toLowerCase()}`;
       label = clean;
       kind = 'focus';
       taggedMinutes += mins;
-    } else if (s.roadmapPlanId && planMap.has(s.roadmapPlanId)) {
-      key = `roadmap:${s.roadmapPlanId}`;
-      label = planMap.get(s.roadmapPlanId)!;
+    } else if (effectiveRoadmapId && planMap.has(effectiveRoadmapId)) {
+      key = `roadmap:${effectiveRoadmapId}`;
+      label = planMap.get(effectiveRoadmapId)!;
       kind = 'roadmap';
       taggedMinutes += mins;
     } else if (s.pillarId && pillarMap.has(s.pillarId)) {

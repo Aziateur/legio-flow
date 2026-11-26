@@ -3220,6 +3220,7 @@ export const ReviewHub: React.FC = () => {
                 nt => nt.text.trim().toLowerCase() === cleanText.toLowerCase()
               );
               if (!alreadyInNext) {
+                const originAudit = targetPlanForReview.outcomeAudits?.[task.id];
                 const unfinishedSubs = (task.subTasks || [])
                   .filter(s => !s.completed)
                   .map(s => ({
@@ -3228,7 +3229,8 @@ export const ReviewHub: React.FC = () => {
                     completed: false,
                     ...(s.strategyPlanId ? { strategyPlanId: s.strategyPlanId } : {}),
                     ...(s.strategyStageId ? { strategyStageId: s.strategyStageId } : {}),
-                    ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {})
+                    ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {}),
+                    ...(s.problemId ? { problemId: s.problemId } : {})
                   }));
                 const nextWeekTasks: TaskItem[] = [
                   ...existingNextRev.tasks,
@@ -3238,6 +3240,8 @@ export const ReviewHub: React.FC = () => {
                     score: task.score || 2,
                     completed: false,
                     pushedFromPeriod: `W${targetPlanForReview.weekNumber}`,
+                    ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+                    ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {}),
                     ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
                     ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
                     ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
@@ -3247,6 +3251,7 @@ export const ReviewHub: React.FC = () => {
                     ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
                     ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
                     ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
+                    ...(task.problemId ? { problemId: task.problemId } : {}),
                     ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
                   }
                 ];
@@ -3490,7 +3495,9 @@ export const ReviewHub: React.FC = () => {
               lifePillars,
               targetPlanForReview.startDate,
               targetPlanForReview.endDate,
-              weekMonthFocuses
+              weekMonthFocuses,
+              weeklyPlans,
+              dailyEntries
             );
 
             return (
@@ -4594,7 +4601,9 @@ export const ReviewHub: React.FC = () => {
                   lifePillars,
                   mData.info.startDate,
                   mData.info.endDate,
-                  mData.monthPlan.topFocuses
+                  mData.monthPlan.topFocuses,
+                  weeklyPlans,
+                  dailyEntries
                 );
                 return (
                 <div className="space-y-3 pt-2">

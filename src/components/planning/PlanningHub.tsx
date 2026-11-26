@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
   useStorage,
   findBestWeeklyPlanForDate,
@@ -33,11 +33,19 @@ import {
 } from './HierarchyOutcomeCard';
 import { getMonthInfo, getQuarterKeyForDate, getQuarterInfo } from '../../lib/macroAnalytics';
 import {
+  STRATEGY_PRIORITY_META,
+  absorbOrphanedRoadmapGoals,
+  getActiveStageForPlan,
   getCommittedGatesForQuarter,
   getQuarterlyChildrenOfYearlyTask,
   getQuartersForYear,
   getWeeklyChildrenOfMonthlyTask,
-  getWeeksForMonth
+  getWeeksForMonth,
+  isActiveStrategyPlan,
+  isRoadmapItemInTaskList,
+  pullRoadmapItemIntoTaskList,
+  resolvePeriodTaskCarriedDiagnosis,
+  sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { WeeklyPlan, TaskItem } from '../../types/schema';
 import {
@@ -104,6 +112,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     getYearlyPlan,
     saveYearlyPlan,
     strategyPlans,
+    reviews,
     saveDailyEntry,
     selectedWeekId,
     setSelectedWeekId,
@@ -179,25 +188,64 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
     activeWeeklyPlan?.id ||
     '';
 
-  const monthlyParentOptions: ParentLinkOption[] = [
-    ...parentQuarterPlanForMonth.tasks
+  const activeStrategyPlans = sortStrategyPlansByPriority(
+    strategyPlans.filter(isActiveStrategyPlan)
+  );
+
+  const monthlyParentOptions: ParentLinkOption[] = (() => {
+    const opts: ParentLinkOption[] = [];
+    const seen = new Set<string>();
+    activeStrategyPlans.forEach(sp => {
+      const stageInfo = getActiveStageForPlan(sp);
+      const val = `roadmap:${sp.id}|${stageInfo?.stage.id || ''}`;
+      if (seen.has(val)) return;
+      seen.add(val);
+      const pPrefix = sp.priority ? `[${STRATEGY_PRIORITY_META[sp.priority].code}] ` : '';
+      opts.push({
+        value: val,
+        label: `${pPrefix}${sp.title || 'Untitled Roadmap'}${stageInfo ? ` · Stage ${stageInfo.stageIndex}` : ''}`,
+        group: 'Active Roadmaps'
+      });
+    });
+    committedGatesForMonthQuarter.forEach(cg => {
+      const val = `roadmap:${cg.plan.id}|${cg.stage.id}`;
+      if (seen.has(val)) return;
+      seen.add(val);
+      opts.push({
+        value: val,
+        label: `${cg.plan.title} · Stage ${cg.stageIndex} (${monthInfo.quarterKey} Gate)`,
+        group: 'Active Roadmaps'
+      });
+    });
+    parentQuarterPlanForMonth.tasks
       .filter(t => t.status !== 'parked')
-      .map(qt => ({
-        value: `quarterly:${qt.id}`,
-        label: qt.text,
-        group: `${monthInfo.quarterKey} Quarterly Outcomes`
-      })),
-    ...committedGatesForMonthQuarter.map(cg => ({
-      value: `gate:${cg.plan.id}|${cg.stage.id}`,
-      label: `${cg.plan.title} · Stage ${cg.stageIndex}`,
-      group: `${monthInfo.quarterKey} Target Roadmap Gates`
-    }))
-  ];
+      .forEach(qt => {
+        opts.push({
+          value: `quarterly:${qt.id}`,
+          label: qt.text,
+          group: `${monthInfo.quarterKey} Quarterly Outcomes`
+        });
+      });
+    return opts;
+  })();
 
   const encodeMonthlyParent = (t: TaskItem): string => {
     if (t.quarterlyTaskId) return `quarterly:${t.quarterlyTaskId}`;
-    if (t.strategyPlanId && t.strategyStageId) return `gate:${t.strategyPlanId}|${t.strategyStageId}`;
+    if (t.strategyPlanId) return `roadmap:${t.strategyPlanId}|${t.strategyStageId || ''}`;
     return '';
+  };
+
+  const getMonthlyFallbackParentLabel = (t: TaskItem): string | null => {
+    const enc = encodeMonthlyParent(t);
+    if (!enc || monthlyParentOptions.some(o => o.value === enc)) return null;
+    if (t.strategyPlanId) {
+      const sp = strategyPlans.find(p => p.id === t.strategyPlanId);
+      if (sp) {
+        const stIdx = t.strategyStageId ? sp.stages.findIndex(s => s.id === t.strategyStageId) : -1;
+        return `${sp.title || 'Roadmap'}${stIdx >= 0 ? ` · Stage ${stIdx}` : ''}`;
+      }
+    }
+    return t.sourceLabel || null;
   };
 
   const decodeMonthlyParentPatch = (encoded: string): Partial<TaskItem> => {
@@ -206,7 +254,9 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         quarterlyTaskId: undefined,
         strategyPlanId: undefined,
         strategyStageId: undefined,
-        sourceLabel: undefined
+        strategyGoalId: undefined,
+        sourceLabel: undefined,
+        parentLinkMode: undefined
       };
     }
     if (encoded.startsWith('quarterly:')) {
@@ -217,22 +267,50 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
         yearlyTaskId: qt?.yearlyTaskId,
         strategyPlanId: qt?.strategyPlanId,
         strategyStageId: qt?.strategyStageId,
+        strategyGoalId: undefined,
         parentLinkMode: 'step'
       };
     }
-    if (encoded.startsWith('gate:')) {
-      const [planId, stageId] = encoded.slice(5).split('|');
+    if (encoded.startsWith('roadmap:') || encoded.startsWith('gate:')) {
+      const raw = encoded.startsWith('roadmap:') ? encoded.slice(8) : encoded.slice(5);
+      const [planId, rawStageId] = raw.split('|');
       const sp = strategyPlans.find(p => p.id === planId);
+      const stageInfo = sp ? getActiveStageForPlan(sp) : null;
+      const stageId = rawStageId || stageInfo?.stage.id || undefined;
+      const stageIdx = sp && stageId ? sp.stages.findIndex(s => s.id === stageId) : -1;
       return {
         quarterlyTaskId: undefined,
         strategyPlanId: planId,
         strategyStageId: stageId,
-        sourceLabel: sp ? sp.title : undefined,
+        strategyGoalId: undefined,
+        sourceLabel: sp ? `${sp.title}${stageIdx >= 0 ? ` · Stage ${stageIdx}` : ''}` : undefined,
         parentLinkMode: 'step'
       };
     }
     return {};
   };
+
+  // Auto-absorb orphaned pulled Roadmap proximal goals into assigned Monthly outcomes
+  useEffect(() => {
+    if (planningSubTab !== 'monthly') return;
+    const { nextTasks, moved } = absorbOrphanedRoadmapGoals(
+      activeMonthPlan.tasks,
+      undefined,
+      undefined,
+      { autoCompleteParent: false }
+    );
+    if (moved.length === 0) return;
+    saveMonthlyPlan({
+      ...activeMonthPlan,
+      tasks: nextTasks
+    });
+    setHierarchyNotice(
+      moved.length === 1
+        ? `Grouped "${moved[0].orphanText.slice(0, 24)}…" inside "${moved[0].parentText.slice(0, 24)}…"`
+        : `Grouped ${moved.length} roadmap milestones inside assigned monthly goals`
+    );
+    setTimeout(() => setHierarchyNotice(null), 2600);
+  }, [planningSubTab, activeMonthPlan.id, activeMonthPlan.tasks]);
 
   // Monthly Plan handlers
   const handleAddMonthlyGoal = () => {
@@ -246,9 +324,16 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       ...(newMonthlyGoalKpi.trim() ? { kpiTarget: newMonthlyGoalKpi.trim() } : {}),
       ...parentPatch
     };
+    const combined = [...activeMonthPlan.tasks, nextTask];
+    const { nextTasks } =
+      parentPatch.strategyPlanId && !parentPatch.quarterlyTaskId
+        ? absorbOrphanedRoadmapGoals(combined, parentPatch.strategyPlanId, nextTask.id, {
+            autoCompleteParent: false
+          })
+        : { nextTasks: combined };
     saveMonthlyPlan({
       ...activeMonthPlan,
-      tasks: [...activeMonthPlan.tasks, nextTask]
+      tasks: nextTasks
     });
     setNewMonthlyGoalInput('');
     setNewMonthlyGoalKpi('');
@@ -256,9 +341,29 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
   };
 
   const handleUpdateMonthlyGoal = (id: string, patch: Partial<TaskItem>) => {
+    const patched = activeMonthPlan.tasks.map(t => (t.id === id ? { ...t, ...patch } : t));
+    if (patch.strategyPlanId && !patch.quarterlyTaskId) {
+      const { nextTasks, moved } = absorbOrphanedRoadmapGoals(
+        patched,
+        patch.strategyPlanId,
+        id,
+        { autoCompleteParent: false }
+      );
+      saveMonthlyPlan({
+        ...activeMonthPlan,
+        tasks: nextTasks
+      });
+      if (moved.length > 0) {
+        setHierarchyNotice(
+          `Assigned Roadmap & grouped ${moved.length} pulled milestone${moved.length > 1 ? 's' : ''} inside`
+        );
+        setTimeout(() => setHierarchyNotice(null), 2600);
+      }
+      return;
+    }
     saveMonthlyPlan({
       ...activeMonthPlan,
-      tasks: activeMonthPlan.tasks.map(t => (t.id === id ? { ...t, ...patch } : t))
+      tasks: patched
     });
   };
 
@@ -277,17 +382,35 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
     );
     if (!alreadyInNext) {
+      const monthReview = reviews.find(
+        r => r.periodType === 'monthly' && r.periodKey === selectedMonthKey
+      );
+      const originAudit = monthReview?.outcomeAudits?.[task.id];
+      const unfinishedSubs = (task.subTasks || [])
+        .filter(s => !s.completed)
+        .map(s => ({
+          id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          text: s.text,
+          completed: false,
+          ...(s.strategyPlanId ? { strategyPlanId: s.strategyPlanId } : {}),
+          ...(s.strategyStageId ? { strategyStageId: s.strategyStageId } : {}),
+          ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {})
+        }));
       const pushedCopy: TaskItem = {
         id: `mgoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: task.text.trim(),
         completed: false,
         pushedFromPeriod: selectedMonthKey,
+        ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
+        ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+        ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {}),
         ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
         ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
         ...(task.quarterlyTaskId ? { quarterlyTaskId: task.quarterlyTaskId } : {}),
         ...(task.yearlyTaskId ? { yearlyTaskId: task.yearlyTaskId } : {}),
         ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
         ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
+        ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
         ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
       };
       saveMonthlyPlan({
@@ -388,11 +511,17 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
       t => t.text.trim().toLowerCase() === task.text.trim().toLowerCase()
     );
     if (!alreadyInNext) {
+      const yearReview = reviews.find(
+        r => r.periodType === 'yearly' && r.periodKey === selectedYearKey
+      );
+      const originAudit = yearReview?.outcomeAudits?.[task.id];
       const pushedCopy: TaskItem = {
         id: `ygoal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         text: task.text.trim(),
         completed: false,
         pushedFromPeriod: selectedYearKey,
+        ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+        ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {}),
         ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {})
       };
       saveYearlyPlan({
@@ -853,11 +982,12 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
             </div>
           </div>
 
-          {/* LOOKING UP: Parent Quarter & Committed Roadmap Gates Bar */}
+          {/* LOOKING UP: Parent Quarter & Active Roadmaps Bar */}
           {(parentQuarterPlanForMonth.focusTheme.trim() ||
             (parentQuarterPlanForMonth.topFocuses || []).some(f => f.trim()) ||
             parentQuarterPlanForMonth.tasks.length > 0 ||
-            committedGatesForMonthQuarter.length > 0) && (
+            committedGatesForMonthQuarter.length > 0 ||
+            activeStrategyPlans.length > 0) && (
             <div className="rounded-2xl bg-slate-900/80 border border-cyan-500/25 overflow-hidden shadow-md">
               <div className="px-4 py-2.5 flex items-center justify-between gap-2">
                 <button
@@ -902,31 +1032,30 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
 
               {showParentQuarterInMonth && (
                 <div className="px-4 pb-3.5 pt-2 border-t border-slate-800/80 space-y-2.5 text-xs">
-                  {committedGatesForMonthQuarter.length > 0 && (
+                  {activeStrategyPlans.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 mr-1">
-                        Q-Target Roadmap Gates:
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 mr-1">
+                        Active Roadmaps:
                       </span>
-                      {committedGatesForMonthQuarter.map(cg => {
-                        const enc = `gate:${cg.plan.id}|${cg.stage.id}`;
+                      {activeStrategyPlans.map(sp => {
+                        const stageInfo = getActiveStageForPlan(sp);
+                        const enc = `roadmap:${sp.id}|${stageInfo?.stage.id || ''}`;
                         return (
                           <button
-                            key={enc}
+                            key={sp.id}
                             type="button"
-                            onClick={() => setNewMonthlyGoalParent(enc)}
-                            title="Select as parent for your next Monthly deliverable below"
+                            onClick={() => setNewMonthlyGoalParent(prev => (prev === enc ? '' : enc))}
+                            title="Assign this Roadmap to your next Monthly deliverable below"
                             className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-colors ${
                               newMonthlyGoalParent === enc
-                                ? 'bg-purple-500/20 text-purple-200 border-purple-500/50'
-                                : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 border-emerald-500/30'
+                                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                                : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 border-amber-500/30'
                             }`}
                           >
-                            <Compass className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <Compass className="w-3 h-3 shrink-0" />
                             <span>
-                              {cg.plan.title} · {cg.stage.title}
-                            </span>
-                            <span className="font-mono text-[10px] text-emerald-300/80">
-                              ({cg.doneGoals}/{cg.totalGoals})
+                              {sp.title}
+                              {stageInfo ? ` · Stage ${stageInfo.stageIndex}` : ''}
                             </span>
                           </button>
                         );
@@ -1039,6 +1168,29 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                       selectedMonthKey,
                       weeklyPlans
                     );
+                    const assignedPlan =
+                      task.strategyPlanId && !task.strategyGoalId
+                        ? strategyPlans.find(sp => sp.id === task.strategyPlanId)
+                        : undefined;
+                    const assignedStage = assignedPlan
+                      ? (task.strategyStageId
+                          ? assignedPlan.stages.find(s => s.id === task.strategyStageId)
+                          : undefined) || getActiveStageForPlan(assignedPlan)?.stage
+                      : undefined;
+                    const assignedStageIdx =
+                      assignedPlan && assignedStage
+                        ? assignedPlan.stages.findIndex(s => s.id === assignedStage.id)
+                        : -1;
+                    const unpulledGoals = assignedStage
+                      ? assignedStage.proximalGoals.filter(
+                          pg => !isRoadmapItemInTaskList(activeMonthPlan.tasks, pg.text, pg.id)
+                        )
+                      : [];
+                    const carriedDiag = resolvePeriodTaskCarriedDiagnosis(task, 'monthly', {
+                      monthlyPlans,
+                      reviews
+                    });
+
                     return (
                       <HierarchyOutcomeCard
                         key={task.id}
@@ -1046,6 +1198,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                         accent="purple"
                         parentOptions={monthlyParentOptions}
                         selectedParentValue={encodeMonthlyParent(task)}
+                        fallbackParentLabel={getMonthlyFallbackParentLabel(task)}
                         onChangeParent={val =>
                           handleUpdateMonthlyGoal(task.id, decodeMonthlyParentPatch(val))
                         }
@@ -1071,6 +1224,35 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                         onDelete={() => handleDeleteMonthlyGoal(task.id)}
                         nextPeriodLabel={nextMonthKey}
                         onPushToNextPeriod={() => handlePushMonthlyGoalToNextMonth(task)}
+                        carriedDiagnosis={carriedDiag}
+                        onToggleSubTask={subId =>
+                          handleUpdateMonthlyGoal(task.id, {
+                            subTasks: (task.subTasks || []).map(s =>
+                              s.id === subId ? { ...s, completed: !s.completed } : s
+                            )
+                          })
+                        }
+                        onDeleteSubTask={subId =>
+                          handleUpdateMonthlyGoal(task.id, {
+                            subTasks: (task.subTasks || []).filter(s => s.id !== subId)
+                          })
+                        }
+                        assignedRoadmapTitle={assignedPlan?.title}
+                        unpulledRoadmapGoals={unpulledGoals}
+                        onPullRoadmapGoal={pg => {
+                          if (!assignedPlan || !assignedStage) return;
+                          const { nextTasks } = pullRoadmapItemIntoTaskList(activeMonthPlan.tasks, {
+                            idPrefix: 'mgoal',
+                            text: pg.text,
+                            completed: pg.completed,
+                            sourceLabel: `${assignedPlan.title}${assignedStageIdx >= 0 ? ` · Stage ${assignedStageIdx}` : ''}`,
+                            strategyPlanId: assignedPlan.id,
+                            strategyStageId: assignedStage.id,
+                            strategyGoalId: pg.id,
+                            targetTaskId: task.id
+                          });
+                          saveMonthlyPlan({ ...activeMonthPlan, tasks: nextTasks });
+                        }}
                       />
                     );
                   })}
@@ -1355,6 +1537,10 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                       selectedYearKey,
                       quarterlyPlans
                     );
+                    const carriedDiag = resolvePeriodTaskCarriedDiagnosis(task, 'yearly', {
+                      yearlyPlans,
+                      reviews
+                    });
                     return (
                       <HierarchyOutcomeCard
                         key={task.id}
@@ -1382,6 +1568,7 @@ export const PlanningHub: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate:
                         onDelete={() => handleDeleteYearlyGoal(task.id)}
                         nextPeriodLabel={nextYearKey}
                         onPushToNextPeriod={() => handlePushYearlyGoalToNextYear(task)}
+                        carriedDiagnosis={carriedDiag}
                       />
                     );
                   })}

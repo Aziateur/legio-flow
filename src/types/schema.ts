@@ -54,6 +54,7 @@ export interface SubTaskItem {
   strategyPlanId?: string;
   strategyStageId?: string;
   strategyGoalId?: string;
+  problemId?: string; // Links a dispatched Problem fix sub-goal back to its ProblemEntry
 }
 
 export type ParkReasonTag = 'reality_shift' | 'disproved' | 'deferred';
@@ -78,14 +79,19 @@ export interface TaskItem {
   strategyPlanId?: string;
   strategyStageId?: string;
   strategyGoalId?: string;
+  problemId?: string; // Links a dispatched Problem fix task back to its ProblemEntry
   sourceLabel?: string;
   pushedToPeriod?: string; // e.g. 'week_4', '2026-12', '2027-Q1', '2027' (original stays Not Done for review)
   pushedFromPeriod?: string; // Origin period when pushed forward
+  carriedDiagnosisCause?: OutcomeRootCause; // Miss root-cause carried forward from origin period review
+  carriedDiagnosisNote?: string; // Optional 1-line diagnosis note carried forward
 }
 
 export interface ActiveGWSTimer {
   taskName: string;
   linkedPriorityId: string | null;
+  linkedWeeklyTaskId?: string;
+  linkedSubTaskId?: string;
   plannedMinutes: number;
   startedAt: number | null; // Epoch ms while actively running; null while paused
   accumulatedSeconds: number;
@@ -109,6 +115,8 @@ export interface GWSSession {
   focusTag?: string; // Optional Top Focus label (from Monthly/Quarterly Top 3 Focuses)
   roadmapPlanId?: string; // Optional linked Strategy Roadmap ID
   pillarId?: string; // Optional linked Life Pillar ID
+  linkedWeeklyTaskId?: string; // Enables retroactive Roadmap inheritance when Weekly Goal is assigned later
+  linkedSubTaskId?: string;
   ratings: {
     focus: number;     // 1-5
     execution: number; // 1-5
@@ -134,6 +142,8 @@ export interface DailyPriorityItem {
   checklistItemId?: string;
   pushedToDate?: string; // YYYY-MM-DD when pushed forward (kept Not Done on origin day for honest review)
   pushedFromDate?: string; // Origin YYYY-MM-DD when carried forward via Push
+  carriedDiagnosisCause?: OutcomeRootCause; // Miss root-cause carried forward from origin day review
+  carriedDiagnosisNote?: string; // Optional 1-line diagnosis note carried forward
 }
 
 export type NervousSystemState = 'calm' | 'sharp' | 'wired' | 'foggy' | 'drained';
@@ -502,12 +512,14 @@ export interface ProblemEntry {
   rootCause?: string; // Why is this actually happening below the surface symptom?
   isGuardrail?: boolean; // Pinned as an active If-Then guardrail surfaced pre-flight
   parentProblemId?: string; // Clusters this slip under a Root Problem
+  roadmapPlanId?: string; // Stable StrategyPlan.id link (survives Roadmap renames!)
   tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];
   fixType?: ProblemFixType;
   fixNote?: string;
   fixStartedAt?: string; // YYYY-MM-DD when the active fix experiment started
+  fixTaskCompletedAt?: string; // YYYY-MM-DD when a dispatched Weekly fix task/sub-goal was checked off
   verifyDays?: number; // Clean days required before prompting Verified Solved (default 14)
   fixAttempts?: ProblemFixAttempt[]; // Experiment history of failed/replaced/verified fixes
   lastFixFailedAt?: string; // Set automatically when +1 recurs while Testing Fix

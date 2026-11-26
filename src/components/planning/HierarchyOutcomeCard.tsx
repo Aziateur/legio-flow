@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { ParkReasonTag, TaskItem } from '../../types/schema';
+import { OutcomeRootCause, ParkReasonTag, TaskItem } from '../../types/schema';
 import { LinkedChildStep } from '../../lib/planHierarchy';
-import { PARK_REASON_META } from '../../lib/energyAnalytics';
+import { PARK_REASON_META, getMissCauseMeta } from '../../lib/energyAnalytics';
 import {
+  ArrowDownToLine,
   CheckCircle2,
   Circle,
   CornerDownRight,
+  Crosshair,
   Gauge,
   PauseCircle,
   PlayCircle,
@@ -16,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export interface ParentLinkOption {
-  value: string; // Encoded link key e.g. "yearly:id" | "quarterly:id" | "gate:planId|stageId"
+  value: string; // Encoded link key e.g. "yearly:id" | "quarterly:id" | "roadmap:planId|stageId"
   label: string;
   group: string;
 }
@@ -31,6 +33,7 @@ interface HierarchyOutcomeCardProps {
   accent: 'rose' | 'cyan' | 'purple';
   parentOptions?: ParentLinkOption[];
   selectedParentValue?: string;
+  fallbackParentLabel?: string | null;
   onChangeParent?: (encodedValue: string) => void;
   childrenSteps: LinkedChildStep[];
   childUnitLabel: string; // e.g. 'Quarterly', 'Monthly', 'Weekly'
@@ -44,6 +47,12 @@ interface HierarchyOutcomeCardProps {
   onDelete: () => void;
   nextPeriodLabel?: string;
   onPushToNextPeriod?: () => void;
+  carriedDiagnosis?: { cause?: OutcomeRootCause; note?: string } | null;
+  onToggleSubTask?: (subId: string) => void;
+  onDeleteSubTask?: (subId: string) => void;
+  assignedRoadmapTitle?: string;
+  unpulledRoadmapGoals?: Array<{ id: string; text: string; completed: boolean }>;
+  onPullRoadmapGoal?: (goal: { id: string; text: string; completed: boolean }) => void;
 }
 
 export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
@@ -51,6 +60,7 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
   accent,
   parentOptions = [],
   selectedParentValue = '',
+  fallbackParentLabel,
   onChangeParent,
   childrenSteps,
   childUnitLabel,
@@ -63,7 +73,13 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
   onUpdateFields,
   onDelete,
   nextPeriodLabel,
-  onPushToNextPeriod
+  onPushToNextPeriod,
+  carriedDiagnosis,
+  onToggleSubTask,
+  onDeleteSubTask,
+  assignedRoadmapTitle,
+  unpulledRoadmapGoals = [],
+  onPullRoadmapGoal
 }) => {
   const [showKpiEditor, setShowKpiEditor] = useState(Boolean(task.kpiTarget?.trim()));
   const [showDecompose, setShowDecompose] = useState(false);
@@ -162,14 +178,29 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
               Parked
             </span>
           )}
-          {task.pushedFromPeriod && !task.completed && (
-            <span
-              className="px-2 py-0.5 rounded-md bg-slate-900 text-slate-400 border border-slate-800 text-[10px] font-mono font-bold shrink-0"
-              title={`Pushed forward from ${task.pushedFromPeriod}`}
-            >
-              From {task.pushedFromPeriod}
-            </span>
-          )}
+          {task.pushedFromPeriod && !task.completed && (() => {
+            const causeMeta = carriedDiagnosis?.cause
+              ? getMissCauseMeta(carriedDiagnosis.cause)
+              : undefined;
+            const diagTitle = carriedDiagnosis?.note
+              ? `Pushed from ${task.pushedFromPeriod} — ${causeMeta?.label || 'Note'}: ${carriedDiagnosis.note}`
+              : causeMeta
+              ? `Pushed from ${task.pushedFromPeriod} — Prior miss: ${causeMeta.label}`
+              : `Pushed forward from ${task.pushedFromPeriod}`;
+            return (
+              <span
+                className={`px-2 py-0.5 rounded-md border text-[10px] font-bold shrink-0 ${
+                  causeMeta
+                    ? causeMeta.badgeCls
+                    : 'bg-slate-900 text-slate-400 border-slate-800 font-mono'
+                }`}
+                title={diagTitle}
+              >
+                From {task.pushedFromPeriod}
+                {causeMeta ? ` · ${causeMeta.shortLabel}` : ''}
+              </span>
+            );
+          })()}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 shrink-0 self-end sm:self-center">
@@ -344,28 +375,45 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
         </div>
       ))}
 
+      {/* Carried-Forward Diagnosis Note (when user wrote why this missed last period) */}
+      {!task.completed && carriedDiagnosis?.note && (
+        <div className="pl-8 text-[11px] text-amber-300/90 italic">
+          ↳ Last miss note: &ldquo;{carriedDiagnosis.note}&rdquo;
+        </div>
+      )}
+
       {/* Parent Alignment Selector + KPI Proof Check */}
-      {(parentOptions.length > 0 || showKpiEditor || task.kpiTarget?.trim()) && (
+      {(parentOptions.length > 0 || Boolean(selectedParentValue) || showKpiEditor || task.kpiTarget?.trim()) && (
         <div className="pl-8 flex flex-wrap items-center gap-2 text-[11px]">
-          {parentOptions.length > 0 && onChangeParent && (
+          {(parentOptions.length > 0 || Boolean(selectedParentValue)) && onChangeParent && (
             <div className="inline-flex items-center space-x-1">
               <ArrowUpRight className="w-3 h-3 text-slate-500 shrink-0" />
               <select
                 value={selectedParentValue}
                 onChange={e => onChangeParent(e.target.value)}
-                className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold focus:outline-none max-w-[260px] ${
-                  selectedParentValue
+                className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold focus:outline-none max-w-[280px] cursor-pointer ${
+                  selectedParentValue.startsWith('roadmap:') || selectedParentValue.startsWith('gate:')
+                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                    : selectedParentValue
                     ? 'bg-slate-900 text-cyan-300 border-cyan-500/30'
                     : 'bg-slate-900/60 text-slate-500 border-slate-800 hover:text-slate-300'
                 }`}
-                title="Link to parent outcome or Roadmap Gate"
+                title="Assign to an Active Roadmap (pulled proximal goals land inside) or parent outcome"
               >
-                <option value="">Standalone (no parent link)</option>
+                <option value="" className="bg-slate-950 text-slate-400">
+                  Assign Roadmap / Parent (optional)
+                </option>
+                {fallbackParentLabel && selectedParentValue && (
+                  <option value={selectedParentValue} className="bg-slate-950 text-amber-300">
+                    🗺 {fallbackParentLabel}
+                  </option>
+                )}
                 {Object.entries(groupedParents).map(([group, opts]) => (
-                  <optgroup key={group} label={group}>
+                  <optgroup key={group} label={group} className="bg-slate-950 text-slate-300">
                     {opts.map(opt => (
-                      <option key={opt.value} value={opt.value}>
-                        ↑ {opt.label}
+                      <option key={opt.value} value={opt.value} className="bg-slate-950 text-slate-200">
+                        {opt.value.startsWith('roadmap:') || opt.value.startsWith('gate:') ? '🗺 ' : '↑ '}
+                        {opt.label}
                       </option>
                     ))}
                   </optgroup>
@@ -403,6 +451,83 @@ export const HierarchyOutcomeCard: React.FC<HierarchyOutcomeCardProps> = ({
                   />
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Nested Roadmap Proximal Milestones / Sub-Items inside this Outcome */}
+      {((task.subTasks && task.subTasks.length > 0) ||
+        (assignedRoadmapTitle && unpulledRoadmapGoals.length > 0 && onPullRoadmapGoal)) && (
+        <div className="pl-8 space-y-1.5">
+          {task.subTasks && task.subTasks.length > 0 && (
+            <div className="space-y-1">
+              {task.subTasks.map(sub => (
+                <div
+                  key={sub.id}
+                  className="group/sub flex items-center justify-between gap-2 px-2.5 py-1 rounded-xl bg-slate-900/70 border border-slate-800/80 text-xs"
+                >
+                  <div className="flex items-center space-x-2 min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => onToggleSubTask && onToggleSubTask(sub.id)}
+                      className="shrink-0"
+                    >
+                      {sub.completed ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-slate-600 hover:text-amber-400" />
+                      )}
+                    </button>
+                    <span
+                      className={`truncate ${
+                        sub.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                      }`}
+                    >
+                      {sub.text}
+                    </span>
+                    {sub.strategyGoalId && (
+                      <span
+                        title="Synced with Roadmap Proximal Goal"
+                        className="shrink-0 text-rose-400/80"
+                      >
+                        <Crosshair className="w-3 h-3" />
+                      </span>
+                    )}
+                  </div>
+                  {onDeleteSubTask && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteSubTask(sub.id)}
+                      className="p-0.5 text-slate-600 hover:text-rose-400 opacity-0 group-hover/sub:opacity-100 transition-opacity shrink-0"
+                      title="Remove milestone"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {assignedRoadmapTitle && unpulledRoadmapGoals.length > 0 && onPullRoadmapGoal && !isParked && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-400/80 shrink-0">
+                <Crosshair className="w-2.5 h-2.5 text-rose-400" />
+                <span>Pull from {assignedRoadmapTitle}:</span>
+              </span>
+              {unpulledRoadmapGoals.map(pg => (
+                <button
+                  key={pg.id}
+                  type="button"
+                  onClick={() => onPullRoadmapGoal(pg)}
+                  className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-amber-500/15 text-slate-300 hover:text-amber-200 border border-slate-800 hover:border-amber-500/35 text-[10px] font-semibold transition-colors"
+                  title={`Pull "${pg.text}" inside "${task.text}"`}
+                >
+                  <ArrowDownToLine className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                  <span className="truncate max-w-[220px]">{pg.text}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>

@@ -19,8 +19,10 @@ import {
   isActiveStrategyPlan,
   isRoadmapItemInWeeklyPlan,
   pullRoadmapItemIntoWeeklyPlan,
+  resolvePeriodTaskCarriedDiagnosis,
   sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
+import { getMissCauseMeta } from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
 import { 
@@ -44,7 +46,8 @@ import {
   Eye,
   Lock,
   Calendar,
-  Compass
+  Compass,
+  Wrench
 } from 'lucide-react';
 
 export const WeeklyGoalCrusherView: React.FC = () => {
@@ -707,6 +710,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
       t => t.text.trim().toLowerCase() === cleanText.toLowerCase()
     );
     if (!alreadyInNext) {
+      const originAudit = plan.outcomeAudits?.[task.id];
       const unfinishedSubs = (task.subTasks || [])
         .filter(s => !s.completed)
         .map(s => ({
@@ -715,7 +719,8 @@ export const WeeklyGoalCrusherView: React.FC = () => {
           completed: false,
           ...(s.strategyPlanId ? { strategyPlanId: s.strategyPlanId } : {}),
           ...(s.strategyStageId ? { strategyStageId: s.strategyStageId } : {}),
-          ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {})
+          ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {}),
+          ...(s.problemId ? { problemId: s.problemId } : {})
         }));
       const pushedCopy: TaskItem = {
         id: `goal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -723,6 +728,8 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         score: task.score || 2,
         completed: false,
         pushedFromPeriod: `W${plan.weekNumber}`,
+        ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+        ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {}),
         ...(unfinishedSubs.length > 0 ? { subTasks: unfinishedSubs } : {}),
         ...(task.kpiTarget ? { kpiTarget: task.kpiTarget } : {}),
         ...(task.parentLinkMode ? { parentLinkMode: task.parentLinkMode } : {}),
@@ -732,6 +739,7 @@ export const WeeklyGoalCrusherView: React.FC = () => {
         ...(task.strategyPlanId ? { strategyPlanId: task.strategyPlanId } : {}),
         ...(task.strategyStageId ? { strategyStageId: task.strategyStageId } : {}),
         ...(task.strategyGoalId ? { strategyGoalId: task.strategyGoalId } : {}),
+        ...(task.problemId ? { problemId: task.problemId } : {}),
         ...(task.sourceLabel ? { sourceLabel: task.sourceLabel } : {})
       };
       const nextWeekTasks = [...existingNext.tasks, pushedCopy];
@@ -1834,9 +1842,46 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                         }`}
                       />
                       <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                        {task.pushedFromPeriod && !task.completed && (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400">
-                            From {task.pushedFromPeriod}
+                        {task.pushedFromPeriod && !task.completed && (() => {
+                          const carriedDiag = resolvePeriodTaskCarriedDiagnosis(task, 'weekly', {
+                            weeklyPlans
+                          });
+                          const causeMeta = carriedDiag?.cause
+                            ? getMissCauseMeta(carriedDiag.cause)
+                            : undefined;
+                          const diagTitle = carriedDiag?.note
+                            ? `Pushed from ${task.pushedFromPeriod} — ${causeMeta?.label || 'Note'}: ${carriedDiag.note}`
+                            : causeMeta
+                            ? `Pushed from ${task.pushedFromPeriod} — Prior miss: ${causeMeta.label}`
+                            : `Pushed forward from ${task.pushedFromPeriod}`;
+                          return (
+                            <>
+                              <span
+                                className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${
+                                  causeMeta
+                                    ? causeMeta.badgeCls
+                                    : 'bg-slate-900 border-slate-800 text-slate-400 font-mono'
+                                }`}
+                                title={diagTitle}
+                              >
+                                From {task.pushedFromPeriod}
+                                {causeMeta ? ` · ${causeMeta.shortLabel}` : ''}
+                              </span>
+                              {carriedDiag?.note && (
+                                <span className="text-[10px] text-amber-300/85 italic truncate max-w-[260px]">
+                                  &ldquo;{carriedDiag.note}&rdquo;
+                                </span>
+                              )}
+                            </>
+                          );
+                        })()}
+                        {task.problemId && (
+                          <span
+                            title="Dispatched fix for a Problem — checking off signals verification in Problem Log"
+                            className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-[10px] font-bold text-orange-300"
+                          >
+                            <Wrench className="w-2.5 h-2.5" />
+                            <span>Problem Fix</span>
                           </span>
                         )}
                         {hasParentOptions || encodedParent ? (
@@ -2006,6 +2051,14 @@ export const WeeklyGoalCrusherView: React.FC = () => {
                               className="shrink-0 inline-flex items-center text-rose-400/80"
                             >
                               <Crosshair className="w-3 h-3" />
+                            </span>
+                          )}
+                          {sub.problemId && (
+                            <span
+                              title="Dispatched fix for a Problem — completing here signals Verify Solved in Problem Log"
+                              className="shrink-0 inline-flex items-center text-orange-400/85"
+                            >
+                              <Wrench className="w-3 h-3" />
                             </span>
                           )}
                         </div>

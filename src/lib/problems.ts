@@ -9,7 +9,8 @@ import {
   ProblemScale,
   ProblemSeverity,
   ProblemSourceType,
-  ProblemStatus
+  ProblemStatus,
+  StrategyPlan
 } from '../types/schema';
 
 export interface ProblemScaleMeta {
@@ -359,6 +360,50 @@ export const clusterHasTag = (
 ): boolean => {
   if (problemHasTag(problem, tag)) return true;
   return getDescendantProblems(allProblems, problem.id).some(d => problemHasTag(d, tag));
+};
+
+// Stable ID-first Roadmap matching (with safe legacy tag/title fallback so pre-existing problems still attach)
+export const problemMatchesRoadmap = (
+  problem: ProblemEntry,
+  planId: string,
+  planTitle?: string
+): boolean => {
+  if (problem.roadmapPlanId) {
+    return problem.roadmapPlanId === planId;
+  }
+  const normPlan = planTitle ? normalizeTag(planTitle) : '';
+  if (!normPlan) return false;
+  if (problemHasTag(problem, normPlan)) return true;
+  return problem.title.toLowerCase().includes(planTitle!.trim().toLowerCase());
+};
+
+export const clusterMatchesRoadmap = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry,
+  planId: string,
+  planTitle?: string
+): boolean => {
+  if (problemMatchesRoadmap(problem, planId, planTitle)) return true;
+  return getDescendantProblems(allProblems, problem.id).some(d =>
+    problemMatchesRoadmap(d, planId, planTitle)
+  );
+};
+
+export const resolveProblemRoadmapPlanId = (
+  problem: ProblemEntry,
+  strategyPlans: StrategyPlan[]
+): string | undefined => {
+  if (problem.roadmapPlanId && strategyPlans.some(p => p.id === problem.roadmapPlanId)) {
+    return problem.roadmapPlanId;
+  }
+  const activePlans = strategyPlans.filter(
+    p => p.status !== 'possible' && p.status !== 'not_pursuing'
+  );
+  const tagHit = activePlans.find(sp => {
+    const clean = sp.title.trim();
+    return clean && problemHasTag(problem, clean);
+  });
+  return tagHit?.id;
 };
 
 export const clusterHasSourceType = (

@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TemplateField } from '../../types/schema';
+import { OutcomeRootCause, TemplateField } from '../../types/schema';
+import { useStorage } from '../../context/StorageContext';
+import {
+  resolveDailyCarriedDiagnosis,
+  resolveDailyPriorityContext
+} from '../../lib/planHierarchy';
+import { getMissCauseMeta } from '../../lib/energyAnalytics';
 import { 
   CheckCircle2, 
   Circle,
@@ -12,7 +18,10 @@ import {
   Clock,
   Plus,
   Trash2,
-  ArrowRight
+  ArrowRight,
+  Layers,
+  Map as MapIcon,
+  Target
 } from 'lucide-react';
 
 interface PriorityRow {
@@ -24,6 +33,8 @@ interface PriorityRow {
   checklistItemId?: string;
   pushedToDate?: string;
   pushedFromDate?: string;
+  carriedDiagnosisCause?: OutcomeRootCause;
+  carriedDiagnosisNote?: string;
 }
 
 const parsePriorityValueToNonEmptyRows = (rawVal: any): PriorityRow[] => {
@@ -43,7 +54,9 @@ const parsePriorityValueToNonEmptyRows = (rawVal: any): PriorityRow[] => {
           subTaskId: item.subTaskId,
           checklistItemId: item.checklistItemId,
           pushedToDate: item.pushedToDate,
-          pushedFromDate: item.pushedFromDate
+          pushedFromDate: item.pushedFromDate,
+          carriedDiagnosisCause: item.carriedDiagnosisCause,
+          carriedDiagnosisNote: item.carriedDiagnosisNote
         });
       }
     });
@@ -83,7 +96,7 @@ const getPriorityCanonicalSig = (rows: PriorityRow[]): string =>
     .filter(r => r.text.trim().length > 0)
     .map(
       r =>
-        `${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}|${r.checklistItemId || ''}|${r.pushedToDate || ''}|${r.pushedFromDate || ''}`
+        `${r.text.trim()}|${r.completed ? 1 : 0}|${r.weeklyTaskId || ''}|${r.subTaskId || ''}|${r.checklistItemId || ''}|${r.pushedToDate || ''}|${r.pushedFromDate || ''}|${r.carriedDiagnosisCause || ''}|${r.carriedDiagnosisNote || ''}`
     )
     .join('\n');
 
@@ -96,6 +109,8 @@ interface ModularCardProps {
 }
 
 export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange, onAction }) => {
+  const { weeklyPlans, strategyPlans, dailyEntries, selectedWeekId } = useStorage();
+  const [groupPrioritiesByGoal, setGroupPrioritiesByGoal] = useState(false);
   const [localPriorityRows, setLocalPriorityRows] = useState<PriorityRow[]>(() =>
     field.type === 'numbered_list' ? padPriorityRows(parsePriorityValueToNonEmptyRows(value), 3) : []
   );
@@ -407,12 +422,30 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
           }
         };
 
-        return (
-          <div className="space-y-2.5">
-            {displayRows.map((row, idx) => {
-              const isMainLever = idx === 0;
-              return (
-              <div key={idx} className="flex items-center space-x-2.5 group">
+        const hasGroupableContext = displayRows.some(
+          r => r.text.trim().length > 0 && (r.weeklyTaskId || r.subTaskId)
+        );
+
+        const renderPriorityRow = (row: PriorityRow, idx: number, hideGroupBadges = false) => {
+          const isMainLever = idx === 0;
+          const ctx =
+            row.text.trim().length > 0 && (row.weeklyTaskId || row.subTaskId)
+              ? resolveDailyPriorityContext(row, weeklyPlans, strategyPlans, selectedWeekId)
+              : null;
+          const carriedDiag =
+            !row.completed && row.text.trim().length > 0
+              ? resolveDailyCarriedDiagnosis(row, dailyEntries)
+              : null;
+          const causeMeta = carriedDiag?.cause ? getMissCauseMeta(carriedDiag.cause) : undefined;
+          const showMetaLine =
+            row.text.trim().length > 0 &&
+            ((!hideGroupBadges && (ctx?.roadmapPlan || ctx?.weeklyTask)) ||
+              (row.pushedFromDate && !row.completed) ||
+              Boolean(carriedDiag));
+
+          return (
+            <div key={idx} className="space-y-1">
+              <div className="flex items-center space-x-2.5 group">
                 {/* Checkable Priority Number Badge */}
                 <button
                   type="button"
@@ -455,25 +488,6 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                       : 'border-slate-800 focus:border-amber-500/60 text-slate-100'
                   }`}
                 />
-
-                {/* Linked Weekly Goal Badge if connected by ID */}
-                {(row.weeklyTaskId || row.subTaskId) && row.text.trim().length > 0 && (
-                  <span
-                    className="hidden sm:inline-flex items-center px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] font-bold text-amber-400 shrink-0"
-                    title="ID-linked to your Weekly Goal Crusher (survives rewording)"
-                  >
-                    🎯 Week Link
-                  </span>
-                )}
-
-                {row.pushedFromDate && !row.completed && row.text.trim().length > 0 && (
-                  <span
-                    className="hidden md:inline-flex items-center px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 shrink-0"
-                    title={`Pushed forward from ${row.pushedFromDate}`}
-                  >
-                    From {row.pushedFromDate.slice(5)}
-                  </span>
-                )}
 
                 {/* Push to Next Day button / Not Done Pushed Badge */}
                 {row.text.trim().length > 0 && !row.completed && (
@@ -526,11 +540,152 @@ export const ModularCard: React.FC<ModularCardProps> = ({ field, value, onChange
                   </button>
                 )}
               </div>
-              );
-            })}
 
-            <div className="pt-1 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Tip: Click a number badge or "Mark Done" to auto-update your Daily & Weekly score.</span>
+              {/* Inherited Identity & Carried Miss Diagnosis Strip */}
+              {showMetaLine && (
+                <div className="pl-11 flex flex-wrap items-center gap-1.5 text-[10px]">
+                  {!hideGroupBadges && ctx?.roadmapPlan && (
+                    <span
+                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold"
+                      title={`Inherited from Roadmap: ${ctx.roadmapPlan.title}`}
+                    >
+                      <MapIcon className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate max-w-[160px]">
+                        {ctx.roadmapPlan.title}
+                        {ctx.stageIndex !== undefined ? ` · S${ctx.stageIndex}` : ''}
+                      </span>
+                    </span>
+                  )}
+                  {!hideGroupBadges && ctx?.weeklyTask && (
+                    <span
+                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-300 font-semibold"
+                      title={`Synced with Weekly Goal: ${ctx.weeklyTask.text}`}
+                    >
+                      <Target className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                      <span className="truncate max-w-[210px]">
+                        {row.subTaskId ? ctx.weeklyTask.text : 'Weekly Goal'}
+                      </span>
+                    </span>
+                  )}
+                  {row.pushedFromDate && !row.completed && (
+                    <span
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded-md border font-bold ${
+                        causeMeta
+                          ? causeMeta.badgeCls
+                          : 'bg-slate-900 border-slate-800 text-slate-400 font-mono'
+                      }`}
+                      title={
+                        carriedDiag?.note
+                          ? `Pushed from ${row.pushedFromDate} — ${causeMeta?.label || 'Note'}: ${carriedDiag.note}`
+                          : causeMeta
+                          ? `Pushed from ${row.pushedFromDate} — Prior miss: ${causeMeta.label}`
+                          : `Pushed forward from ${row.pushedFromDate}`
+                      }
+                    >
+                      From {row.pushedFromDate.slice(5)}
+                      {causeMeta ? ` · ${causeMeta.shortLabel}` : ''}
+                    </span>
+                  )}
+                  {carriedDiag?.note && (
+                    <span className="text-amber-300/85 italic truncate max-w-[260px]">
+                      &ldquo;{carriedDiag.note}&rdquo;
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        const groupedBuckets = (() => {
+          if (!groupPrioritiesByGoal) return null;
+          const map = new Map<
+            string,
+            { label: string; subLabel?: string; isRoadmap: boolean; items: Array<{ row: PriorityRow; idx: number }> }
+          >();
+          displayRows.forEach((row, idx) => {
+            if (!row.text.trim()) {
+              const b = map.get('__empty__') || { label: 'Open Slots', isRoadmap: false, items: [] };
+              b.items.push({ row, idx });
+              map.set('__empty__', b);
+              return;
+            }
+            const ctx = resolveDailyPriorityContext(row, weeklyPlans, strategyPlans, selectedWeekId);
+            const key = ctx.roadmapPlan
+              ? `rm:${ctx.roadmapPlan.id}`
+              : ctx.weeklyTask
+              ? `wk:${ctx.weeklyTask.id}`
+              : '__adhoc__';
+            if (!map.has(key)) {
+              map.set(key, {
+                label: ctx.roadmapPlan
+                  ? ctx.roadmapPlan.title
+                  : ctx.weeklyTask
+                  ? ctx.weeklyTask.text
+                  : 'Standalone / Ad-hoc',
+                subLabel:
+                  ctx.roadmapPlan && ctx.weeklyTask && row.subTaskId ? ctx.weeklyTask.text : undefined,
+                isRoadmap: Boolean(ctx.roadmapPlan),
+                items: []
+              });
+            }
+            map.get(key)!.items.push({ row, idx });
+          });
+          return Array.from(map.entries());
+        })();
+
+        return (
+          <div className="space-y-2.5">
+            {groupedBuckets ? (
+              <div className="space-y-3">
+                {groupedBuckets.map(([key, bucket]) => (
+                  <div
+                    key={key}
+                    className="rounded-2xl bg-slate-950/60 border border-slate-800/80 p-3 space-y-2"
+                  >
+                    <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider">
+                      {bucket.isRoadmap ? (
+                        <MapIcon className="w-3 h-3 text-amber-400 shrink-0" />
+                      ) : (
+                        <Target className="w-3 h-3 text-slate-400 shrink-0" />
+                      )}
+                      <span className={bucket.isRoadmap ? 'text-amber-300' : 'text-slate-400'}>
+                        {bucket.label}
+                      </span>
+                      {bucket.subLabel && (
+                        <span className="font-normal normal-case text-slate-500 truncate">
+                          · {bucket.subLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {bucket.items.map(({ row, idx }) => renderPriorityRow(row, idx, true))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              displayRows.map((row, idx) => renderPriorityRow(row, idx, false))
+            )}
+
+            <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+              <div className="flex items-center gap-2.5">
+                <span>Tip: Click a number badge or "Mark Done" to auto-update your Daily & Weekly score.</span>
+                {hasGroupableContext && (
+                  <button
+                    type="button"
+                    onClick={() => setGroupPrioritiesByGoal(v => !v)}
+                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg border text-[10px] font-bold transition-colors ${
+                      groupPrioritiesByGoal
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-800'
+                    }`}
+                  >
+                    <Layers className="w-2.5 h-2.5" />
+                    <span>{groupPrioritiesByGoal ? 'Grouped by Goal' : 'Group by Goal'}</span>
+                  </button>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleAddItem}

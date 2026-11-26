@@ -44,8 +44,12 @@ import {
   getDescendantProblems,
   guessProblemCategory,
   normalizeTag,
-  severityToImpact
+  problemHasTag,
+  resolveProblemRoadmapPlanId,
+  severityToImpact,
+  tagsMatch
 } from '../lib/problems';
+import { getWeeklyGoalsAssignedToRoadmap, isActiveStrategyPlan } from '../lib/planHierarchy';
 import {
   coerceActiveTabForLevel,
   coercePlanningSubTabForLevel,
@@ -665,6 +669,7 @@ interface StorageContextType {
     isGuardrail?: boolean;
     verifyDays?: number;
     parentProblemId?: string;
+    roadmapPlanId?: string;
     tags?: string[];
     sourceType: ProblemSourceType;
     date: string;
@@ -2335,14 +2340,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       strategyGoalId: string;
       completed: boolean;
     }> = [];
+    const completedProblemFixIds: string[] = [];
 
     (savedPlan.tasks || []).forEach(t => {
-      // Sub-goals pulled from a Roadmap Proximal Goal always sync 1:1 back to the Roadmap
+      // Sub-goals pulled from a Roadmap Proximal Goal or Problem fix sync back automatically
       (t.subTasks || []).forEach(sub => {
-        if (!sub.strategyPlanId || !sub.strategyStageId || !sub.strategyGoalId) return;
         const subWasDone = prevSubMap.get(sub.id);
         const subChanged = subWasDone !== undefined ? subWasDone !== sub.completed : sub.completed;
-        if (subChanged) {
+        if (subChanged && sub.strategyPlanId && sub.strategyStageId && sub.strategyGoalId) {
           strategyGoalToggles.push({
             strategyPlanId: sub.strategyPlanId,
             strategyStageId: sub.strategyStageId,
@@ -2350,12 +2355,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             completed: sub.completed
           });
         }
+        if (subChanged && sub.completed && sub.problemId) {
+          completedProblemFixIds.push(sub.problemId);
+        }
       });
+
+      const wasDone = prevMap.get(t.id);
+      const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
+      if (changed && t.completed && t.problemId) {
+        completedProblemFixIds.push(t.problemId);
+      }
 
       // Decomposed child steps roll up progress without prematurely closing the whole parent outcome
       if (t.parentLinkMode === 'step') return;
-      const wasDone = prevMap.get(t.id);
-      const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
       if (!changed) return;
       if (t.monthlyTaskId) {
         monthlyToggles.push({ monthlyTaskId: t.monthlyTaskId, completed: t.completed });
@@ -2420,6 +2432,28 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (strategyGoalToggles.length > 0) {
       syncLinkedStrategyGoals(strategyGoalToggles);
+    }
+
+    // When a dispatched Weekly fix task/sub-goal is checked off, signal on the Problem so user can Verify Solved
+    if (completedProblemFixIds.length > 0) {
+      const doneSet = new Set(completedProblemFixIds);
+      const todayStr = getTodayDateString();
+      const nowIso = new Date().toISOString();
+      let probChanged = false;
+      const nextProbs = problemsRef.current.map(p => {
+        if (!doneSet.has(p.id) || p.status === 'solved') return p;
+        probChanged = true;
+        return {
+          ...p,
+          status: p.status === 'open' ? ('testing' as ProblemStatus) : p.status,
+          fixStartedAt: p.fixStartedAt || todayStr,
+          fixTaskCompletedAt: todayStr,
+          updatedAt: nowIso
+        };
+      });
+      if (probChanged) {
+        commitProblems(nextProbs);
+      }
     }
   };
 
@@ -2782,9 +2816,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const prevPlan = monthlyPlansRef.current[key];
     if (prevPlan) {
       const nextIds = new Set((plan.tasks || []).map(t => t.id));
+      const nextSubIds = new Set((plan.tasks || []).flatMap(t => (t.subTasks || []).map(s => s.id)));
       const nextScoreIds = new Set((plan.scoreboard || []).map(s => s.id));
       const removed = [
         ...(prevPlan.tasks || []).filter(t => t.id && !nextIds.has(t.id)).map(t => t.id),
+        ...(prevPlan.tasks || [])
+          .flatMap(t => t.subTasks || [])
+          .filter(s => s.id && !nextSubIds.has(s.id))
+          .map(s => s.id),
         ...(prevPlan.scoreboard || []).filter(s => s.id && !nextScoreIds.has(s.id)).map(s => s.id)
       ];
       if (removed.length > 0) recordDeletedIds(removed);
@@ -2798,9 +2837,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync (only for 1:1 mirrored items — child steps roll up progress without closing parent)
+    // Upward ID-linked sync (sub-items linked to Roadmap proximal goals always sync 1:1)
     const prevMap = new Map<string, boolean>();
-    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+    const prevSubMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => {
+      prevMap.set(t.id, t.completed);
+      (t.subTasks || []).forEach(s => prevSubMap.set(s.id, s.completed));
+    });
     const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
     const strategyToggles: Array<{
@@ -2810,6 +2853,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       completed: boolean;
     }> = [];
     saved.tasks.forEach(t => {
+      (t.subTasks || []).forEach(sub => {
+        if (!sub.strategyPlanId || !sub.strategyStageId || !sub.strategyGoalId) return;
+        const subWasDone = prevSubMap.get(sub.id);
+        const subChanged = subWasDone !== undefined ? subWasDone !== sub.completed : sub.completed;
+        if (subChanged) {
+          strategyToggles.push({
+            strategyPlanId: sub.strategyPlanId,
+            strategyStageId: sub.strategyStageId,
+            strategyGoalId: sub.strategyGoalId,
+            completed: sub.completed
+          });
+        }
+      });
       if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
@@ -2853,9 +2909,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const prevPlan = quarterlyPlansRef.current[key];
     if (prevPlan) {
       const nextTaskIds = new Set((plan.tasks || []).map(t => t.id));
+      const nextSubIds = new Set((plan.tasks || []).flatMap(t => (t.subTasks || []).map(s => s.id)));
       const nextScoreIds = new Set((plan.scoreboard || []).map(s => s.id));
       const removed = [
         ...(prevPlan.tasks || []).filter(t => t.id && !nextTaskIds.has(t.id)).map(t => t.id),
+        ...(prevPlan.tasks || [])
+          .flatMap(t => t.subTasks || [])
+          .filter(s => s.id && !nextSubIds.has(s.id))
+          .map(s => s.id),
         ...(prevPlan.scoreboard || []).filter(s => s.id && !nextScoreIds.has(s.id)).map(s => s.id)
       ];
       if (removed.length > 0) recordDeletedIds(removed);
@@ -2869,9 +2930,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       [key]: saved
     });
 
-    // Upward ID-linked sync: propagate completed quarterly outcome to linked yearly & roadmap goals
+    // Upward ID-linked sync: propagate completed quarterly outcomes & sub-items to linked yearly & roadmap goals
     const prevMap = new Map<string, boolean>();
-    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+    const prevSubMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => {
+      prevMap.set(t.id, t.completed);
+      (t.subTasks || []).forEach(s => prevSubMap.set(s.id, s.completed));
+    });
     const yearlyToggles: Array<{ yearlyTaskId: string; completed: boolean }> = [];
     const strategyToggles: Array<{
       strategyPlanId: string;
@@ -2880,6 +2945,19 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       completed: boolean;
     }> = [];
     saved.tasks.forEach(t => {
+      (t.subTasks || []).forEach(sub => {
+        if (!sub.strategyPlanId || !sub.strategyStageId || !sub.strategyGoalId) return;
+        const subWasDone = prevSubMap.get(sub.id);
+        const subChanged = subWasDone !== undefined ? subWasDone !== sub.completed : sub.completed;
+        if (subChanged) {
+          strategyToggles.push({
+            strategyPlanId: sub.strategyPlanId,
+            strategyStageId: sub.strategyStageId,
+            strategyGoalId: sub.strategyGoalId,
+            completed: sub.completed
+          });
+        }
+      });
       if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
       const changed = wasDone !== undefined ? wasDone !== t.completed : t.completed;
@@ -3116,6 +3194,83 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             });
           });
         }
+
+        // Also sync down to Monthly & Quarterly plans (top-level and nested sub-items)
+        const syncMacroPlansForGoals = <T extends { tasks: TaskItem[]; updatedAt: string }>(
+          plansMap: Record<string, T>,
+          commitFn: (next: Record<string, T>) => void
+        ) => {
+          let anyChanged = false;
+          const nextMap: Record<string, T> = { ...plansMap };
+          Object.entries(plansMap).forEach(([k, mp]) => {
+            let pChanged = false;
+            const nextTasks = (mp.tasks || []).map(t => {
+              let nextTask = t;
+              if (t.strategyGoalId && toggledGoals.has(t.strategyGoalId)) {
+                const targetDone = toggledGoals.get(t.strategyGoalId)!;
+                if (nextTask.completed !== targetDone) {
+                  pChanged = true;
+                  nextTask = { ...nextTask, completed: targetDone };
+                }
+              }
+              if (nextTask.subTasks && nextTask.subTasks.length > 0) {
+                let subChanged = false;
+                const nextSubs = nextTask.subTasks.map(sub => {
+                  if (sub.strategyGoalId && toggledGoals.has(sub.strategyGoalId)) {
+                    const targetDone = toggledGoals.get(sub.strategyGoalId)!;
+                    if (sub.completed !== targetDone) {
+                      subChanged = true;
+                      pChanged = true;
+                      return { ...sub, completed: targetDone };
+                    }
+                  }
+                  return sub;
+                });
+                if (subChanged) {
+                  nextTask = { ...nextTask, subTasks: nextSubs };
+                }
+              }
+              return nextTask;
+            });
+            if (pChanged) {
+              anyChanged = true;
+              nextMap[k] = { ...mp, tasks: nextTasks, updatedAt: nowIso };
+            }
+          });
+          if (anyChanged) commitFn(nextMap);
+        };
+
+        syncMacroPlansForGoals(monthlyPlansRef.current, commitMonthlyPlans);
+        syncMacroPlansForGoals(quarterlyPlansRef.current, commitQuarterlyPlans);
+      }
+
+      // Rename resilience: if Roadmap title changed, preserve Problem attachments by ID + update legacy tag text
+      const oldTitle = prevPlan.title.trim();
+      const newTitle = updatedPlan.title.trim();
+      if (oldTitle && newTitle && oldTitle.toLowerCase() !== newTitle.toLowerCase()) {
+        const cleanNewTag = normalizeTag(newTitle);
+        let probsChanged = false;
+        const nextProbs = problemsRef.current.map(p => {
+          const matchedById = p.roadmapPlanId === updatedPlan.id;
+          const matchedByOldTag = !p.roadmapPlanId && problemHasTag(p, oldTitle);
+          if (!matchedById && !matchedByOldTag) return p;
+          probsChanged = true;
+          const nextTags = Array.from(
+            new Set([
+              ...(p.tags || []).filter(t => !tagsMatch(t, oldTitle)),
+              ...(cleanNewTag ? [cleanNewTag] : [])
+            ])
+          );
+          return {
+            ...p,
+            roadmapPlanId: updatedPlan.id,
+            tags: nextTags,
+            updatedAt: nowIso
+          };
+        });
+        if (probsChanged) {
+          commitProblems(nextProbs);
+        }
       }
     }
 
@@ -3133,6 +3288,22 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const cleanedTags = Array.from(
       new Set((input.tags || []).map(normalizeTag).filter(Boolean))
     );
+    // Stable ID binding: prefer explicit roadmapPlanId, or auto-resolve from matching active Roadmap tag
+    const activeRoadmaps = strategyPlansRef.current.filter(isActiveStrategyPlan);
+    let resolvedRoadmapId = input.roadmapPlanId;
+    if (!resolvedRoadmapId && cleanedTags.length > 0) {
+      const hit = activeRoadmaps.find(sp =>
+        sp.title.trim() && cleanedTags.some(t => tagsMatch(t, sp.title))
+      );
+      if (hit) resolvedRoadmapId = hit.id;
+    }
+    if (resolvedRoadmapId) {
+      const linkedPlan = strategyPlansRef.current.find(sp => sp.id === resolvedRoadmapId);
+      const planTag = linkedPlan?.title ? normalizeTag(linkedPlan.title) : '';
+      if (planTag && !cleanedTags.some(t => tagsMatch(t, planTag))) {
+        cleanedTags.unshift(planTag);
+      }
+    }
     const resolvedScale: ProblemScale =
       input.scale ||
       (input.severity && input.severity >= 5
@@ -3162,6 +3333,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ...(input.isGuardrail ? { isGuardrail: true } : {}),
       ...(input.verifyDays ? { verifyDays: input.verifyDays } : {}),
       ...(input.parentProblemId ? { parentProblemId: input.parentProblemId } : {}),
+      ...(resolvedRoadmapId ? { roadmapPlanId: resolvedRoadmapId } : {}),
       tags: cleanedTags,
       status: resolvedStatus,
       occurrences: [
@@ -3426,18 +3598,57 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         findBestWeeklyPlanForDate(selectedDateRef.current, weeklyPlansRef.current, selectedWeekIdRef.current) ||
         getWeeklyPlan(selectedWeekIdRef.current);
 
-      const exists = targetPlan.tasks.some(t => t.text.trim().toLowerCase() === normText);
+      const exists = targetPlan.tasks.some(
+        t =>
+          t.text.trim().toLowerCase() === normText ||
+          (t.subTasks || []).some(s => s.text.trim().toLowerCase() === normText)
+      );
       if (!exists) {
-        const nextTasks: TaskItem[] = [
-          ...targetPlan.tasks,
-          {
-            id: `wt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        const roadmapPlanId = resolveProblemRoadmapPlanId(problem, strategyPlansRef.current);
+        const matchingWeeklyContainer = roadmapPlanId
+          ? getWeeklyGoalsAssignedToRoadmap(targetPlan, roadmapPlanId)[0]
+          : undefined;
+
+        let nextTasks: TaskItem[];
+        if (matchingWeeklyContainer) {
+          // Identity-driven placement: route Problem fix straight inside the matching Roadmap Weekly Goal as a sub-goal!
+          const newSub = {
+            id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             text: actionText,
             completed: false,
-            score: 1,
-            notes: `Fix for problem: ${problem.title}`
-          }
-        ];
+            problemId: problem.id,
+            ...(roadmapPlanId ? { strategyPlanId: roadmapPlanId } : {}),
+            ...(matchingWeeklyContainer.strategyStageId
+              ? { strategyStageId: matchingWeeklyContainer.strategyStageId }
+              : {})
+          };
+          nextTasks = targetPlan.tasks.map(t => {
+            if (t.id !== matchingWeeklyContainer.id) return t;
+            const updatedSubs = [...(t.subTasks || []), newSub];
+            return {
+              ...t,
+              subTasks: updatedSubs,
+              completed: false
+            };
+          });
+        } else {
+          const linkedPlan = roadmapPlanId
+            ? strategyPlansRef.current.find(sp => sp.id === roadmapPlanId)
+            : undefined;
+          nextTasks = [
+            ...targetPlan.tasks,
+            {
+              id: `wt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              text: actionText,
+              completed: false,
+              score: 1,
+              problemId: problem.id,
+              ...(roadmapPlanId ? { strategyPlanId: roadmapPlanId } : {}),
+              ...(linkedPlan ? { sourceLabel: linkedPlan.title } : {}),
+              notes: `Fix for problem: ${problem.title}`
+            }
+          ];
+        }
         saveWeeklyPlan({
           ...targetPlan,
           tasks: nextTasks,
@@ -4381,7 +4592,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           return {
             ...pItem,
             pushedToDate: pItem.pushedToDate !== undefined ? pItem.pushedToDate : sMatch.pushedToDate,
-            pushedFromDate: pItem.pushedFromDate || sMatch.pushedFromDate
+            pushedFromDate: pItem.pushedFromDate || sMatch.pushedFromDate,
+            carriedDiagnosisCause: pItem.carriedDiagnosisCause || sMatch.carriedDiagnosisCause,
+            carriedDiagnosisNote: pItem.carriedDiagnosisNote?.trim()
+              ? pItem.carriedDiagnosisNote
+              : sMatch.carriedDiagnosisNote
           };
         });
         const prioIds = new Set(primaryItems.map(i => i.id));
@@ -4492,7 +4707,8 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             ...ps,
             strategyPlanId: ps.strategyPlanId || sMatch.strategyPlanId,
             strategyStageId: ps.strategyStageId || sMatch.strategyStageId,
-            strategyGoalId: ps.strategyGoalId || sMatch.strategyGoalId
+            strategyGoalId: ps.strategyGoalId || sMatch.strategyGoalId,
+            problemId: ps.problemId || sMatch.problemId
           };
         });
         const pSubIds = new Set(pSubs.map(s => s.id));
@@ -4520,9 +4736,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           strategyPlanId: pt.strategyPlanId || match.strategyPlanId,
           strategyStageId: pt.strategyStageId || match.strategyStageId,
           strategyGoalId: pt.strategyGoalId || match.strategyGoalId,
+          problemId: pt.problemId || match.problemId,
           sourceLabel: pt.sourceLabel || match.sourceLabel,
           pushedToPeriod: pt.pushedToPeriod !== undefined ? pt.pushedToPeriod : match.pushedToPeriod,
           pushedFromPeriod: pt.pushedFromPeriod || match.pushedFromPeriod,
+          carriedDiagnosisCause: pt.carriedDiagnosisCause || match.carriedDiagnosisCause,
+          carriedDiagnosisNote: pt.carriedDiagnosisNote?.trim()
+            ? pt.carriedDiagnosisNote
+            : match.carriedDiagnosisNote,
           ...(mergedSubs.length > 0 ? { subTasks: mergedSubs } : {})
         };
       });
@@ -4819,7 +5040,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...primary,
           focusTag: primary.focusTag?.trim() ? primary.focusTag : secondary.focusTag,
           roadmapPlanId: primary.roadmapPlanId || secondary.roadmapPlanId,
-          pillarId: primary.pillarId || secondary.pillarId
+          pillarId: primary.pillarId || secondary.pillarId,
+          linkedWeeklyTaskId: primary.linkedWeeklyTaskId || secondary.linkedWeeklyTaskId,
+          linkedSubTaskId: primary.linkedSubTaskId || secondary.linkedSubTaskId
         };
       }
     );
@@ -4925,10 +5148,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return {
           ...primary,
           severity: primary.severity ?? secondary.severity,
+          roadmapPlanId: primary.roadmapPlanId || secondary.roadmapPlanId,
           trigger: primary.trigger?.trim() ? primary.trigger : secondary.trigger,
           rootCause: primary.rootCause?.trim() ? primary.rootCause : secondary.rootCause,
           fixNote: primary.fixNote?.trim() ? primary.fixNote : secondary.fixNote,
           fixStartedAt: primary.fixStartedAt || secondary.fixStartedAt,
+          fixTaskCompletedAt: primary.fixTaskCompletedAt || secondary.fixTaskCompletedAt,
           verifyDays: primary.verifyDays ?? secondary.verifyDays,
           lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
           occurrences: mergedOccurrences,

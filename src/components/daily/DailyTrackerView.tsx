@@ -54,6 +54,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     weeklyPlans,
     selectedWeekId,
     saveWeeklyPlan,
+    strategyPlans,
     checklistItems,
     setActiveTab,
     setPlanningSubTab,
@@ -210,6 +211,7 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
           p.text.trim().toLowerCase() === cleanText.toLowerCase()
       );
       if (!alreadyInNext) {
+        const originAudit = currentEntry.priorityAudits?.[row.id];
         const nextItems = [
           ...nextExisting,
           {
@@ -219,7 +221,9 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
             ...(row.weeklyTaskId ? { weeklyTaskId: row.weeklyTaskId } : {}),
             ...(row.subTaskId ? { subTaskId: row.subTaskId } : {}),
             ...(row.checklistItemId ? { checklistItemId: row.checklistItemId } : {}),
-            pushedFromDate: selectedDate
+            pushedFromDate: selectedDate,
+            ...(originAudit?.rootCause ? { carriedDiagnosisCause: originAudit.rootCause } : {}),
+            ...(originAudit?.note?.trim() ? { carriedDiagnosisNote: originAudit.note.trim() } : {})
           }
         ];
         saveDailyEntry(nextDate, {
@@ -778,6 +782,16 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
                         <span className={`font-medium truncate ${task.completed ? 'line-through text-slate-400' : ''}`}>
                           {task.text}
                         </span>
+
+                        {task.strategyPlanId && (() => {
+                          const sp = strategyPlans.find(p => p.id === task.strategyPlanId);
+                          if (!sp) return null;
+                          return (
+                            <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] font-bold text-amber-300 shrink-0 max-w-[140px] truncate">
+                              {sp.title}
+                            </span>
+                          );
+                        })()}
 
                         <span className="text-[10px] text-amber-400 font-mono font-bold shrink-0">
                           +{task.score}p

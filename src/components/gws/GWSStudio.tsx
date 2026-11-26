@@ -11,6 +11,8 @@ import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
 import {
   STRATEGY_PRIORITY_META,
   isActiveStrategyPlan,
+  resolveDailyPriorityContext,
+  resolveSessionRoadmapPlanId,
   sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
@@ -80,6 +82,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     deleteGWSSession,
     getEntryForDate,
     saveDailyEntry,
+    dailyEntries,
     weeklyPlans,
     selectedWeekId,
     saveWeeklyPlan,
@@ -114,6 +117,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
   // Active session state (hydrates from persistent activeGwsTimer so tab switches/reloads never lose a sprint)
   const [taskName, setTaskName] = useState(() => activeGwsTimer?.taskName || '');
   const [linkedPriorityId, setLinkedPriorityId] = useState<string | null>(() => activeGwsTimer?.linkedPriorityId || null);
+  const [linkedWeeklyTaskId, setLinkedWeeklyTaskId] = useState<string | undefined>(() => activeGwsTimer?.linkedWeeklyTaskId);
+  const [linkedSubTaskId, setLinkedSubTaskId] = useState<string | undefined>(() => activeGwsTimer?.linkedSubTaskId);
   const [focusTag, setFocusTag] = useState<string>(() => activeGwsTimer?.focusTag || '');
   const [roadmapPlanId, setRoadmapPlanId] = useState<string>(() => activeGwsTimer?.roadmapPlanId || '');
   const [pillarId, setPillarId] = useState<string>(() => activeGwsTimer?.pillarId || '');
@@ -242,6 +247,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
         title: trimmed,
         category: heldBackCategory,
         scale: 'friction',
+        ...(roadmapPlanId ? { roadmapPlanId } : {}),
         tags: autoTags,
         sourceType: 'gws',
         date: selectedDate,
@@ -259,6 +265,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     if (
       activeGwsTimer.taskName !== taskName ||
       activeGwsTimer.linkedPriorityId !== linkedPriorityId ||
+      activeGwsTimer.linkedWeeklyTaskId !== linkedWeeklyTaskId ||
+      activeGwsTimer.linkedSubTaskId !== linkedSubTaskId ||
       activeGwsTimer.plannedMinutes !== plannedMinutes ||
       (activeGwsTimer.focusTag || '') !== focusTag ||
       (activeGwsTimer.roadmapPlanId || '') !== roadmapPlanId ||
@@ -270,6 +278,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
               ...prev,
               taskName,
               linkedPriorityId,
+              linkedWeeklyTaskId,
+              linkedSubTaskId,
               plannedMinutes,
               focusTag: focusTag || undefined,
               roadmapPlanId: roadmapPlanId || undefined,
@@ -278,7 +288,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
           : prev
       );
     }
-  }, [taskName, linkedPriorityId, plannedMinutes, focusTag, roadmapPlanId, pillarId]);
+  }, [taskName, linkedPriorityId, linkedWeeklyTaskId, linkedSubTaskId, plannedMinutes, focusTag, roadmapPlanId, pillarId]);
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -292,6 +302,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     updateActiveGwsTimer(prev => ({
       taskName,
       linkedPriorityId,
+      linkedWeeklyTaskId,
+      linkedSubTaskId,
       plannedMinutes,
       focusTag: focusTag || undefined,
       roadmapPlanId: roadmapPlanId || undefined,
@@ -311,6 +323,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
         ...prev,
         taskName,
         linkedPriorityId,
+        linkedWeeklyTaskId,
+        linkedSubTaskId,
         plannedMinutes,
         focusTag: focusTag || undefined,
         roadmapPlanId: roadmapPlanId || undefined,
@@ -333,6 +347,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     setActualMinutes(0);
     setTaskName('');
     setLinkedPriorityId(null);
+    setLinkedWeeklyTaskId(undefined);
+    setLinkedSubTaskId(undefined);
     setFocusTag('');
     setRoadmapPlanId('');
     setPillarId('');
@@ -375,6 +391,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
         addProblem({
           title: trimmedDraft,
           category: heldBackCategory,
+          ...(roadmapPlanId ? { roadmapPlanId } : {}),
           tags: heldBackTags,
           sourceType: 'gws',
           date: selectedDate,
@@ -391,6 +408,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
       ...(focusTag.trim() ? { focusTag: focusTag.trim() } : {}),
       ...(roadmapPlanId ? { roadmapPlanId } : {}),
       ...(pillarId ? { pillarId } : {}),
+      ...(linkedWeeklyTaskId ? { linkedWeeklyTaskId } : {}),
+      ...(linkedSubTaskId ? { linkedSubTaskId } : {}),
       ratings: {
         focus,
         execution,
@@ -466,6 +485,8 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
     // Reset form
     setTaskName('');
     setLinkedPriorityId(null);
+    setLinkedWeeklyTaskId(undefined);
+    setLinkedSubTaskId(undefined);
     setFocusTag('');
     setRoadmapPlanId('');
     setPillarId('');
@@ -571,11 +592,21 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                           setTaskName(prio.text);
                           const nextId = isSelectedPrio ? null : prio.id;
                           setLinkedPriorityId(nextId);
-                          if (nextId && prio.weeklyTaskId && activeWeeklyPlan) {
-                            const wt = activeWeeklyPlan.tasks.find(t => t.id === prio.weeklyTaskId);
-                            if (wt?.strategyPlanId) {
-                              setRoadmapPlanId(wt.strategyPlanId);
+                          if (nextId) {
+                            setLinkedWeeklyTaskId(prio.weeklyTaskId);
+                            setLinkedSubTaskId(prio.subTaskId);
+                            const ctx = resolveDailyPriorityContext(
+                              prio,
+                              weeklyPlans,
+                              strategyPlans,
+                              activeWeeklyPlan?.id
+                            );
+                            if (ctx.roadmapPlan) {
+                              setRoadmapPlanId(ctx.roadmapPlan.id);
                             }
+                          } else {
+                            setLinkedWeeklyTaskId(undefined);
+                            setLinkedSubTaskId(undefined);
                           }
                         }}
                         className={`text-xs px-2.5 py-1.5 rounded-xl border transition-all flex items-center space-x-1.5 ${
@@ -934,6 +965,7 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                 sourceType="gws"
                 date={selectedDate}
                 sourceRef={taskName.trim() || 'GWS Sprint'}
+                roadmapPlanId={roadmapPlanId || undefined}
                 targetWeekId={selectedWeekId}
                 draftText={heldBackDraft}
                 onDraftTextChange={setHeldBackDraft}
@@ -1048,12 +1080,21 @@ export const GWSStudio: React.FC<GWSStudioProps> = ({ onClose, isModal = false }
                               {session.focusTag}
                             </span>
                           )}
-                          {session.roadmapPlanId &&
-                            strategyPlans.find(sp => sp.id === session.roadmapPlanId) && (
-                              <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold">
-                                {strategyPlans.find(sp => sp.id === session.roadmapPlanId)?.title}
+                          {(() => {
+                            const resolvedRmId = resolveSessionRoadmapPlanId(session, weeklyPlans, dailyEntries);
+                            const resolvedRm = resolvedRmId
+                              ? strategyPlans.find(sp => sp.id === resolvedRmId)
+                              : undefined;
+                            if (!resolvedRm) return null;
+                            return (
+                              <span
+                                className="px-1.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold"
+                                title={session.roadmapPlanId ? 'Tagged Roadmap' : 'Inherited from linked Weekly Goal'}
+                              >
+                                {resolvedRm.title}
                               </span>
-                            )}
+                            );
+                          })()}
                           {session.pillarId &&
                             lifePillars.find(lp => lp.id === session.pillarId) && (
                               <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">

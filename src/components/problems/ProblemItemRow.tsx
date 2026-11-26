@@ -25,7 +25,12 @@ import {
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
-import { isActiveStrategyPlan } from '../../lib/planHierarchy';
+import {
+  getWeeklyGoalsAssignedToRoadmap,
+  isActiveStrategyPlan,
+  sortStrategyPlansByPriority
+} from '../../lib/planHierarchy';
+import { resolveProblemRoadmapPlanId } from '../../lib/problems';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -94,6 +99,8 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     problemCategories,
     problemSettings,
     strategyPlans,
+    weeklyPlans,
+    selectedWeekId,
     updateProblem,
     recordProblemRecurrence,
     clusterIntoNewParent,
@@ -135,10 +142,15 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const catMeta = resolveCategoryMeta(problem.category, problemCategories);
   const isGuardrail = isProblemGuardrail(problem);
   const lastDate = getLastOccurrenceDate(problem);
-  const roadmapTitles = strategyPlans
-    .filter(isActiveStrategyPlan)
-    .map(p => p.title.trim())
-    .filter(Boolean);
+  const activeRoadmaps = useMemo(
+    () => sortStrategyPlansByPriority(strategyPlans.filter(isActiveStrategyPlan)),
+    [strategyPlans]
+  );
+  const resolvedRoadmapId = resolveProblemRoadmapPlanId(problem, strategyPlans);
+  const linkedRoadmap = resolvedRoadmapId
+    ? strategyPlans.find(sp => sp.id === resolvedRoadmapId)
+    : undefined;
+  const roadmapTitles = activeRoadmaps.map(p => p.title.trim()).filter(Boolean);
   const maxTop = problemSettings.maxTopConstraints || 3;
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
 
@@ -294,8 +306,41 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     }
     const ok = dispatchProblemFix(problem.id, target, textToSend, targetWeekId);
     if (ok) {
-      setDispatchFeedback(`Sent → ${DISPATCH_TARGET_LABELS[target]}`);
-      setTimeout(() => setDispatchFeedback(null), 2200);
+      let msg = `Sent → ${DISPATCH_TARGET_LABELS[target]}`;
+      if (target === 'weekly_plan' && resolvedRoadmapId) {
+        const wPlan = weeklyPlans[targetWeekId || selectedWeekId];
+        const container = getWeeklyGoalsAssignedToRoadmap(wPlan, resolvedRoadmapId)[0];
+        if (container) {
+          msg = `Sent inside "${container.text.slice(0, 26)}${container.text.length > 26 ? '…' : ''}"`;
+        }
+      }
+      setDispatchFeedback(msg);
+      setTimeout(() => setDispatchFeedback(null), 2600);
+    }
+  };
+
+  const handleToggleRoadmapLink = (planId: string, planTitle: string) => {
+    const cleanTitle = normalizeTag(planTitle);
+    const isCurrentlyLinked = resolvedRoadmapId === planId;
+    if (isCurrentlyLinked) {
+      updateProblem(problem.id, {
+        roadmapPlanId: undefined,
+        tags: cleanTitle ? problem.tags.filter(t => !tagsMatch(t, cleanTitle)) : problem.tags
+      });
+    } else {
+      // Remove previous roadmap title tag if switching roadmaps
+      const prevTitle = linkedRoadmap?.title ? normalizeTag(linkedRoadmap.title) : '';
+      const baseTags = prevTitle
+        ? problem.tags.filter(t => !tagsMatch(t, prevTitle))
+        : problem.tags;
+      const nextTags =
+        cleanTitle && !baseTags.some(t => tagsMatch(t, cleanTitle))
+          ? [cleanTitle, ...baseTags]
+          : baseTags;
+      updateProblem(problem.id, {
+        roadmapPlanId: planId,
+        tags: nextTags
+      });
     }
   };
 
@@ -456,6 +501,21 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 </span>
               )}
 
+              {problem.fixTaskCompletedAt && problem.status !== 'solved' && (
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    updateProblem(problem.id, { status: 'solved' });
+                  }}
+                  title="Your dispatched Weekly fix task was completed — click to mark this problem Verified Solved"
+                  className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold transition-colors"
+                >
+                  <CheckCircle2 className="w-2.5 h-2.5" />
+                  <span>Fix done ({problem.fixTaskCompletedAt.slice(5)}) — Verify Solved?</span>
+                </button>
+              )}
+
               {verification.isTesting && verification.readyToVerify && (
                 <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 text-[10px] font-bold">
                   <CheckCircle2 className="w-2.5 h-2.5" />
@@ -498,11 +558,21 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 </button>
               )}
 
-              {problem.tags.slice(0, 2).map(tag => (
-                <span key={tag} className="text-[10px] text-slate-500">
-                  · {isRoadmapTag(tag) ? tag : `#${tag}`}
+              {linkedRoadmap && (
+                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+                  <MapIcon className="w-2.5 h-2.5 shrink-0" />
+                  <span className="truncate max-w-[140px]">{linkedRoadmap.title}</span>
                 </span>
-              ))}
+              )}
+
+              {problem.tags
+                .filter(tag => !linkedRoadmap || !tagsMatch(tag, linkedRoadmap.title))
+                .slice(0, 2)
+                .map(tag => (
+                  <span key={tag} className="text-[10px] text-slate-500">
+                    · {isRoadmapTag(tag) ? tag : `#${tag}`}
+                  </span>
+                ))}
 
               <span className="text-[10px] font-mono text-slate-600">· {lastDate}</span>
             </div>
@@ -842,21 +912,26 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                 <Tag className="w-3 h-3" />
                 <span>Roadmap / Tags:</span>
               </span>
-              {roadmapTitles.map(rt => {
-                const active = problem.tags.some(t => tagsMatch(t, rt));
+              {activeRoadmaps.map(sp => {
+                const active = resolvedRoadmapId === sp.id;
                 return (
                   <button
-                    key={rt}
+                    key={sp.id}
                     type="button"
-                    onClick={() => handleToggleTag(rt)}
+                    onClick={() => handleToggleRoadmapLink(sp.id, sp.title)}
                     className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full border text-[10px] font-bold transition-all ${
                       active
                         ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
                         : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
                     }`}
+                    title={
+                      active
+                        ? `Linked by ID to "${sp.title}" (survives renames & routes fixes into its Weekly Goal) — click to unlink`
+                        : `Link by ID to "${sp.title}"`
+                    }
                   >
                     <MapIcon className="w-2.5 h-2.5" />
-                    <span>{rt}</span>
+                    <span>{sp.title}</span>
                   </button>
                 );
               })}
