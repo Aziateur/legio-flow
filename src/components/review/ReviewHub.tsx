@@ -3225,7 +3225,10 @@ export const ReviewHub: React.FC = () => {
                   .map(s => ({
                     id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
                     text: s.text,
-                    completed: false
+                    completed: false,
+                    ...(s.strategyPlanId ? { strategyPlanId: s.strategyPlanId } : {}),
+                    ...(s.strategyStageId ? { strategyStageId: s.strategyStageId } : {}),
+                    ...(s.strategyGoalId ? { strategyGoalId: s.strategyGoalId } : {})
                   }));
                 const nextWeekTasks: TaskItem[] = [
                   ...existingNextRev.tasks,

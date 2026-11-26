@@ -2320,7 +2320,11 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const propagateWeeklyTaskCompletionUpward = (prevPlan: WeeklyPlan | undefined, savedPlan: WeeklyPlan) => {
     const prevMap = new Map<string, boolean>();
-    (prevPlan?.tasks || []).forEach(t => prevMap.set(t.id, t.completed));
+    const prevSubMap = new Map<string, boolean>();
+    (prevPlan?.tasks || []).forEach(t => {
+      prevMap.set(t.id, t.completed);
+      (t.subTasks || []).forEach(s => prevSubMap.set(s.id, s.completed));
+    });
 
     const monthlyToggles: Array<{ monthlyTaskId: string; completed: boolean }> = [];
     const quarterlyToggles: Array<{ quarterlyTaskId: string; completed: boolean }> = [];
@@ -2333,6 +2337,21 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }> = [];
 
     (savedPlan.tasks || []).forEach(t => {
+      // Sub-goals pulled from a Roadmap Proximal Goal always sync 1:1 back to the Roadmap
+      (t.subTasks || []).forEach(sub => {
+        if (!sub.strategyPlanId || !sub.strategyStageId || !sub.strategyGoalId) return;
+        const subWasDone = prevSubMap.get(sub.id);
+        const subChanged = subWasDone !== undefined ? subWasDone !== sub.completed : sub.completed;
+        if (subChanged) {
+          strategyGoalToggles.push({
+            strategyPlanId: sub.strategyPlanId,
+            strategyStageId: sub.strategyStageId,
+            strategyGoalId: sub.strategyGoalId,
+            completed: sub.completed
+          });
+        }
+      });
+
       // Decomposed child steps roll up progress without prematurely closing the whole parent outcome
       if (t.parentLinkMode === 'step') return;
       const wasDone = prevMap.get(t.id);
@@ -2990,6 +3009,116 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const next = idx >= 0 ? prev.map((p, i) => (i === idx ? updatedPlan : p)) : [...prev, updatedPlan];
     clearDeletedId(updatedPlan.id);
     commitStrategyPlans(next);
+
+    // Two-way sync: if any proximal goal's completion toggled in the Roadmap, sync linked Weekly goals & sub-goals
+    if (prevPlan) {
+      const prevGoalDone = new Map<string, boolean>();
+      (prevPlan.stages || []).forEach(st => {
+        (st.proximalGoals || []).forEach(g => prevGoalDone.set(g.id, g.completed));
+      });
+      const toggledGoals = new Map<string, boolean>();
+      (updatedPlan.stages || []).forEach(st => {
+        (st.proximalGoals || []).forEach(g => {
+          const prevVal = prevGoalDone.get(g.id);
+          if (prevVal !== undefined && prevVal !== g.completed) {
+            toggledGoals.set(g.id, g.completed);
+          }
+        });
+      });
+
+      if (toggledGoals.size > 0) {
+        const curWeeks = weeklyPlansRef.current;
+        let anyWeekChanged = false;
+        const nextWeeks: Record<string, WeeklyPlan> = { ...curWeeks };
+        const changedWeekDaySyncs: Array<{ week: WeeklyPlan; changedTaskIds: Map<string, boolean>; changedSubIds: Map<string, boolean> }> = [];
+
+        Object.entries(curWeeks).forEach(([wKey, wp]) => {
+          let wChanged = false;
+          const changedTaskIds = new Map<string, boolean>();
+          const changedSubIds = new Map<string, boolean>();
+
+          const nextTasks = (wp.tasks || []).map(t => {
+            let nextTask = t;
+            if (t.strategyGoalId && toggledGoals.has(t.strategyGoalId)) {
+              const targetDone = toggledGoals.get(t.strategyGoalId)!;
+              if (nextTask.completed !== targetDone) {
+                wChanged = true;
+                changedTaskIds.set(t.id, targetDone);
+                nextTask = { ...nextTask, completed: targetDone };
+              }
+            }
+            if (nextTask.subTasks && nextTask.subTasks.length > 0) {
+              let subChanged = false;
+              const nextSubs = nextTask.subTasks.map(sub => {
+                if (sub.strategyGoalId && toggledGoals.has(sub.strategyGoalId)) {
+                  const targetDone = toggledGoals.get(sub.strategyGoalId)!;
+                  if (sub.completed !== targetDone) {
+                    subChanged = true;
+                    wChanged = true;
+                    changedSubIds.set(sub.id, targetDone);
+                    return { ...sub, completed: targetDone };
+                  }
+                }
+                return sub;
+              });
+              if (subChanged) {
+                nextTask = {
+                  ...nextTask,
+                  subTasks: nextSubs,
+                  completed: nextSubs.every(s => s.completed)
+                };
+              }
+            }
+            return nextTask;
+          });
+
+          if (wChanged) {
+            anyWeekChanged = true;
+            const updatedWeek: WeeklyPlan = {
+              ...wp,
+              tasks: nextTasks,
+              achievedScore: computeWeeklyAchievedScore(nextTasks),
+              updatedAt: nowIso
+            };
+            nextWeeks[wKey] = updatedWeek;
+            changedWeekDaySyncs.push({ week: updatedWeek, changedTaskIds, changedSubIds });
+          }
+        });
+
+        if (anyWeekChanged) {
+          commitWeeklyPlans(nextWeeks);
+          changedWeekDaySyncs.forEach(({ week, changedTaskIds, changedSubIds }) => {
+            const weekRange = getCurrentWeekRange(week.startDate);
+            weekRange.days.forEach(dayStr => {
+              const entry = dailyEntriesRef.current[dayStr];
+              if (!entry) return;
+              const items = getPriorityItemsForEntry(entry);
+              let dayChanged = false;
+              const nextItems = items.map(item => {
+                if (item.subTaskId && changedSubIds.has(item.subTaskId)) {
+                  const targetDone = changedSubIds.get(item.subTaskId)!;
+                  if (item.completed !== targetDone) {
+                    dayChanged = true;
+                    return { ...item, completed: targetDone };
+                  }
+                } else if (item.weeklyTaskId && !item.subTaskId && changedTaskIds.has(item.weeklyTaskId)) {
+                  const targetDone = changedTaskIds.get(item.weeklyTaskId)!;
+                  if (item.completed !== targetDone) {
+                    dayChanged = true;
+                    return { ...item, completed: targetDone };
+                  }
+                }
+                return item;
+              });
+              if (dayChanged) {
+                applyDailyEntryUpdate(dayStr, { priorityItems: nextItems });
+              }
+            });
+          });
+        }
+      }
+    }
+
     markLocalMutation();
   };
 
@@ -4356,7 +4485,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (!match) return pt;
         const pSubs = pt.subTasks || [];
         const sSubs = match.subTasks || [];
-        const mergedSubs = [...pSubs];
+        const mergedSubs = pSubs.map(ps => {
+          const sMatch = sSubs.find(ss => ss.id === ps.id);
+          if (!sMatch) return ps;
+          return {
+            ...ps,
+            strategyPlanId: ps.strategyPlanId || sMatch.strategyPlanId,
+            strategyStageId: ps.strategyStageId || sMatch.strategyStageId,
+            strategyGoalId: ps.strategyGoalId || sMatch.strategyGoalId
+          };
+        });
         const pSubIds = new Set(pSubs.map(s => s.id));
         sSubs.forEach(ss => {
           const delMs = Date.parse(mergedDeletedIds[ss.id] || '') || 0;

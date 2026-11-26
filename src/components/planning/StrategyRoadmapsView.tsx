@@ -15,9 +15,13 @@ import { getQuarterKeyForDate } from '../../lib/macroAnalytics';
 import {
   STRATEGY_PRIORITIES,
   STRATEGY_PRIORITY_META,
+  getActiveStageForPlan,
   getRoadmapStageBindings,
+  getWeeklyGoalsAssignedToRoadmap,
   isActiveStrategyPlan,
   isPossibleStrategyPlan,
+  isRoadmapItemInWeeklyPlan,
+  pullRoadmapItemIntoWeeklyPlan,
   sortStrategyPlansByPriority
 } from '../../lib/planHierarchy';
 import { PARK_REASON_META } from '../../lib/energyAnalytics';
@@ -164,6 +168,7 @@ export const StrategyRoadmapsView: React.FC = () => {
   const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({});
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [pullTargetWeekId, setPullTargetWeekId] = useState<string>('');
+  const [pullTargetGoalByWeekPlan, setPullTargetGoalByWeekPlan] = useState<Record<string, string>>({});
   const [pullNotice, setPullNotice] = useState<string | null>(null);
   const [showPivotDrawer, setShowPivotDrawer] = useState(false);
   const [pivotTag, setPivotTag] = useState<ParkReasonTag>('reality_shift');
@@ -441,12 +446,7 @@ export const StrategyRoadmapsView: React.FC = () => {
       .filter(line => line.length >= 2);
 
   const isGoalInActiveWeek = (text: string, strategyGoalId?: string): boolean => {
-    if (!activeWeeklyPlan) return false;
-    if (strategyGoalId && activeWeeklyPlan.tasks.some(t => t.strategyGoalId === strategyGoalId)) {
-      return true;
-    }
-    const norm = text.trim().toLowerCase();
-    return !!norm && activeWeeklyPlan.tasks.some(t => t.text.trim().toLowerCase() === norm);
+    return isRoadmapItemInWeeklyPlan(activeWeeklyPlan, text, strategyGoalId);
   };
 
   const isGoalInActiveMonth = (text: string, strategyGoalId?: string): boolean => {
@@ -535,6 +535,16 @@ export const StrategyRoadmapsView: React.FC = () => {
     setTimeout(() => setPullNotice(null), 2400);
   };
 
+  const resolveTargetWeeklyGoalId = (planId?: string, stageId?: string): string | '__new__' | undefined => {
+    if (!activeWeeklyPlan || !planId) return undefined;
+    const key = `${activeWeeklyPlan.id}:${planId}`;
+    const explicit = pullTargetGoalByWeekPlan[key];
+    if (explicit === '__new__') return '__new__';
+    if (explicit && activeWeeklyPlan.tasks.some(t => t.id === explicit)) return explicit;
+    const assigned = getWeeklyGoalsAssignedToRoadmap(activeWeeklyPlan, planId, stageId);
+    return assigned[0]?.id;
+  };
+
   const handlePullGoalToWeek = (
     text: string,
     links?: {
@@ -553,26 +563,30 @@ export const StrategyRoadmapsView: React.FC = () => {
       setPlanningSubTab('weekly');
       return;
     }
-    const nextTasks: TaskItem[] = [
-      ...activeWeeklyPlan.tasks,
-      {
-        id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        text: trimmed,
-        score: 2,
-        completed: Boolean(links?.completed),
-        ...(links?.sourceLabel ? { sourceLabel: links.sourceLabel } : {}),
-        ...(links?.strategyPlanId ? { strategyPlanId: links.strategyPlanId } : {}),
-        ...(links?.strategyStageId ? { strategyStageId: links.strategyStageId } : {}),
-        ...(links?.strategyGoalId ? { strategyGoalId: links.strategyGoalId } : {})
-      }
-    ];
+    const targetWeeklyTaskId = resolveTargetWeeklyGoalId(
+      links?.strategyPlanId,
+      links?.strategyStageId
+    );
+    const { nextTasks, landedInsideTask } = pullRoadmapItemIntoWeeklyPlan(activeWeeklyPlan, {
+      text: trimmed,
+      completed: links?.completed,
+      sourceLabel: links?.sourceLabel,
+      strategyPlanId: links?.strategyPlanId,
+      strategyStageId: links?.strategyStageId,
+      strategyGoalId: links?.strategyGoalId,
+      targetWeeklyTaskId
+    });
     saveWeeklyPlan({
       ...activeWeeklyPlan,
       tasks: nextTasks,
       achievedScore: computeWeeklyAchievedScore(nextTasks)
     });
-    setPullNotice(`Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to Week ${activeWeeklyPlan.weekNumber}`);
-    setTimeout(() => setPullNotice(null), 2400);
+    setPullNotice(
+      landedInsideTask
+        ? `Added "${trimmed.slice(0, 28)}${trimmed.length > 28 ? '…' : ''}" inside "${landedInsideTask.text.slice(0, 26)}${landedInsideTask.text.length > 26 ? '…' : ''}" (Week ${activeWeeklyPlan.weekNumber})`
+        : `Sent "${trimmed.slice(0, 32)}${trimmed.length > 32 ? '…' : ''}" to Week ${activeWeeklyPlan.weekNumber}`
+    );
+    setTimeout(() => setPullNotice(null), 2800);
   };
 
   const handleCopyMarkdown = () => {
@@ -1441,24 +1455,69 @@ export const StrategyRoadmapsView: React.FC = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {activeWeeklyPlan && sortedWeeklyPlans.length > 0 && (
-                      <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
-                        <ArrowDownToLine className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span className="text-[11px] text-slate-500 hidden sm:inline">Pull to:</span>
-                        <select
-                          value={activeWeeklyPlan.id}
-                          onChange={e => setPullTargetWeekId(e.target.value)}
-                          className="bg-transparent text-amber-300 font-bold text-xs focus:outline-none cursor-pointer"
-                          title="Choose which Weekly Plan receives pulled items"
-                        >
-                          {sortedWeeklyPlans.map(wp => (
-                            <option key={wp.id} value={wp.id} className="bg-slate-950 text-slate-200">
-                              Week {wp.weekNumber} ({wp.startDate.slice(5)})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
+                    {activeWeeklyPlan && sortedWeeklyPlans.length > 0 && (() => {
+                      const activeStageInfo = getActiveStageForPlan(activePlan);
+                      const assignedWeeklyGoals = getWeeklyGoalsAssignedToRoadmap(
+                        activeWeeklyPlan,
+                        activePlan.id,
+                        activeStageInfo?.stage.id
+                      );
+                      const targetKey = `${activeWeeklyPlan.id}:${activePlan.id}`;
+                      const selectedGoalVal =
+                        pullTargetGoalByWeekPlan[targetKey] &&
+                        (pullTargetGoalByWeekPlan[targetKey] === '__new__' ||
+                          assignedWeeklyGoals.some(wg => wg.id === pullTargetGoalByWeekPlan[targetKey]))
+                          ? pullTargetGoalByWeekPlan[targetKey]
+                          : assignedWeeklyGoals[0]?.id || '__new__';
+
+                      return (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                            <ArrowDownToLine className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            <span className="text-[11px] text-slate-500 hidden sm:inline">Pull to:</span>
+                            <select
+                              value={activeWeeklyPlan.id}
+                              onChange={e => setPullTargetWeekId(e.target.value)}
+                              className="bg-transparent text-amber-300 font-bold text-xs focus:outline-none cursor-pointer"
+                              title="Choose which Weekly Plan receives pulled items"
+                            >
+                              {sortedWeeklyPlans.map(wp => (
+                                <option key={wp.id} value={wp.id} className="bg-slate-950 text-slate-200">
+                                  Week {wp.weekNumber} ({wp.startDate.slice(5)})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {assignedWeeklyGoals.length > 0 && (
+                            <div
+                              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs"
+                              title="Pulled proximal goals automatically land inside this assigned Weekly Goal as sub-goals"
+                            >
+                              <span className="text-[11px] font-bold text-amber-400 shrink-0">↳ Goal:</span>
+                              <select
+                                value={selectedGoalVal}
+                                onChange={e =>
+                                  setPullTargetGoalByWeekPlan(prev => ({
+                                    ...prev,
+                                    [targetKey]: e.target.value
+                                  }))
+                                }
+                                className="bg-transparent text-amber-200 font-bold text-xs focus:outline-none cursor-pointer max-w-[190px]"
+                              >
+                                {assignedWeeklyGoals.map(wg => (
+                                  <option key={wg.id} value={wg.id} className="bg-slate-950 text-slate-200">
+                                    {wg.text || 'Untitled weekly goal'}
+                                  </option>
+                                ))}
+                                <option value="__new__" className="bg-slate-950 text-slate-400">
+                                  + New standalone goal
+                                </option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <button
                       type="button"
                       onClick={() => setEditLockedMode(prev => !prev)}
@@ -1619,7 +1678,7 @@ export const StrategyRoadmapsView: React.FC = () => {
                 {pullNotice && (
                   <div className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-xs font-bold text-emerald-300">
                     <span>✓ {pullNotice}</span>
-                    {activeWeeklyPlan && pullNotice.includes(`to Week ${activeWeeklyPlan.weekNumber}`) && (
+                    {activeWeeklyPlan && pullNotice.includes(`Week ${activeWeeklyPlan.weekNumber}`) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1979,6 +2038,22 @@ export const StrategyRoadmapsView: React.FC = () => {
                                     {completedGoals}/{stage.proximalGoals.length} done
                                   </span>
                                 </div>
+                                {activeWeeklyPlan && (() => {
+                                  const resolvedTargetId = resolveTargetWeeklyGoalId(activePlan.id, stage.id);
+                                  const targetGoal =
+                                    resolvedTargetId && resolvedTargetId !== '__new__'
+                                      ? activeWeeklyPlan.tasks.find(t => t.id === resolvedTargetId)
+                                      : undefined;
+                                  if (!targetGoal) return null;
+                                  return (
+                                    <div className="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2.5 py-1 flex items-center justify-between gap-2">
+                                      <span className="truncate">
+                                        ↳ <strong>+ W{activeWeeklyPlan.weekNumber}</strong> lands inside:{' '}
+                                        <span className="text-amber-200 font-semibold">{targetGoal.text}</span>
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
 
                                 {stage.proximalGoals.length === 0 ? (
                                   <p className="text-[11px] text-slate-500 italic py-1">

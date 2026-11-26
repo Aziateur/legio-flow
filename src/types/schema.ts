@@ -51,6 +51,9 @@ export interface SubTaskItem {
   id: string;
   text: string;
   completed: boolean;
+  strategyPlanId?: string;
+  strategyStageId?: string;
+  strategyGoalId?: string;
 }
 
 export type ParkReasonTag = 'reality_shift' | 'disproved' | 'deferred';

@@ -4,6 +4,7 @@ import {
   StrategyPlan,
   StrategyPlanPriority,
   StrategyStage,
+  SubTaskItem,
   TaskItem,
   WeeklyPlan
 } from '../types/schema';
@@ -211,11 +212,158 @@ export const getRoadmapStageBindings = (
     .sort((a, b) => a.weekNumber - b.weekNumber)
     .forEach(wp => {
       (wp.tasks || []).forEach(t => {
-        if (t.strategyPlanId === planId && t.strategyStageId === stageId) {
+        const linkedSubs = (t.subTasks || []).filter(
+          s => s.strategyPlanId === planId && s.strategyStageId === stageId
+        );
+        if (linkedSubs.length > 0) {
+          linkedSubs.forEach(s => {
+            weeklySteps.push({
+              periodKey: wp.id,
+              periodLabel: `W${wp.weekNumber}`,
+              task: {
+                id: s.id,
+                text: s.text,
+                completed: s.completed,
+                strategyPlanId: s.strategyPlanId,
+                strategyStageId: s.strategyStageId,
+                strategyGoalId: s.strategyGoalId
+              }
+            });
+          });
+        } else if (t.strategyPlanId === planId && t.strategyStageId === stageId) {
           weeklySteps.push({ periodKey: wp.id, periodLabel: `W${wp.weekNumber}`, task: t });
         }
       });
     });
 
   return { targetQuarters, quarterlySteps, monthlySteps, weeklySteps };
+};
+
+export const getActiveStageForPlan = (
+  plan: StrategyPlan
+): { stage: StrategyStage; stageIndex: number } | null => {
+  if (!plan.stages || plan.stages.length === 0) return null;
+  const idx = plan.stages.findIndex(s => !s.gatePassed);
+  const resolvedIdx = idx >= 0 ? idx : plan.stages.length - 1;
+  return { stage: plan.stages[resolvedIdx], stageIndex: resolvedIdx };
+};
+
+export const isRoadmapItemInWeeklyPlan = (
+  plan: WeeklyPlan | undefined,
+  text: string,
+  strategyGoalId?: string
+): boolean => {
+  if (!plan) return false;
+  if (strategyGoalId) {
+    const byId = plan.tasks.some(
+      t =>
+        t.strategyGoalId === strategyGoalId ||
+        (t.subTasks || []).some(s => s.strategyGoalId === strategyGoalId)
+    );
+    if (byId) return true;
+  }
+  const norm = text.trim().toLowerCase();
+  if (!norm) return false;
+  return plan.tasks.some(
+    t =>
+      t.text.trim().toLowerCase() === norm ||
+      (t.subTasks || []).some(s => s.text.trim().toLowerCase() === norm)
+  );
+};
+
+// Weekly goals explicitly assigned to a Roadmap (container goals without a single strategyGoalId)
+export const getWeeklyGoalsAssignedToRoadmap = (
+  plan: WeeklyPlan | undefined,
+  strategyPlanId: string,
+  strategyStageId?: string
+): TaskItem[] => {
+  if (!plan || !strategyPlanId) return [];
+  const indexed = plan.tasks
+    .map((task, idx) => ({ task, idx }))
+    .filter(({ task }) => task.strategyPlanId === strategyPlanId && !task.strategyGoalId);
+
+  indexed.sort((a, b) => {
+    const aStage = strategyStageId && a.task.strategyStageId === strategyStageId ? 0 : 1;
+    const bStage = strategyStageId && b.task.strategyStageId === strategyStageId ? 0 : 1;
+    if (aStage !== bStage) return aStage - bStage;
+    const aDone = a.task.completed ? 1 : 0;
+    const bDone = b.task.completed ? 1 : 0;
+    if (aDone !== bDone) return aDone - bDone;
+    return a.idx - b.idx;
+  });
+
+  return indexed.map(x => x.task);
+};
+
+export const pullRoadmapItemIntoWeeklyPlan = (
+  weeklyPlan: WeeklyPlan,
+  params: {
+    text: string;
+    completed?: boolean;
+    sourceLabel?: string;
+    strategyPlanId?: string;
+    strategyStageId?: string;
+    strategyGoalId?: string;
+    targetWeeklyTaskId?: string | '__new__';
+  }
+): {
+  nextTasks: TaskItem[];
+  landedInsideTask?: TaskItem;
+  alreadyExists: boolean;
+} => {
+  const trimmed = params.text.trim();
+  if (!trimmed) {
+    return { nextTasks: weeklyPlan.tasks, alreadyExists: false };
+  }
+  if (isRoadmapItemInWeeklyPlan(weeklyPlan, trimmed, params.strategyGoalId)) {
+    return { nextTasks: weeklyPlan.tasks, alreadyExists: true };
+  }
+
+  let targetParent: TaskItem | undefined;
+  if (params.targetWeeklyTaskId === '__new__') {
+    targetParent = undefined;
+  } else if (params.targetWeeklyTaskId) {
+    targetParent = weeklyPlan.tasks.find(t => t.id === params.targetWeeklyTaskId);
+  } else if (params.strategyPlanId) {
+    targetParent = getWeeklyGoalsAssignedToRoadmap(
+      weeklyPlan,
+      params.strategyPlanId,
+      params.strategyStageId
+    )[0];
+  }
+
+  if (targetParent) {
+    const newSub: SubTaskItem = {
+      id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      text: trimmed,
+      completed: Boolean(params.completed),
+      ...(params.strategyPlanId ? { strategyPlanId: params.strategyPlanId } : {}),
+      ...(params.strategyStageId ? { strategyStageId: params.strategyStageId } : {}),
+      ...(params.strategyGoalId ? { strategyGoalId: params.strategyGoalId } : {})
+    };
+    let updatedParent: TaskItem | undefined;
+    const nextTasks = weeklyPlan.tasks.map(t => {
+      if (t.id !== targetParent!.id) return t;
+      const updatedSubs = [...(t.subTasks || []), newSub];
+      updatedParent = {
+        ...t,
+        subTasks: updatedSubs,
+        completed: updatedSubs.every(s => s.completed)
+      };
+      return updatedParent;
+    });
+    return { nextTasks, landedInsideTask: updatedParent, alreadyExists: false };
+  }
+
+  const newTask: TaskItem = {
+    id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    text: trimmed,
+    score: 2,
+    completed: Boolean(params.completed),
+    ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
+    ...(params.strategyPlanId ? { strategyPlanId: params.strategyPlanId } : {}),
+    ...(params.strategyStageId ? { strategyStageId: params.strategyStageId } : {}),
+    ...(params.strategyGoalId ? { strategyGoalId: params.strategyGoalId } : {})
+  };
+  return { nextTasks: [...weeklyPlan.tasks, newTask], alreadyExists: false };
 };
