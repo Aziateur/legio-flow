@@ -36,6 +36,7 @@ import {
   Map as MapIcon,
   MessageSquarePlus,
   RotateCcw,
+  Trash2,
   Wrench
 } from 'lucide-react';
 
@@ -85,6 +86,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
   const [notePromptOpen, setNotePromptOpen] = useState(false);
   const [hitNoteDraft, setHitNoteDraft] = useState('');
   const [justLogged, setJustLogged] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const isClassified = isProblemClassified(problems, problem);
@@ -471,6 +473,33 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   >
                     Open
                   </button>
+                  {confirmDelete ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => deleteProblem(problem.id)}
+                        className="px-2 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-[11px] font-extrabold"
+                      >
+                        Delete?
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-[11px] font-bold"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(true)}
+                      title="Delete problem"
+                      className="p-1.5 rounded-xl bg-slate-900 hover:bg-rose-500/15 text-slate-500 hover:text-rose-400 border border-slate-800 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -525,6 +554,33 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                   >
                     Open
                   </button>
+                  {confirmDelete ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => deleteProblem(problem.id)}
+                        className="px-2 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-[11px] font-extrabold"
+                      >
+                        Delete?
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-[11px] font-bold"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(true)}
+                      title="Delete problem"
+                      className="p-1.5 rounded-xl bg-slate-900 hover:bg-rose-500/15 text-slate-500 hover:text-rose-400 border border-slate-800 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </>
               )}
             </div>

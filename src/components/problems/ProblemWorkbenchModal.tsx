@@ -125,6 +125,9 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     reviseProblemSolution,
     clusterIntoNewParent,
     deleteProblem,
+    deleteProblemOccurrence,
+    deleteProblemCheckIn,
+    deleteProblemFixAttempt,
     dispatchProblemFix
   } = useStorage();
 
@@ -226,17 +229,35 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
     selectedWeekId
   );
 
-  // Merge dated clues + checkIns into a single chronological log
+  // Merge dated clues + checkIns (plus legacy heldDates) into a single chronological log
+  const checkInDateSet = new Set((problem.checkIns || []).map(c => c.date));
+  const legacyHeldCheckIns = (problem.heldDates || [])
+    .filter(d => !checkInDateSet.has(d))
+    .map((d, idx) => ({
+      kind: 'effective' as const,
+      key: `held_${d}_${idx}`,
+      date: d,
+      sourceLabel: 'Check-In',
+      note: undefined as string | undefined,
+      tweakNote: undefined as string | undefined,
+      tweakApplied: false,
+      fromSlipTitle: undefined as string | undefined,
+      problemId: problem.id,
+      occurrenceIndex: -1
+    }));
+
   const combinedTimeline = [
     ...timeline.map((item, idx) => ({
       kind: 'hit' as const,
-      key: `hit_${item.date}_${idx}`,
+      key: `hit_${item.problemId}_${item.occurrenceIndex}_${item.date}_${idx}`,
       date: item.date,
       sourceLabel: SOURCE_LABELS[item.sourceType] || item.sourceType,
       note: item.note,
       tweakNote: undefined as string | undefined,
       tweakApplied: false,
-      fromSlipTitle: item.fromSlipTitle
+      fromSlipTitle: item.fromSlipTitle,
+      problemId: item.problemId,
+      occurrenceIndex: item.occurrenceIndex
     })),
     ...(problem.checkIns || [])
       .filter(c => c.outcome !== 'failed')
@@ -248,8 +269,11 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
         note: c.note,
         tweakNote: c.tweakNote,
         tweakApplied: Boolean(c.tweakApplied),
-        fromSlipTitle: undefined
-      }))
+        fromSlipTitle: undefined as string | undefined,
+        problemId: problem.id,
+        occurrenceIndex: -1
+      })),
+    ...legacyHeldCheckIns
   ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   const showToast = (msg: string) => {
@@ -1431,6 +1455,22 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                           </p>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (entry.kind === 'hit') {
+                            deleteProblemOccurrence(entry.problemId, entry.occurrenceIndex);
+                            showToast('Entry deleted');
+                          } else {
+                            deleteProblemCheckIn(problem.id, entry.date);
+                            showToast('Check-in deleted');
+                          }
+                        }}
+                        title="Delete entry"
+                        className="p-1 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1470,9 +1510,22 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                               </span>
                               <span className="text-slate-200">&ldquo;{att.fixText}&rdquo;</span>
                             </div>
-                            <span className="font-mono text-[10px] text-slate-500 shrink-0">
-                              held {att.daysHeld}d · {att.endedAt}
-                            </span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="font-mono text-[10px] text-slate-500">
+                                held {att.daysHeld}d · {att.endedAt}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  deleteProblemFixAttempt(problem.id, att.id);
+                                  showToast('Attempt deleted');
+                                }}
+                                title="Delete attempt"
+                                className="p-1 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>

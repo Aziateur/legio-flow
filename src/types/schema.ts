@@ -549,6 +549,7 @@ export interface ProblemEntry {
   dispatchedTo?: ProblemDispatchTarget[];
   createdAt: string;
   updatedAt: string;
+  prunedAt?: string;
   solvedAt?: string;
 }
 

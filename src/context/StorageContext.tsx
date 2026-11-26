@@ -720,6 +720,9 @@ interface StorageContextType {
     parentScale: 'bottleneck' | 'blocker'
   ) => ProblemEntry | null;
   deleteProblem: (id: string) => void;
+  deleteProblemOccurrence: (problemId: string, occurrenceIndex: number) => void;
+  deleteProblemCheckIn: (problemId: string, date: string) => void;
+  deleteProblemFixAttempt: (problemId: string, attemptId: string) => void;
   dispatchProblemFix: (
     problemId: string,
     destination: ProblemDispatchTarget,
@@ -3843,6 +3846,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           checkIns: nextCheckIns,
           heldDates: sortedHeld,
           ...(latestHeld ? { lastHeldDate: latestHeld } : {}),
+          ...(outcome === null ? { prunedAt: nowIso } : {}),
           updatedAt: nowIso
         };
         if (!latestHeld) {
@@ -3851,6 +3855,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
         // Undo same-day failure transition if switching away from or clearing a same-day 'failed' verdict
         if (existingOnDate?.outcome === 'failed' && outcome !== 'failed') {
+          updated.prunedAt = nowIso;
           const occs = [...(updated.occurrences || [])];
           for (let i = occs.length - 1; i >= 0; i--) {
             if (occs[i].date === checkDate && occs[i].sourceType === sourceType) {
@@ -4192,6 +4197,95 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
         return p;
       });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  const deleteProblemOccurrence: StorageContextType['deleteProblemOccurrence'] = (
+    problemId,
+    occurrenceIndex
+  ) => {
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== problemId) return p;
+      const occs = [...(p.occurrences || [])];
+      if (occurrenceIndex < 0 || occurrenceIndex >= occs.length) return p;
+      const [removed] = occs.splice(occurrenceIndex, 1);
+      const removedDate = removed?.date;
+      const hasSameDayOccLeft = Boolean(removedDate && occs.some(o => o.date === removedDate));
+
+      let nextCheckIns = p.checkIns;
+      let nextLastFailed = p.lastFixFailedAt;
+      if (removedDate && !hasSameDayOccLeft) {
+        if (nextCheckIns?.some(c => c.date === removedDate && c.outcome === 'failed')) {
+          nextCheckIns = nextCheckIns.filter(c => !(c.date === removedDate && c.outcome === 'failed'));
+        }
+        if (nextLastFailed === removedDate) {
+          nextLastFailed = undefined;
+        }
+      }
+
+      const updated: ProblemEntry = {
+        ...p,
+        occurrences: occs,
+        ...(nextCheckIns ? { checkIns: nextCheckIns } : {}),
+        updatedAt: nowIso,
+        prunedAt: nowIso
+      };
+      if (nextLastFailed) updated.lastFixFailedAt = nextLastFailed;
+      else delete updated.lastFixFailedAt;
+      return updated;
+    });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  const deleteProblemCheckIn: StorageContextType['deleteProblemCheckIn'] = (problemId, date) => {
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== problemId) return p;
+      const nextCheckIns = (p.checkIns || []).filter(c => c.date !== date);
+      const nextHeldDates = (p.heldDates || []).filter(d => d !== date).sort();
+      const latestHeld = nextHeldDates[nextHeldDates.length - 1];
+      const updated: ProblemEntry = {
+        ...p,
+        checkIns: nextCheckIns,
+        heldDates: nextHeldDates,
+        updatedAt: nowIso,
+        prunedAt: nowIso
+      };
+      if (latestHeld) updated.lastHeldDate = latestHeld;
+      else delete updated.lastHeldDate;
+      if (updated.lastFixFailedAt === date) {
+        delete updated.lastFixFailedAt;
+      }
+      return updated;
+    });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  const deleteProblemFixAttempt: StorageContextType['deleteProblemFixAttempt'] = (
+    problemId,
+    attemptId
+  ) => {
+    const nowIso = new Date().toISOString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== problemId) return p;
+      const attempts = p.fixAttempts || [];
+      const removed = attempts.find(a => a.id === attemptId);
+      const nextAttempts = attempts.filter(a => a.id !== attemptId);
+      const updated: ProblemEntry = {
+        ...p,
+        fixAttempts: nextAttempts,
+        updatedAt: nowIso,
+        prunedAt: nowIso
+      };
+      if (removed?.outcome === 'failed' && updated.lastFixFailedAt === removed.endedAt) {
+        delete updated.lastFixFailedAt;
+      }
+      return updated;
+    });
     commitProblems(next);
     markLocalMutation();
   };
@@ -5822,56 +5916,88 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const cT = Date.parse(c.updatedAt || c.createdAt || '') || 0;
         const primary = lT >= cT ? l : c;
         const secondary = lT >= cT ? c : l;
-        // Union occurrences (deduped by date|sourceType|sourceRef), tags, and dispatchedTo
-        const occSeen = new Set<string>();
-        const mergedOccurrences: ProblemOccurrence[] = [];
-        [...(c.occurrences || []), ...(l.occurrences || [])].forEach(occ => {
-          const sig = `${occ.date}|${occ.sourceType}|${occ.sourceRef || ''}|${occ.note || ''}`;
-          if (!occSeen.has(sig)) {
-            occSeen.add(sig);
-            mergedOccurrences.push(occ);
-          }
-        });
+        const lPruned = Date.parse(l.prunedAt || '') || 0;
+        const cPruned = Date.parse(c.prunedAt || '') || 0;
+        const mergedPrunedAt = lPruned >= cPruned ? l.prunedAt : c.prunedAt;
+        const primaryPrunedAt = Date.parse(primary.prunedAt || '') || 0;
+        const secondaryUpdatedAt = Date.parse(secondary.updatedAt || secondary.createdAt || '') || 0;
+        const trustPrimaryLists = primaryPrunedAt > secondaryUpdatedAt;
+
+        // Union occurrences (deduped by date|sourceType|sourceRef), unless primary explicitly pruned sub-entries more recently
+        let mergedOccurrences: ProblemOccurrence[];
+        if (trustPrimaryLists) {
+          mergedOccurrences = [...(primary.occurrences || [])];
+        } else {
+          const occSeen = new Set<string>();
+          mergedOccurrences = [];
+          [...(c.occurrences || []), ...(l.occurrences || [])].forEach(occ => {
+            const sig = `${occ.date}|${occ.sourceType}|${occ.sourceRef || ''}|${occ.note || ''}`;
+            if (!occSeen.has(sig)) {
+              occSeen.add(sig);
+              mergedOccurrences.push(occ);
+            }
+          });
+        }
+
         const mergedTags = Array.from(new Set([...(primary.tags || []), ...(secondary.tags || [])]));
         const mergedDispatched = Array.from(
           new Set([...(primary.dispatchedTo || []), ...(secondary.dispatchedTo || [])])
         );
-        // Union fixAttempts by id so experiment history from multiple devices is never lost
-        const attSeen = new Set<string>();
-        const mergedAttempts: ProblemFixAttempt[] = [];
-        [...(secondary.fixAttempts || []), ...(primary.fixAttempts || [])].forEach(att => {
-          if (!att?.id || attSeen.has(att.id)) return;
-          attSeen.add(att.id);
-          mergedAttempts.push(att);
-        });
+
+        let mergedAttempts: ProblemFixAttempt[];
+        if (trustPrimaryLists) {
+          mergedAttempts = [...(primary.fixAttempts || [])];
+        } else {
+          const attSeen = new Set<string>();
+          mergedAttempts = [];
+          [...(secondary.fixAttempts || []), ...(primary.fixAttempts || [])].forEach(att => {
+            if (!att?.id || attSeen.has(att.id)) return;
+            attSeen.add(att.id);
+            mergedAttempts.push(att);
+          });
+        }
         mergedAttempts.sort((a, b) => (a.endedAt || a.startedAt).localeCompare(b.endedAt || b.startedAt));
-        const mergedHeldDates = Array.from(
-          new Set([...(secondary.heldDates || []), ...(primary.heldDates || [])])
-        ).sort();
-        const latestHeld = mergedHeldDates[mergedHeldDates.length - 1] || primary.lastHeldDate || secondary.lastHeldDate;
-        const checkInByDate = new Map<string, ProblemCheckIn>();
-        const mergeCheckIn = (incoming: ProblemCheckIn) => {
-          if (!incoming?.date) return;
-          const prevC = checkInByDate.get(incoming.date);
-          if (!prevC) {
-            checkInByDate.set(incoming.date, incoming);
-          } else {
-            const mergedTweakNote = incoming.tweakNote?.trim() || prevC.tweakNote?.trim();
-            const mergedTweakApplied = Boolean(incoming.tweakApplied || prevC.tweakApplied);
-            checkInByDate.set(incoming.date, {
-              ...prevC,
-              ...incoming,
-              ...(mergedTweakNote ? { tweakNote: mergedTweakNote } : {}),
-              ...(mergedTweakApplied ? { tweakApplied: true } : {})
-            });
-          }
-        };
-        (secondary.checkIns || []).forEach(mergeCheckIn);
-        (primary.checkIns || []).forEach(mergeCheckIn);
-        const mergedCheckIns = Array.from(checkInByDate.values()).sort((a, b) =>
-          a.date.localeCompare(b.date)
-        );
-        return {
+
+        const mergedHeldDates = trustPrimaryLists
+          ? [...(primary.heldDates || [])].sort()
+          : Array.from(new Set([...(secondary.heldDates || []), ...(primary.heldDates || [])])).sort();
+        const latestHeld =
+          mergedHeldDates[mergedHeldDates.length - 1] ||
+          (trustPrimaryLists ? primary.lastHeldDate : primary.lastHeldDate || secondary.lastHeldDate);
+
+        let mergedCheckIns: ProblemCheckIn[];
+        if (trustPrimaryLists) {
+          mergedCheckIns = [...(primary.checkIns || [])].sort((a, b) => a.date.localeCompare(b.date));
+        } else {
+          const checkInByDate = new Map<string, ProblemCheckIn>();
+          const mergeCheckIn = (incoming: ProblemCheckIn) => {
+            if (!incoming?.date) return;
+            const prevC = checkInByDate.get(incoming.date);
+            if (!prevC) {
+              checkInByDate.set(incoming.date, incoming);
+            } else {
+              const mergedTweakNote = incoming.tweakNote?.trim() || prevC.tweakNote?.trim();
+              const mergedTweakApplied = Boolean(incoming.tweakApplied || prevC.tweakApplied);
+              checkInByDate.set(incoming.date, {
+                ...prevC,
+                ...incoming,
+                ...(mergedTweakNote ? { tweakNote: mergedTweakNote } : {}),
+                ...(mergedTweakApplied ? { tweakApplied: true } : {})
+              });
+            }
+          };
+          (secondary.checkIns || []).forEach(mergeCheckIn);
+          (primary.checkIns || []).forEach(mergeCheckIn);
+          mergedCheckIns = Array.from(checkInByDate.values()).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          );
+        }
+
+        const resolvedLastFailed = trustPrimaryLists
+          ? primary.lastFixFailedAt
+          : primary.lastFixFailedAt || secondary.lastFixFailedAt;
+
+        const merged: ProblemEntry = {
           ...primary,
           ...(primary.classified !== undefined || secondary.classified !== undefined
             ? { classified: primary.classified ?? secondary.classified }
@@ -5899,15 +6025,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           fixTaskCompletedAt: primary.fixTaskCompletedAt || secondary.fixTaskCompletedAt,
           verifyDays: primary.verifyDays ?? secondary.verifyDays,
           verifyTarget: primary.verifyTarget ?? secondary.verifyTarget,
-          lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
-          ...(mergedCheckIns.length > 0 ? { checkIns: mergedCheckIns } : {}),
-          ...(mergedHeldDates.length > 0 ? { heldDates: mergedHeldDates } : {}),
-          ...(latestHeld ? { lastHeldDate: latestHeld } : {}),
           occurrences: mergedOccurrences,
           tags: mergedTags,
-          ...(mergedAttempts.length > 0 ? { fixAttempts: mergedAttempts } : {}),
-          ...(mergedDispatched.length > 0 ? { dispatchedTo: mergedDispatched } : {})
+          ...(mergedPrunedAt ? { prunedAt: mergedPrunedAt } : {})
         };
+
+        if (resolvedLastFailed) merged.lastFixFailedAt = resolvedLastFailed;
+        else delete merged.lastFixFailedAt;
+
+        if (mergedCheckIns.length > 0) merged.checkIns = mergedCheckIns;
+        else delete merged.checkIns;
+
+        if (mergedHeldDates.length > 0) merged.heldDates = mergedHeldDates;
+        else delete merged.heldDates;
+
+        if (latestHeld) merged.lastHeldDate = latestHeld;
+        else delete merged.lastHeldDate;
+
+        if (mergedAttempts.length > 0) merged.fixAttempts = mergedAttempts;
+        else delete merged.fixAttempts;
+
+        if (mergedDispatched.length > 0) merged.dispatchedTo = mergedDispatched;
+        else delete merged.dispatchedTo;
+
+        return merged;
       }
     );
 
@@ -6779,6 +6920,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       reviseProblemSolution,
       clusterIntoNewParent,
       deleteProblem,
+      deleteProblemOccurrence,
+      deleteProblemCheckIn,
+      deleteProblemFixAttempt,
       dispatchProblemFix,
       saveTemplate,
       deleteTemplate,

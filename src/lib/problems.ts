@@ -1339,6 +1339,8 @@ export const SEVERITY_VISUAL: Record<
 };
 
 export interface ClusterTimelineItem {
+  problemId: string;
+  occurrenceIndex: number;
   date: string;
   sourceType: ProblemSourceType;
   sourceRef?: string;
@@ -1350,7 +1352,9 @@ export const getClusterOccurrenceTimeline = (
   allProblems: ProblemEntry[],
   problem: ProblemEntry
 ): ClusterTimelineItem[] => {
-  const items: ClusterTimelineItem[] = (problem.occurrences || []).map(o => ({
+  const items: ClusterTimelineItem[] = (problem.occurrences || []).map((o, idx) => ({
+    problemId: problem.id,
+    occurrenceIndex: idx,
     date: o.date,
     sourceType: o.sourceType,
     sourceRef: o.sourceRef,
@@ -1358,8 +1362,10 @@ export const getClusterOccurrenceTimeline = (
   }));
   const descendants = getDescendantProblems(allProblems, problem.id);
   descendants.forEach(d => {
-    (d.occurrences || []).forEach(o => {
+    (d.occurrences || []).forEach((o, idx) => {
       items.push({
+        problemId: d.id,
+        occurrenceIndex: idx,
         date: o.date,
         sourceType: o.sourceType,
         sourceRef: o.sourceRef,
