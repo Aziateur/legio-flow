@@ -438,6 +438,7 @@ export const DEFAULT_PROBLEM_SETTINGS: ProblemSettings = {
   showBreakdownBar: true,
   showPreFlightInDaily: true,
   showPreFlightInGws: true,
+  showPreFlightInWeekly: true,
   separateInboxTab: true
 };
 

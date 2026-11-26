@@ -733,20 +733,156 @@ export const getProblemSeverity = (problem: ProblemEntry): ProblemSeverity => {
 };
 
 export const isProblemGuardrail = (problem: ProblemEntry): boolean =>
-  Boolean(problem.isGuardrail || problem.fixType === 'rule_guardrail');
+  Boolean(problem.isGuardrail || problem.fixType === 'rule_guardrail' || problem.reminderText?.trim());
 
-// A Root Problem (Constraint) vs an unprocessed Slip sitting in Inbox
-export const isRootProblem = (allProblems: ProblemEntry[], problem: ProblemEntry): boolean => {
-  if (hasExistingParent(allProblems, problem)) return false;
+// Dedicated Reminder / Mental Shift text (supports coexisting with a concrete action fixNote!)
+export const getProblemReminderText = (problem: ProblemEntry): string => {
+  if (problem.reminderText?.trim()) return problem.reminderText.trim();
+  if (problem.isGuardrail || problem.fixType === 'rule_guardrail') {
+    return problem.fixNote?.trim() || '';
+  }
+  return '';
+};
+
+export const hasActiveReminder = (problem: ProblemEntry): boolean =>
+  Boolean(problem.reminderText?.trim() || problem.isGuardrail || problem.fixType === 'rule_guardrail');
+
+// Concrete action / task / routine fix (distinct from a legacy reminder-only guardrail)
+export const getProblemActionText = (problem: ProblemEntry): string => {
+  const fix = problem.fixNote?.trim() || '';
+  if (!fix) return '';
+  if (!problem.reminderText?.trim() && (problem.isGuardrail || problem.fixType === 'rule_guardrail') && !(problem.dispatchedTo && problem.dispatchedTo.length > 0)) {
+    return '';
+  }
+  return fix;
+};
+
+export const hasActiveAction = (problem: ProblemEntry): boolean =>
+  Boolean((problem.dispatchedTo && problem.dispatchedTo.length > 0) || getProblemActionText(problem));
+
+// Per-problem toggle: ask for a 1-line context sentence when logging a hit
+// Defaults ON for Top 3 Focus constraints, OFF for everything else, always overridable per problem!
+export const shouldPromptNoteOnHit = (problem: ProblemEntry): boolean => {
+  if (typeof problem.promptNoteOnHit === 'boolean') return problem.promptNoteOnHit;
+  return Boolean(problem.isTopConstraint);
+};
+
+// Explicit 4-stage classification helper (backward-compatible with legacy records)
+export const isProblemClassified = (allProblems: ProblemEntry[], problem: ProblemEntry): boolean => {
+  if (hasExistingParent(allProblems, problem)) return true;
+  if (problem.status === 'solved' || problem.status === 'testing') return true;
   if (problem.isTopConstraint) return true;
+  if (getDirectChildren(allProblems, problem.id).length > 0) return true;
+  if (hasActiveReminder(problem) || hasActiveAction(problem)) return true;
+  if (problem.rootCause?.trim() || problem.trigger?.trim()) return true;
+  if (typeof problem.classified === 'boolean') return problem.classified;
+  // Legacy items without explicit `classified` flag fall back to root-problem rules
   if (getProblemScale(problem) !== 'friction') return true;
   if (problem.severity !== undefined && problem.severity >= 4) return true;
-  if (problem.status === 'testing' || problem.status === 'solved') return true;
-  if (problem.fixNote?.trim() || problem.rootCause?.trim() || problem.trigger?.trim()) return true;
-  if (isProblemGuardrail(problem)) return true;
-  if (getDirectChildren(allProblems, problem.id).length > 0) return true;
   return false;
 };
+
+export type ProblemStage = 'unclassified' | 'observing' | 'active' | 'resolved';
+
+export const getProblemStage = (allProblems: ProblemEntry[], problem: ProblemEntry): ProblemStage => {
+  if (problem.status === 'solved') return 'resolved';
+  if (!isProblemClassified(allProblems, problem)) return 'unclassified';
+  if (hasActiveReminder(problem) || hasActiveAction(problem) || problem.status === 'testing') {
+    return 'active';
+  }
+  return 'observing';
+};
+
+// Visual severity presentation so you immediately FEEL how serious a problem is at a glance
+export const SEVERITY_VISUAL: Record<
+  ProblemSeverity,
+  {
+    leftBarClass: string;
+    cardTintClass: string;
+    pillClass: string;
+    word: string;
+    tier: 'urgent' | 'moderate' | 'minor';
+  }
+> = {
+  5: {
+    leftBarClass: 'border-l-4 border-l-rose-500',
+    cardTintClass: 'bg-rose-950/15 border-rose-500/35',
+    pillClass: 'bg-rose-500/20 text-rose-200 border-rose-500/45',
+    word: 'Critical',
+    tier: 'urgent'
+  },
+  4: {
+    leftBarClass: 'border-l-4 border-l-orange-500',
+    cardTintClass: 'bg-orange-950/10 border-orange-500/30',
+    pillClass: 'bg-orange-500/20 text-orange-200 border-orange-500/40',
+    word: 'Severe',
+    tier: 'urgent'
+  },
+  3: {
+    leftBarClass: 'border-l-4 border-l-amber-400',
+    cardTintClass: 'bg-slate-950/90 border-slate-800',
+    pillClass: 'bg-amber-500/15 text-amber-200 border-amber-500/35',
+    word: 'Moderate',
+    tier: 'moderate'
+  },
+  2: {
+    leftBarClass: 'border-l-4 border-l-sky-400/70',
+    cardTintClass: 'bg-slate-950/80 border-slate-800/90',
+    pillClass: 'bg-sky-500/15 text-sky-200 border-sky-500/30',
+    word: 'Low',
+    tier: 'minor'
+  },
+  1: {
+    leftBarClass: 'border-l-4 border-l-slate-600',
+    cardTintClass: 'bg-slate-950/70 border-slate-800/80',
+    pillClass: 'bg-slate-800 text-slate-300 border-slate-700',
+    word: 'Minor',
+    tier: 'minor'
+  }
+};
+
+export interface ClusterTimelineItem {
+  date: string;
+  sourceType: ProblemSourceType;
+  sourceRef?: string;
+  note?: string;
+  fromSlipTitle?: string;
+}
+
+export const getClusterOccurrenceTimeline = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry
+): ClusterTimelineItem[] => {
+  const items: ClusterTimelineItem[] = (problem.occurrences || []).map(o => ({
+    date: o.date,
+    sourceType: o.sourceType,
+    sourceRef: o.sourceRef,
+    note: o.note
+  }));
+  const descendants = getDescendantProblems(allProblems, problem.id);
+  descendants.forEach(d => {
+    (d.occurrences || []).forEach(o => {
+      items.push({
+        date: o.date,
+        sourceType: o.sourceType,
+        sourceRef: o.sourceRef,
+        note: o.note,
+        fromSlipTitle: d.title
+      });
+    });
+  });
+  return items.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+};
+
+export const countClusterNotes = (
+  allProblems: ProblemEntry[],
+  problem: ProblemEntry
+): number =>
+  getClusterOccurrenceTimeline(allProblems, problem).filter(i => Boolean(i.note?.trim())).length;
+
+// A Root Problem (Constraint) vs an unprocessed Slip sitting in Inbox
+export const isRootProblem = (allProblems: ProblemEntry[], problem: ProblemEntry): boolean =>
+  isProblemClassified(allProblems, problem) && !hasExistingParent(allProblems, problem);
 
 export const getEligibleRootTargets = (
   allProblems: ProblemEntry[],

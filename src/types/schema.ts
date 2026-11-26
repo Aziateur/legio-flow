@@ -498,6 +498,7 @@ export interface ProblemSettings {
   showBreakdownBar?: boolean;      // Default true
   showPreFlightInDaily?: boolean;  // Default true
   showPreFlightInGws?: boolean;    // Default true
+  showPreFlightInWeekly?: boolean; // Default true
   separateInboxTab?: boolean;      // Default true
 }
 
@@ -505,18 +506,23 @@ export interface ProblemEntry {
   id: string;
   title: string;
   category: ProblemCategory;
+  classified?: boolean; // false = raw capture waiting for classification; true = classified
   scale?: ProblemScale; // 'friction' (Slip) | 'bottleneck' (Root Problem) | 'blocker' (Macro / Roadmap Blocker)
   impact?: ProblemImpact; // 'low' | 'high' | 'critical'
   severity?: ProblemSeverity; // Graded 1-5 severity (1 Minor, 2 Low, 3 Moderate, 4 Severe, 5 Critical)
   isTopConstraint?: boolean; // Pinned in the Top 3 Constraints focus spotlight
+  promptNoteOnHit?: boolean; // When true, logging a hit asks for a 1-line context sentence (defaults true for Top 3, false otherwise)
   trigger?: string; // When / in what context does this fire?
   rootCause?: string; // Why is this actually happening below the surface symptom?
-  isGuardrail?: boolean; // Pinned as an active If-Then guardrail surfaced pre-flight
+  isGuardrail?: boolean; // Pinned as an active Reminder / Pre-Flight cue
+  reminderText?: string; // Dedicated Reminder / Mental Shift text (can coexist with concrete fixNote action!)
   parentProblemId?: string; // Clusters this slip under a Root Problem
   roadmapPlanId?: string; // Stable StrategyPlan.id link (survives Roadmap renames!)
   tags: string[]; // Plan names (e.g. "Trading Strategy") + custom tags
   status: ProblemStatus;
   occurrences: ProblemOccurrence[];
+  heldDates?: string[]; // YYYY-MM-DD dates when active solution/reminder held (without closing prematurely)
+  lastHeldDate?: string; // Latest YYYY-MM-DD when user confirmed it held
   fixType?: ProblemFixType;
   fixNote?: string;
   fixStartedAt?: string; // YYYY-MM-DD when the active fix experiment started

@@ -660,13 +660,16 @@ interface StorageContextType {
   addProblem: (input: {
     title: string;
     category: ProblemCategory;
+    classified?: boolean;
     scale?: ProblemScale;
     impact?: ProblemImpact;
     severity?: ProblemSeverity;
     isTopConstraint?: boolean;
+    promptNoteOnHit?: boolean;
     trigger?: string;
     rootCause?: string;
     isGuardrail?: boolean;
+    reminderText?: string;
     verifyDays?: number;
     parentProblemId?: string;
     roadmapPlanId?: string;
@@ -681,6 +684,7 @@ interface StorageContextType {
   }) => ProblemEntry;
   updateProblem: (id: string, patch: Partial<ProblemEntry>) => void;
   recordProblemRecurrence: (id: string, occurrence: ProblemOccurrence) => void;
+  recordProblemHeld: (id: string, date?: string) => void;
   clusterIntoNewParent: (
     childId: string,
     parentTitle: string,
@@ -3495,13 +3499,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       id: `prob_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       title: input.title.trim(),
       category: input.category,
+      ...(typeof input.classified === 'boolean' ? { classified: input.classified } : {}),
       scale: resolvedScale,
       impact: resolvedImpact,
       severity: resolvedSeverity,
       ...(input.isTopConstraint ? { isTopConstraint: true } : {}),
+      ...(typeof input.promptNoteOnHit === 'boolean' ? { promptNoteOnHit: input.promptNoteOnHit } : {}),
       ...(input.trigger?.trim() ? { trigger: input.trigger.trim() } : {}),
       ...(input.rootCause?.trim() ? { rootCause: input.rootCause.trim() } : {}),
       ...(input.isGuardrail ? { isGuardrail: true } : {}),
+      ...(input.reminderText?.trim() ? { reminderText: input.reminderText.trim() } : {}),
       ...(input.verifyDays ? { verifyDays: input.verifyDays } : {}),
       ...(input.parentProblemId ? { parentProblemId: input.parentProblemId } : {}),
       ...(resolvedRoadmapId ? { roadmapPlanId: resolvedRoadmapId } : {}),
@@ -3583,6 +3590,21 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
         if (patch.parentProblemId === undefined && 'parentProblemId' in patch) {
           delete merged.parentProblemId;
+        }
+        if (patch.roadmapPlanId === undefined && 'roadmapPlanId' in patch) {
+          delete merged.roadmapPlanId;
+        }
+        if ('reminderText' in patch && !patch.reminderText?.trim()) {
+          delete merged.reminderText;
+        }
+        if ('fixNote' in patch && !patch.fixNote?.trim()) {
+          delete merged.fixNote;
+        }
+        if ('trigger' in patch && !patch.trigger?.trim()) {
+          delete merged.trigger;
+        }
+        if ('rootCause' in patch && !patch.rootCause?.trim()) {
+          delete merged.rootCause;
         }
         // Entering Testing Fix: start verification clock & clear prior failure flag
         if (patch.status === 'testing' && p.status !== 'testing') {
@@ -3686,6 +3708,25 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       }
       return p;
+    });
+    commitProblems(next);
+    markLocalMutation();
+  };
+
+  // Honest check-in ("Held today / Held this week"): logs that the reminder/fix held WITHOUT prematurely closing as Solved
+  const recordProblemHeld: StorageContextType['recordProblemHeld'] = (id, date) => {
+    const nowIso = new Date().toISOString();
+    const checkDate = date || getTodayDateString();
+    const next = problemsRef.current.map(p => {
+      if (p.id !== id) return p;
+      const existing = p.heldDates || [];
+      const nextHeld = existing.includes(checkDate) ? existing : [...existing, checkDate];
+      return {
+        ...p,
+        heldDates: nextHeld,
+        lastHeldDate: checkDate,
+        updatedAt: nowIso
+      };
     });
     commitProblems(next);
     markLocalMutation();
@@ -5363,17 +5404,30 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           mergedAttempts.push(att);
         });
         mergedAttempts.sort((a, b) => (a.endedAt || a.startedAt).localeCompare(b.endedAt || b.startedAt));
+        const mergedHeldDates = Array.from(
+          new Set([...(secondary.heldDates || []), ...(primary.heldDates || [])])
+        ).sort();
+        const latestHeld = mergedHeldDates[mergedHeldDates.length - 1] || primary.lastHeldDate || secondary.lastHeldDate;
         return {
           ...primary,
+          ...(primary.classified !== undefined || secondary.classified !== undefined
+            ? { classified: primary.classified ?? secondary.classified }
+            : {}),
+          ...(primary.promptNoteOnHit !== undefined || secondary.promptNoteOnHit !== undefined
+            ? { promptNoteOnHit: primary.promptNoteOnHit ?? secondary.promptNoteOnHit }
+            : {}),
           severity: primary.severity ?? secondary.severity,
           roadmapPlanId: primary.roadmapPlanId || secondary.roadmapPlanId,
           trigger: primary.trigger?.trim() ? primary.trigger : secondary.trigger,
           rootCause: primary.rootCause?.trim() ? primary.rootCause : secondary.rootCause,
+          reminderText: primary.reminderText?.trim() ? primary.reminderText : secondary.reminderText,
           fixNote: primary.fixNote?.trim() ? primary.fixNote : secondary.fixNote,
           fixStartedAt: primary.fixStartedAt || secondary.fixStartedAt,
           fixTaskCompletedAt: primary.fixTaskCompletedAt || secondary.fixTaskCompletedAt,
           verifyDays: primary.verifyDays ?? secondary.verifyDays,
           lastFixFailedAt: primary.lastFixFailedAt || secondary.lastFixFailedAt,
+          ...(mergedHeldDates.length > 0 ? { heldDates: mergedHeldDates } : {}),
+          ...(latestHeld ? { lastHeldDate: latestHeld } : {}),
           occurrences: mergedOccurrences,
           tags: mergedTags,
           ...(mergedAttempts.length > 0 ? { fixAttempts: mergedAttempts } : {}),
@@ -6241,6 +6295,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       addProblem,
       updateProblem,
       recordProblemRecurrence,
+      recordProblemHeld,
       clusterIntoNewParent,
       deleteProblem,
       dispatchProblemFix,

@@ -2,11 +2,9 @@ import React, { useMemo, useState } from 'react';
 import {
   ProblemCategory,
   ProblemEntry,
-  ProblemSeverity,
   ProblemSourceType
 } from '../../types/schema';
 import {
-  PROBLEM_SEVERITIES,
   clusterHasSourceType,
   clusterHasTag,
   clusterMatchesRoadmap,
@@ -14,22 +12,28 @@ import {
   clusterOccurredOnDate,
   computeProblemPriorityScore,
   countClusterOccurrencesInRange,
-  defaultScaleForSource,
   getClusterTotalHits,
   getFixVerificationProgress,
   getLastOccurrenceDate,
-  getProblemScale,
+  getProblemActionText,
+  getProblemReminderText,
+  hasActiveAction,
+  hasActiveReminder,
   hasExistingParent,
-  isProblemGuardrail,
+  isProblemClassified,
   normalizeTag,
   severityToImpact,
+  shouldPromptNoteOnHit,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemItemRow } from './ProblemItemRow';
+import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
+  Bell,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -37,8 +41,8 @@ import {
   Crosshair,
   ExternalLink,
   Plus,
-  Shield,
-  Trash2
+  Trash2,
+  Wrench
 } from 'lucide-react';
 
 interface ProblemLoggerPanelProps {
@@ -91,6 +95,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     problemSettings,
     addProblem,
     recordProblemRecurrence,
+    recordProblemHeld,
     updateProblem,
     deleteProblem,
     setActiveTab,
@@ -100,22 +105,26 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const caps = getLevelCapabilities(systemLevel);
   const fullEngine = caps.problemsConstraintEngine;
 
-  const defaultScale = defaultScaleForSource(sourceType);
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
   const isMacroReview =
     mode === 'review' &&
     (sourceType === 'monthly' || sourceType === 'quarterly' || sourceType === 'yearly');
 
   const [internalText, setInternalText] = useState('');
-  const [internalSeverity, setInternalSeverity] = useState<ProblemSeverity>(
-    defaultScale === 'blocker' ? 5 : defaultScale === 'bottleneck' ? 3 : 2
-  );
   const [internalCategory] = useState<ProblemCategory>(problemCategories[0]?.id || 'mindset');
   const [internalTags, setInternalTags] = useState<string[]>(
     filterTag ? [normalizeTag(filterTag)] : []
   );
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [showAllMacroSlips, setShowAllMacroSlips] = useState(false);
+
+  // Per-problem note-on-hit prompt when clicking quick recurring chips or audit check-in
+  const [notePromptTarget, setNotePromptTarget] = useState<ProblemEntry | null>(null);
+  const [notePromptDraft, setNotePromptDraft] = useState('');
+  const [workbenchState, setWorkbenchState] = useState<{
+    problemId: string;
+    initialTab?: WorkbenchTab;
+  } | null>(null);
 
   const textValue = draftText !== undefined ? draftText : internalText;
   const setTextValue = (val: string) => {
@@ -158,11 +167,9 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
     let hiddenSlips = 0;
     if (isMacroReview && !showAllMacroSlips) {
-      const rootOnly = list.filter(
-        p => getProblemScale(p) !== 'friction' || p.isTopConstraint || p.status === 'testing'
-      );
-      hiddenSlips = list.length - rootOnly.length;
-      list = rootOnly;
+      const classifiedOnly = list.filter(p => isProblemClassified(problems, p));
+      hiddenSlips = list.length - classifiedOnly.length;
+      list = classifiedOnly;
     }
 
     const sorted = [...list].sort((a, b) => {
@@ -188,7 +195,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     showAllMacroSlips
   ]);
 
-  // Quick "+1 Happened Again" chips — prioritize Top Constraints first!
+  // Quick "Happened again" chips — Top 3 Focus first!
   const quickRecurCandidates = useMemo(() => {
     if (mode === 'weekly_triage' || mode === 'roadmap') return [];
     const shownIds = new Set(displayedProblems.map(p => p.id));
@@ -198,19 +205,21 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       .slice(0, 4);
   }, [mode, topLevelProblems, problems, displayedProblems]);
 
-  // Active fixes / rules to verify during Daily or Weekly reviews (LVL 3+ Constraint Engine)
+  // Active Reminders / Actions to check in on honestly during Daily or Weekly reviews
   const activeFixesToAudit = useMemo(() => {
     if (!showAuditStrip || !fullEngine) return [];
     const shownIds = new Set(displayedProblems.map(p => p.id));
     return topLevelProblems
       .filter(
         p =>
-          (p.status === 'testing' || (isProblemGuardrail(p) && p.status !== 'solved')) &&
+          p.status !== 'solved' &&
+          (hasActiveReminder(p) || hasActiveAction(p) || p.status === 'testing') &&
           !shownIds.has(p.id)
       )
       .slice(0, 5);
-  }, [showAuditStrip, topLevelProblems, displayedProblems]);
+  }, [showAuditStrip, fullEngine, topLevelProblems, displayedProblems]);
 
+  // ZERO-FRICTION RAW CAPTURE (Classify later at end of day or week!)
   const handleLogProblem = () => {
     const trimmed = textValue.trim();
     if (!trimmed) return;
@@ -240,14 +249,10 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       addProblem({
         title: trimmed,
         category: categoryValue || problemCategories[0]?.id || 'mindset',
-        scale:
-          internalSeverity >= 5
-            ? 'blocker'
-            : internalSeverity >= 4
-            ? 'bottleneck'
-            : defaultScale,
-        severity: internalSeverity,
-        impact: severityToImpact(internalSeverity),
+        classified: false,
+        scale: 'friction',
+        severity: 2,
+        impact: severityToImpact(2),
         ...(roadmapPlanId ? { roadmapPlanId } : {}),
         tags: finalTags,
         sourceType,
@@ -261,6 +266,11 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   };
 
   const handleQuickRecur = (prob: ProblemEntry) => {
+    if (fullEngine && shouldPromptNoteOnHit(prob)) {
+      setNotePromptTarget(prob);
+      setNotePromptDraft('');
+      return;
+    }
     recordProblemRecurrence(prob.id, {
       date,
       sourceType,
@@ -268,7 +278,19 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     });
   };
 
-  // Minimal flat row for LVL 1–2 (zero clustering / severity / experiment overwhelm)
+  const commitPromptedRecur = (note?: string) => {
+    if (!notePromptTarget) return;
+    recordProblemRecurrence(notePromptTarget.id, {
+      date,
+      sourceType,
+      ...(sourceRef ? { sourceRef } : {}),
+      ...(note?.trim() ? { note: note.trim() } : {})
+    });
+    setNotePromptTarget(null);
+    setNotePromptDraft('');
+  };
+
+  // Minimal flat row for LVL 1–2
   const renderLiteRow = (p: ProblemEntry) => {
     const isSolved = p.status === 'solved';
     const hits = getClusterTotalHits(problems, p);
@@ -301,10 +323,9 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
           <button
             type="button"
             onClick={() => handleQuickRecur(p)}
-            className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 font-mono text-[10px] font-bold text-orange-300"
-            title="Happened again (+1)"
+            className="px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-[10px] font-bold text-orange-300"
           >
-            ×{hits} +1
+            Happened again ({hits})
           </button>
           <button
             type="button"
@@ -319,8 +340,51 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     );
   };
 
+  const renderNotePromptBanner = () =>
+    notePromptTarget ? (
+      <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/35 space-y-2">
+        <div className="text-[11px] font-bold text-sky-200">
+          Log detail for &ldquo;{notePromptTarget.title}&rdquo;:
+        </div>
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+          <input
+            type="text"
+            autoFocus
+            value={notePromptDraft}
+            onChange={e => setNotePromptDraft(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitPromptedRecur(notePromptDraft);
+              }
+              if (e.key === 'Escape') {
+                setNotePromptTarget(null);
+                setNotePromptDraft('');
+              }
+            }}
+            placeholder="What triggered it or happened this time? (Enter to save)..."
+            className="flex-1 min-w-[180px] bg-slate-950 border border-sky-500/40 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => commitPromptedRecur(notePromptDraft)}
+            className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0"
+          >
+            Save Note
+          </button>
+          <button
+            type="button"
+            onClick={() => commitPromptedRecur()}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-slate-300 border border-slate-800 text-xs font-bold shrink-0"
+          >
+            Skip note
+          </button>
+        </div>
+      </div>
+    ) : null;
+
   // ================================================================
-  // MODE 1: ULTRA-FAST COMPACT CAPTURE (GWS Studio & Create Modal)
+  // MODE 1: ZERO-FRICTION COMPACT CAPTURE (GWS Studio & Modals)
   // ================================================================
   if (mode === 'compact') {
     return (
@@ -328,11 +392,11 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center space-x-1.5 text-xs font-bold text-orange-400">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            <span>{title || 'What held me back? (Fast Capture)'}</span>
+            <span>{title || 'What got in your way? (Quick Record)'}</span>
           </div>
           {displayedProblems.length > 0 && (
             <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/30">
-              {displayedProblems.length} logged
+              {displayedProblems.length} recorded
             </span>
           )}
         </div>
@@ -349,30 +413,16 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 handleLogProblem();
               }
             }}
-            placeholder="1-line friction or blocker & press Enter (triage later in Problem Log)..."
+            placeholder="Drop a 1-line note & press Enter (classify later at end of day/week)..."
             className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
           />
-          {fullEngine && (
-            <select
-              value={internalSeverity}
-              onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
-              title="Severity grade (1 Minor to 5 Critical)"
-              className="bg-slate-900 border border-slate-800 rounded-xl px-2 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
-            >
-              {PROBLEM_SEVERITIES.map(sv => (
-                <option key={sv.grade} value={sv.grade}>
-                  {sv.code} · {sv.shortLabel}
-                </option>
-              ))}
-            </select>
-          )}
           <button
             type="button"
             onClick={handleLogProblem}
             disabled={!textValue.trim()}
-            className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
+            className="px-3.5 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
           >
-            + Log
+            Record
           </button>
         </div>
 
@@ -384,15 +434,16 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 key={p.id}
                 type="button"
                 onClick={() => handleQuickRecur(p)}
-                className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-[10px] text-slate-300 hover:text-orange-200 transition-colors"
+                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-[10px] text-slate-300 hover:text-orange-200 transition-colors"
               >
                 {fullEngine && p.isTopConstraint && <Crosshair className="w-2.5 h-2.5 text-rose-400" />}
                 <span className="truncate max-w-[160px]">{p.title}</span>
-                <span className="font-mono text-orange-400 font-bold">+1</span>
               </button>
             ))}
           </div>
         )}
+
+        {renderNotePromptBanner()}
 
         {displayedProblems.length > 0 && (
           <div className="space-y-1.5 pt-1">
@@ -406,6 +457,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                   contextSourceRef={sourceRef}
                   targetWeekId={targetWeekId}
                   compact
+                  onOpenWorkbench={(id, tab) => setWorkbenchState({ problemId: id, initialTab: tab })}
                 />
               ) : (
                 renderLiteRow(p)
@@ -413,12 +465,24 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
             )}
           </div>
         )}
+
+        {workbenchState && (
+          <ProblemWorkbenchModal
+            problemId={workbenchState.problemId}
+            initialTab={workbenchState.initialTab}
+            contextDate={date}
+            contextSourceType={sourceType}
+            contextSourceRef={sourceRef}
+            targetWeekId={targetWeekId}
+            onClose={() => setWorkbenchState(null)}
+          />
+        )}
       </div>
     );
   }
 
   // ================================================================
-  // MODE 2: REVIEW / WEEKLY TRIAGE / ROADMAP PANEL (Clean & Calm)
+  // MODE 2: REVIEW / WEEKLY TRIAGE / ROADMAP PANEL
   // ================================================================
   const activeCount = displayedProblems.filter(p => p.status !== 'solved').length;
 
@@ -430,7 +494,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
           <div className="flex items-center space-x-2">
             <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
             <span className="text-xs font-extrabold uppercase tracking-wider text-orange-400">
-              {title || 'Problems & Constraints'}
+              {title || 'Problems & Frictions'}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 font-mono text-[10px] font-bold text-slate-300">
               {activeCount} active
@@ -449,7 +513,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
               }}
               className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] font-bold text-slate-300 transition-colors"
             >
-              <span>{fullEngine ? 'Problem Log' : 'Friction Inbox'}</span>
+              <span>{fullEngine ? 'Open Problem Log' : 'Friction Inbox'}</span>
               <ExternalLink className="w-3 h-3" />
             </button>
           )}
@@ -468,7 +532,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
       {!collapsed && (
         <div className="p-4 space-y-3.5">
-          {/* 1-Line Capture Bar */}
+          {/* Pure 1-Line Capture Bar (Zero fields on entry!) */}
           <div className="flex items-center gap-2">
             <input
               type="text"
@@ -482,28 +546,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 }
               }}
               placeholder={
-                !fullEngine
-                  ? 'Note what got in your way today & press Enter...'
-                  : sourceType === 'daily'
-                  ? 'Capture today’s friction (press Enter — triage deeper in Problem Log)...'
-                  : 'Log a recurring bottleneck or constraint & press Enter...'
+                sourceType === 'daily'
+                  ? 'Record what got in your way today & press Enter (classify later)...'
+                  : 'Record a problem or recurring pattern & press Enter...'
               }
               className="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/50 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none"
             />
-            {fullEngine && (
-              <select
-                value={internalSeverity}
-                onChange={e => setInternalSeverity(Number(e.target.value) as ProblemSeverity)}
-                title="Severity grade (1 Minor to 5 Critical)"
-                className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 font-mono text-xs font-bold text-amber-300 focus:outline-none shrink-0"
-              >
-                {PROBLEM_SEVERITIES.map(sv => (
-                  <option key={sv.grade} value={sv.grade}>
-                    {sv.code} · {sv.shortLabel}
-                  </option>
-                ))}
-              </select>
-            )}
             <button
               type="button"
               onClick={handleLogProblem}
@@ -511,15 +559,15 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
               className="inline-flex items-center space-x-1 px-3.5 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Log</span>
+              <span>Record</span>
             </button>
           </div>
 
-          {/* 1-Click "+1 Happened Again" Chips (Top Constraints first) */}
+          {/* 1-Click "Happened again" Chips */}
           {quickRecurCandidates.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Recurring (+1):
+                Happened again:
               </span>
               {quickRecurCandidates.map(p => (
                 <button
@@ -530,55 +578,87 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 >
                   {fullEngine && p.isTopConstraint && <Crosshair className="w-3 h-3 text-rose-400 shrink-0" />}
                   <span className="truncate max-w-[200px]">{p.title}</span>
-                  <span className="font-mono text-[10px] text-orange-400 font-extrabold">
-                    ×{getClusterTotalHits(problems, p)} +1
+                  <span className="font-mono text-[10px] text-orange-400 font-bold">
+                    ({getClusterTotalHits(problems, p)})
                   </span>
                 </button>
               ))}
             </div>
           )}
 
-          {/* Active Experiments / Guardrails Verification Strip (Daily & Weekly Review) */}
+          {renderNotePromptBanner()}
+
+          {/* Honest Check-In Strip for Active Reminders & Solutions (Held Today != Solved!) */}
           {activeFixesToAudit.length > 0 && (
-            <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-sky-400 flex items-center space-x-1.5">
-                <Shield className="w-3 h-3" />
-                <span>Verify Active Fixes &amp; Guardrails ({activeFixesToAudit.length})</span>
-              </span>
+            <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center space-x-1.5">
+                  <Bell className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Check In on Active Solutions ({activeFixesToAudit.length})</span>
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  &ldquo;Held&rdquo; logs a clean day without prematurely closing
+                </span>
+              </div>
+
               <div className="space-y-1.5">
                 {activeFixesToAudit.map(p => {
                   const ver = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
+                  const rem = getProblemReminderText(p);
+                  const act = getProblemActionText(p);
+                  const alreadyHeld = (p.heldDates || []).includes(date);
                   return (
                     <div
                       key={p.id}
-                      className="flex flex-wrap items-center justify-between gap-2 text-xs p-2 rounded-lg bg-slate-950 border border-slate-800/80"
+                      className="flex flex-wrap items-center justify-between gap-2 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800/90"
                     >
-                      <div className="min-w-0">
-                        <span className="font-semibold text-slate-200">{p.title}</span>
-                        {p.fixNote?.trim() && (
-                          <span className="text-[11px] text-slate-400 ml-2">→ {p.fixNote.trim()}</span>
+                      <button
+                        type="button"
+                        onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
+                        className="min-w-0 flex-1 text-left space-y-0.5"
+                      >
+                        <div className="font-bold text-slate-100 flex items-center space-x-1.5">
+                          {rem ? (
+                            <Bell className="w-3 h-3 text-amber-400 shrink-0" />
+                          ) : (
+                            <Wrench className="w-3 h-3 text-sky-400 shrink-0" />
+                          )}
+                          <span className="truncate">{rem || act || p.title}</span>
+                        </div>
+                        {(rem || act) && (
+                          <div className="text-[10px] text-slate-500 truncate pl-4">
+                            For: {p.title}
+                            {ver.isTesting ? ` · ${ver.daysClean}/${ver.targetDays}d clean` : ''}
+                          </div>
                         )}
-                      </div>
+                      </button>
+
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {ver.isTesting && (
-                          <span className="font-mono text-[10px] text-sky-300">
-                            {ver.daysClean}/{ver.targetDays}d
-                          </span>
-                        )}
                         <button
                           type="button"
                           onClick={() => handleQuickRecur(p)}
-                          className="px-2 py-0.5 rounded bg-slate-900 hover:bg-rose-500/20 text-rose-300 border border-slate-800 text-[10px] font-bold"
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 text-orange-300 border border-slate-800 text-[11px] font-bold"
                         >
-                          Broke (+1)
+                          Happened again
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateProblem(p.id, { status: 'solved' })}
-                          className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 text-[10px] font-bold"
+                          onClick={() => recordProblemHeld(p.id, date)}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            alreadyHeld
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                              : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800 hover:border-emerald-500/35'
+                          }`}
                         >
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>Held</span>
+                          <Check className="w-3 h-3" />
+                          <span>{alreadyHeld ? 'Held ✓' : 'Held'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWorkbenchState({ problemId: p.id, initialTab: 'solution' })}
+                          className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-bold"
+                        >
+                          Open
                         </button>
                       </div>
                     </div>
@@ -591,7 +671,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
           {/* Problems List */}
           {displayedProblems.length === 0 ? (
             <div className="p-4 rounded-xl bg-slate-900/50 border border-dashed border-slate-800 text-xs text-slate-500 text-center">
-              No {fullEngine ? 'problems' : 'frictions'} logged for this {sourceType} scope yet.
+              No {fullEngine ? 'problems' : 'frictions'} recorded for this {sourceType} scope yet.
             </div>
           ) : (
             <div className="space-y-2">
@@ -610,6 +690,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                         : undefined
                     }
                     compact={mode === 'roadmap'}
+                    onOpenWorkbench={(id, tab) => setWorkbenchState({ problemId: id, initialTab: tab })}
                   />
                 ) : (
                   renderLiteRow(p)
@@ -625,11 +706,23 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
               className="text-[11px] font-bold text-slate-400 hover:text-slate-200"
             >
               {showAllMacroSlips
-                ? 'Hide small ungrouped slips ↑'
-                : `+ Show ${hiddenSlipCount} small ungrouped slip${hiddenSlipCount === 1 ? '' : 's'} from this period`}
+                ? 'Hide unclassified raw notes ↑'
+                : `+ Show ${hiddenSlipCount} unclassified raw note${hiddenSlipCount === 1 ? '' : 's'} from this period`}
             </button>
           )}
         </div>
+      )}
+
+      {workbenchState && (
+        <ProblemWorkbenchModal
+          problemId={workbenchState.problemId}
+          initialTab={workbenchState.initialTab}
+          contextDate={date}
+          contextSourceType={sourceType}
+          contextSourceRef={sourceRef}
+          targetWeekId={targetWeekId}
+          onClose={() => setWorkbenchState(null)}
+        />
       )}
     </div>
   );

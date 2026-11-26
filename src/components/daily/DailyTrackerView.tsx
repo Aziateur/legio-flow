@@ -35,6 +35,7 @@ import {
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { DailyContextBrief } from './DailyContextBrief';
+import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 
 export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
   onOpenGWS,
@@ -628,7 +629,10 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
         <LowEnergyDayView selectedDate={selectedDate} />
       ) : (
         <>
-          {/* Unified Today's Context Brief (Macro Compass + Guardrails + Course Correction + Carry-Forward + Scheduled Due) */}
+          {/* Reminder-first strip: what to remember BEFORE acting today */}
+          <PreFlightGuardrailsStrip context="daily" date={selectedDate} sourceRef={selectedDate} />
+
+          {/* Unified Today's Context Brief (Macro Compass + Course Correction + Carry-Forward + Scheduled Due) */}
           <DailyContextBrief
             selectedDate={selectedDate}
             selectedDayShortName={selectedDayShortName}

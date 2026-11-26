@@ -94,8 +94,7 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
       Boolean(monthPlan.focusTheme?.trim()) ||
       Boolean(quarterPlan.focusTheme?.trim()));
 
-  const showGuardrails =
-    caps.problemsConstraintEngine && problemSettings.showPreFlightInDaily !== false;
+  const showGuardrails = false; // Reminders now live in the dedicated reminder-first strip at the top of Daily Plan
   const activeGuardrails = useMemo(() => {
     if (!showGuardrails) return [];
     const topLevel = problems.filter(
@@ -433,7 +432,8 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
                 )}
               </div>
 
-              {/* Right: Pre-Flight Guardrails & Top Constraints */}
+              {/* Right: Reminders now render in the dedicated strip above */}
+              {activeGuardrails.length > 0 && (
               <div className="p-3.5 rounded-2xl bg-slate-950 border border-amber-500/25 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400 flex items-center space-x-1.5">
@@ -504,6 +504,7 @@ export const DailyContextBrief: React.FC<DailyContextBriefProps> = ({
                   </div>
                 )}
               </div>
+              )}
             </div>
           )}
 

@@ -25,6 +25,7 @@ import {
 import { getMissCauseMeta } from '../../lib/energyAnalytics';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { ProblemLoggerPanel } from '../problems/ProblemLoggerPanel';
+import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 import { 
   Target, 
   Gift, 
@@ -875,6 +876,13 @@ export const WeeklyGoalCrusherView: React.FC = () => {
           <span>{pulledNotice}</span>
         </div>
       )}
+
+      {/* Reminders for this week (reminder-first, same source as Daily & GWS) */}
+      <PreFlightGuardrailsStrip
+        context="weekly"
+        date={plan.startDate || selectedDate}
+        sourceRef={plan.id}
+      />
 
       {/* Week Switcher Minimal Bar (Shows all weeks sequentially, including empty weeks) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">

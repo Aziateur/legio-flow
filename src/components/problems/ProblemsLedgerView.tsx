@@ -1,56 +1,65 @@
 import React, { useMemo, useState } from 'react';
 import {
   CustomProblemCategory,
-  ProblemCategory,
   ProblemColorKey,
-  ProblemEntry,
-  ProblemSeverity
+  ProblemEntry
 } from '../../types/schema';
 import { INITIAL_PROBLEM_CATEGORIES } from '../../types/defaults';
 import {
+  DISPATCH_TARGET_LABELS,
   PROBLEM_COLOR_STYLES,
-  PROBLEM_SEVERITIES,
-  SEVERITY_META,
+  SEVERITY_VISUAL,
   clusterHasTag,
   computeProblemPriorityScore,
+  countClusterNotes,
   getClusterTotalHits,
   getFixVerificationProgress,
   getLastOccurrenceDate,
+  getProblemActionText,
+  getProblemReminderText,
   getProblemSeverity,
+  hasActiveAction,
+  hasActiveReminder,
   hasExistingParent,
-  isProblemGuardrail,
-  isRootProblem,
+  isProblemClassified,
   normalizeTag,
   resolveCategoryMeta,
+  resolveProblemRoadmapPlanId,
   severityToImpact,
+  shouldPromptNoteOnHit,
   tagsMatch
 } from '../../lib/problems';
 import { useStorage } from '../../context/StorageContext';
 import { getLevelCapabilities } from '../../lib/levelFeatures';
 import { isActiveStrategyPlan } from '../../lib/planHierarchy';
 import { ProblemItemRow } from './ProblemItemRow';
+import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Bell,
   CheckCircle2,
   Circle,
   Crosshair,
+  Eye,
   Filter,
   Inbox,
   Map as MapIcon,
+  MessageSquarePlus,
   Plus,
   RotateCcw,
   Search,
   Shield,
   Sliders,
   Trash2,
+  Wrench,
   X
 } from 'lucide-react';
 
-type MainTabMode = 'constraints' | 'inbox' | 'solved';
-type SubStatusFilter = 'all' | 'open' | 'testing' | 'guardrails';
-type LedgerSort = 'priority' | 'frequency' | 'recent';
+type MainTabMode = 'classify' | 'backlog' | 'resolved';
+type ResponseFilter = 'all' | 'observing' | 'reminder' | 'action';
+type LedgerSort = 'severity' | 'frequency' | 'recent';
 
 const COLOR_KEYS: ProblemColorKey[] = [
   'rose',
@@ -86,27 +95,32 @@ export const ProblemsLedgerView: React.FC = () => {
 
   const maxTop = problemSettings.maxTopConstraints || 3;
   const defaultVerifyDays = problemSettings.defaultVerifyDays || 14;
-  const separateInbox = problemSettings.separateInboxTab !== false;
   const showBreakdownBar = problemSettings.showBreakdownBar !== false;
 
-  const [activeTab, setActiveTab] = useState<MainTabMode>('constraints');
-  const [subStatus, setSubStatus] = useState<SubStatusFilter>('all');
+  const [activeTab, setActiveTab] = useState<MainTabMode>('backlog');
+  const [responseFilter, setResponseFilter] = useState<ResponseFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<LedgerSort>('priority');
+  const [sortBy, setSortBy] = useState<LedgerSort>('severity');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
 
-  // Clean 1-line quick capture
+  // Zero-friction 1-line raw capture
   const [quickTitle, setQuickTitle] = useState('');
-  const [quickKind, setQuickKind] = useState<'constraint' | 'slip'>('constraint');
-  const [quickSeverity, setQuickSeverity] = useState<ProblemSeverity>(3);
-  const [quickCategory, setQuickCategory] = useState<ProblemCategory>(
-    problemCategories[0]?.id || 'mindset'
-  );
-  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+
+  // Top 3 inline 1-line hit note state (keyed by problem.id)
+  const [topNoteOpenId, setTopNoteOpenId] = useState<string | null>(null);
+  const [topNoteDraft, setTopNoteDraft] = useState('');
+  const [topLoggedId, setTopLoggedId] = useState<string | null>(null);
+
+  // Focused Single-Problem Workbench Modal
+  const [workbenchState, setWorkbenchState] = useState<{
+    problemId: string;
+    initialTab?: WorkbenchTab;
+  } | null>(null);
 
   // Customize Categories form
   const [newCatLabel, setNewCatLabel] = useState('');
@@ -137,49 +151,54 @@ export const ProblemsLedgerView: React.FC = () => {
     [problems]
   );
 
-  // Top Constraints Spotlight (pinned active constraints, up to maxTop)
-  const topConstraints = useMemo(
+  // 1. Top 3 Active Focus (WIP Limit — NEVER duplicated in Backlog!)
+  const topFocusProblems = useMemo(
     () =>
       topLevelProblems
         .filter(p => p.isTopConstraint && p.status !== 'solved')
         .sort((a, b) => computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a)),
     [topLevelProblems, problems]
   );
+  const topFocusIds = useMemo(() => new Set(topFocusProblems.map(p => p.id)), [topFocusProblems]);
 
-  // Unpinned active root problems available to pin directly from an empty Top 3 slot
-  const pinnableCandidates = useMemo(
-    () =>
-      topLevelProblems
-        .filter(p => !p.isTopConstraint && p.status !== 'solved')
-        .sort((a, b) => computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a)),
-    [topLevelProblems, problems]
-  );
-
-  // Partition into 3 clean buckets: Active Constraints | Inbox Slips | Solved
+  // 2. Partition remaining top-level problems cleanly with ZERO duplication:
+  //    To Classify | Backlog (classified, non-Top-3) | Resolved
   const buckets = useMemo(() => {
-    const constraints: ProblemEntry[] = [];
-    const inbox: ProblemEntry[] = [];
-    const solved: ProblemEntry[] = [];
+    const toClassify: ProblemEntry[] = [];
+    const backlog: ProblemEntry[] = [];
+    const resolved: ProblemEntry[] = [];
 
     topLevelProblems.forEach(p => {
       if (p.status === 'solved') {
-        solved.push(p);
-      } else if (separateInbox && !isRootProblem(problems, p)) {
-        inbox.push(p);
+        resolved.push(p);
+      } else if (topFocusIds.has(p.id)) {
+        // Lives exclusively in Top 3 Active Focus above (no split-brain duplicate!)
+        return;
+      } else if (!isProblemClassified(problems, p)) {
+        toClassify.push(p);
       } else {
-        constraints.push(p);
+        backlog.push(p);
       }
     });
 
-    return { constraints, inbox, solved };
-  }, [topLevelProblems, problems, separateInbox]);
+    return { toClassify, backlog, resolved };
+  }, [topLevelProblems, problems, topFocusIds]);
 
-  // Root-cause breakdown weighted by recurrence across active problems
+  // Candidates available to pin into an open Top 3 slot
+  const pinnableCandidates = useMemo(
+    () =>
+      [...buckets.backlog].sort(
+        (a, b) => computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a)
+      ),
+    [buckets.backlog, problems]
+  );
+
+  // Root-cause breakdown across classified active problems
   const breakdown = useMemo(() => {
     const counts: Record<string, number> = {};
     let total = 0;
     problems
-      .filter(p => p.status !== 'solved')
+      .filter(p => p.status !== 'solved' && isProblemClassified(problems, p))
       .forEach(p => {
         const w = Math.max(1, p.occurrences?.length || 1);
         counts[p.category] = (counts[p.category] || 0) + w;
@@ -188,43 +207,29 @@ export const ProblemsLedgerView: React.FC = () => {
     return { counts, total };
   }, [problems]);
 
-  // Ready-to-verify & failed-fix counters
-  const alertCounts = useMemo(() => {
-    let failed = 0;
-    let ready = 0;
-    buckets.constraints.forEach(p => {
-      if (p.lastFixFailedAt && p.status === 'open') failed++;
-      const v = getFixVerificationProgress(p, todayDate, defaultVerifyDays);
-      if (v.readyToVerify) ready++;
-    });
-    return { failed, ready };
-  }, [buckets.constraints, todayDate, defaultVerifyDays]);
-
-  const effectiveTab: MainTabMode =
-    !separateInbox && activeTab === 'inbox' ? 'constraints' : activeTab;
-
   const displayedList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const pool =
       q.length > 0
-        ? problems.filter(p => (effectiveTab === 'solved' ? p.status === 'solved' : p.status !== 'solved'))
-        : effectiveTab === 'constraints'
-        ? buckets.constraints
-        : effectiveTab === 'inbox'
-        ? buckets.inbox
-        : buckets.solved;
+        ? problems.filter(p => (activeTab === 'resolved' ? p.status === 'solved' : p.status !== 'solved'))
+        : activeTab === 'classify'
+        ? buckets.toClassify
+        : activeTab === 'backlog'
+        ? buckets.backlog
+        : buckets.resolved;
 
     const list = pool.filter(p => {
-      if (effectiveTab === 'constraints') {
-        if (subStatus === 'open' && p.status !== 'open') return false;
-        if (subStatus === 'testing' && p.status !== 'testing') return false;
-        if (subStatus === 'guardrails' && !isProblemGuardrail(p)) return false;
+      if (activeTab === 'backlog') {
+        const hasRem = hasActiveReminder(p);
+        const hasAct = hasActiveAction(p);
+        if (responseFilter === 'observing' && (hasRem || hasAct)) return false;
+        if (responseFilter === 'reminder' && !hasRem) return false;
+        if (responseFilter === 'action' && !hasAct) return false;
       }
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
       if (severityFilter !== 'all') {
         const sev = getProblemSeverity(p);
         if (severityFilter === '4+' && sev < 4) return false;
-        if (severityFilter === '5' && sev !== 5) return false;
         if (severityFilter === '3' && sev !== 3) return false;
         if (severityFilter === '1-2' && sev > 2) return false;
       }
@@ -232,15 +237,19 @@ export const ProblemsLedgerView: React.FC = () => {
       if (q) {
         const hitTitle = p.title.toLowerCase().includes(q);
         const hitFix = (p.fixNote || '').toLowerCase().includes(q);
+        const hitRem = (p.reminderText || '').toLowerCase().includes(q);
         const hitCause = (p.rootCause || '').toLowerCase().includes(q);
         const hitTrigger = (p.trigger || '').toLowerCase().includes(q);
         const hitTag = (p.tags || []).some(t => t.toLowerCase().includes(q));
-        if (!hitTitle && !hitFix && !hitCause && !hitTrigger && !hitTag) return false;
+        if (!hitTitle && !hitFix && !hitRem && !hitCause && !hitTrigger && !hitTag) return false;
       }
       return true;
     });
 
     return [...list].sort((a, b) => {
+      if (activeTab === 'classify') {
+        return getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a));
+      }
       if (sortBy === 'frequency') {
         const diff = getClusterTotalHits(problems, b) - getClusterTotalHits(problems, a);
         if (diff !== 0) return diff;
@@ -249,15 +258,15 @@ export const ProblemsLedgerView: React.FC = () => {
       if (sortBy === 'recent') {
         return (b.updatedAt || '').localeCompare(a.updatedAt || '');
       }
-      const pDiff = computeProblemPriorityScore(problems, b) - computeProblemPriorityScore(problems, a);
-      if (pDiff !== 0) return pDiff;
-      return getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a));
+      const sevDiff = getProblemSeverity(b) - getProblemSeverity(a);
+      if (sevDiff !== 0) return sevDiff;
+      return getClusterTotalHits(problems, b) - getClusterTotalHits(problems, a);
     });
   }, [
     problems,
     buckets,
-    effectiveTab,
-    subStatus,
+    activeTab,
+    responseFilter,
     categoryFilter,
     severityFilter,
     tagFilter,
@@ -265,7 +274,23 @@ export const ProblemsLedgerView: React.FC = () => {
     sortBy
   ]);
 
-  const handleQuickLog = (e: React.FormEvent) => {
+  // Visual severity tiers for Backlog when sorted by severity (instant visual triage!)
+  const backlogTierGroups = useMemo(() => {
+    if (activeTab !== 'backlog' || sortBy !== 'severity' || searchQuery.trim().length > 0) {
+      return null;
+    }
+    const urgent = displayedList.filter(p => getProblemSeverity(p) >= 4);
+    const moderate = displayedList.filter(p => getProblemSeverity(p) === 3);
+    const minor = displayedList.filter(p => getProblemSeverity(p) <= 2);
+    return [
+      { id: 'urgent', label: 'Urgent · Critical & Severe', dotCls: 'bg-rose-500', textCls: 'text-rose-300', items: urgent },
+      { id: 'moderate', label: 'Moderate Drag', dotCls: 'bg-amber-400', textCls: 'text-amber-300', items: moderate },
+      { id: 'minor', label: 'Low & Minor Background', dotCls: 'bg-sky-400', textCls: 'text-slate-400', items: minor }
+    ].filter(g => g.items.length > 0);
+  }, [activeTab, sortBy, searchQuery, displayedList]);
+
+  // Zero-friction raw capture — NO severity/category/scale fields at capture time!
+  const handleQuickCapture = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = quickTitle.trim();
     if (!trimmed) return;
@@ -275,29 +300,60 @@ export const ProblemsLedgerView: React.FC = () => {
     if (existing) {
       recordProblemRecurrence(existing.id, {
         date: selectedDate,
-        sourceType: quickKind === 'constraint' ? 'weekly' : 'daily',
+        sourceType: 'daily',
         sourceRef: selectedDate
       });
+      setCaptureNotice(`Already tracked — logged another occurrence on "${existing.title}"`);
     } else {
-      const sev: ProblemSeverity = quickSeverity;
       addProblem({
         title: trimmed,
-        category: quickCategory || problemCategories[0]?.id || 'mindset',
-        scale:
-          quickKind === 'slip' && sev < 4
-            ? 'friction'
-            : sev >= 5
-            ? 'blocker'
-            : 'bottleneck',
-        severity: sev,
-        impact: severityToImpact(sev),
-        sourceType: quickKind === 'constraint' ? 'weekly' : 'daily',
+        category: problemCategories[0]?.id || 'mindset',
+        classified: false,
+        scale: 'friction',
+        severity: 2,
+        impact: severityToImpact(2),
+        sourceType: 'daily',
         date: selectedDate,
         sourceRef: selectedDate
       });
+      setCaptureNotice('Recorded to "To Classify" — classify calmly at end of day or week');
+      setActiveTab('classify');
     }
     setQuickTitle('');
-    setComposerExpanded(false);
+    setTimeout(() => setCaptureNotice(null), 3200);
+  };
+
+  const handleTopHit = (prob: ProblemEntry) => {
+    if (shouldPromptNoteOnHit(prob)) {
+      if (topNoteOpenId === prob.id) {
+        setTopNoteOpenId(null);
+        setTopNoteDraft('');
+      } else {
+        setTopNoteOpenId(prob.id);
+        setTopNoteDraft('');
+      }
+    } else {
+      recordProblemRecurrence(prob.id, {
+        date: selectedDate,
+        sourceType: 'daily',
+        sourceRef: selectedDate
+      });
+      setTopLoggedId(prob.id);
+      setTimeout(() => setTopLoggedId(null), 1400);
+    }
+  };
+
+  const commitTopHitNote = (probId: string, note?: string) => {
+    recordProblemRecurrence(probId, {
+      date: selectedDate,
+      sourceType: 'daily',
+      sourceRef: selectedDate,
+      ...(note?.trim() ? { note: note.trim() } : {})
+    });
+    setTopNoteOpenId(null);
+    setTopNoteDraft('');
+    setTopLoggedId(probId);
+    setTimeout(() => setTopLoggedId(null), 1400);
   };
 
   // Custom Category CRUD
@@ -342,7 +398,7 @@ export const ProblemsLedgerView: React.FC = () => {
     const solvedLite = topLevelProblems
       .filter(p => p.status === 'solved')
       .sort((a, b) => getLastOccurrenceDate(b).localeCompare(getLastOccurrenceDate(a)));
-    const showSolvedLite = activeTab === 'solved';
+    const showSolvedLite = activeTab === 'resolved';
     const liteList = showSolvedLite ? solvedLite : activeLite;
 
     const handleLiteCapture = (e: React.FormEvent) => {
@@ -356,6 +412,7 @@ export const ProblemsLedgerView: React.FC = () => {
         addProblem({
           title: trimmed,
           category: problemCategories[0]?.id || 'mindset',
+          classified: false,
           scale: 'friction',
           severity: 2,
           impact: severityToImpact(2),
@@ -380,14 +437,14 @@ export const ProblemsLedgerView: React.FC = () => {
                 Notice What Trips You Up
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Capture daily &amp; GWS sprint frictions in one flat list. Tap +1 when something repeats, or check it off when resolved.
+                Capture daily &amp; GWS sprint frictions in one flat list. Tap Happened again when something repeats, or check it off when resolved.
               </p>
             </div>
 
             <div className="inline-flex rounded-xl bg-slate-950 border border-slate-800 p-1 self-start sm:self-auto">
               <button
                 type="button"
-                onClick={() => setActiveTab('constraints')}
+                onClick={() => setActiveTab('backlog')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
                   !showSolvedLite
                     ? 'bg-orange-500 text-slate-950'
@@ -398,14 +455,14 @@ export const ProblemsLedgerView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('solved')}
+                onClick={() => setActiveTab('resolved')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
                   showSolvedLite
                     ? 'bg-emerald-500 text-slate-950'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Solved ({solvedLite.length})
+                Resolved ({solvedLite.length})
               </button>
             </div>
           </div>
@@ -424,7 +481,7 @@ export const ProblemsLedgerView: React.FC = () => {
               className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0"
             >
               <Plus className="w-4 h-4" />
-              <span>Log</span>
+              <span>Record</span>
             </button>
           </form>
 
@@ -474,10 +531,9 @@ export const ProblemsLedgerView: React.FC = () => {
                         onClick={() =>
                           recordProblemRecurrence(p.id, { date: selectedDate, sourceType: 'daily' })
                         }
-                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 font-mono text-xs font-bold text-orange-300"
-                        title="Happened again (+1)"
+                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-orange-500/15 border border-slate-800 hover:border-orange-500/35 text-xs font-bold text-orange-300"
                       >
-                        ×{hits} +1
+                        Happened again ({hits})
                       </button>
                       <button
                         type="button"
@@ -496,7 +552,7 @@ export const ProblemsLedgerView: React.FC = () => {
 
           <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
             <span>
-              Ready for Top 3 Root Constraints, S1–S5 severity grading, clustering &amp; fix experiments?
+              Ready for Top 3 Active Focus, 4-stage problem solving, Reminders, and Observation timelines?
             </span>
             <button
               type="button"
@@ -514,51 +570,50 @@ export const ProblemsLedgerView: React.FC = () => {
   return (
     <div className="w-full max-w-[1280px] mx-auto space-y-6">
       {/* ================================================================ */}
-      {/* 1. TOP 3 CONSTRAINTS SPOTLIGHT (Mirrors Top 3 Focuses in Plans)  */}
+      {/* 1. TOP 3 ACTIVE FOCUS (WIP Limit — Editable Directly, No Dupe!)  */}
       {/* ================================================================ */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400 flex items-center space-x-1.5">
               <Crosshair className="w-3.5 h-3.5" />
-              <span>Theory of Constraints · Active Attack Focus</span>
+              <span>Active Attack Focus · WIP Limit</span>
             </span>
             <h2 className="text-lg font-extrabold text-slate-100 mt-0.5">
-              Top {maxTop} Constraints ({topConstraints.length}/{maxTop})
+              Top {maxTop} Focus ({topFocusProblems.length}/{maxTop})
             </h2>
+            <p className="text-xs text-slate-400">
+              Only solve these {maxTop} right now — everything else waits calmly in Backlog below. Detail notes on hit are ON by default here.
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-            {alertCounts.failed > 0 && (
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35">
-                <AlertTriangle className="w-3 h-3" />
-                <span>{alertCounts.failed} fix failed</span>
-              </span>
-            )}
-            {alertCounts.ready > 0 && (
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/35">
-                <CheckCircle2 className="w-3 h-3" />
-                <span>{alertCounts.ready} ready to verify solved</span>
-              </span>
-            )}
-          </div>
+          {buckets.toClassify.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('classify')}
+              className="self-start sm:self-center inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-xs font-extrabold transition-colors"
+            >
+              <Inbox className="w-3.5 h-3.5" />
+              <span>{buckets.toClassify.length} waiting to classify</span>
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
           {Array.from({ length: maxTop }).map((_, slotIdx) => {
-            const prob = topConstraints[slotIdx];
+            const prob = topFocusProblems[slotIdx];
             if (!prob) {
               return (
                 <div
                   key={`slot_${slotIdx}`}
-                  className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col justify-between space-y-3 min-h-[132px]"
+                  className="p-4 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col justify-between space-y-3 min-h-[168px]"
                 >
                   <div className="flex items-center space-x-2">
                     <span className="w-6 h-6 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center font-mono text-xs font-extrabold text-slate-500">
                       #{slotIdx + 1}
                     </span>
                     <span className="text-xs font-semibold text-slate-500">
-                      Open Constraint Slot
+                      Open Focus Slot
                     </span>
                   </div>
 
@@ -568,100 +623,188 @@ export const ProblemsLedgerView: React.FC = () => {
                       onChange={e => {
                         if (e.target.value) {
                           updateProblem(e.target.value, {
+                            classified: true,
                             isTopConstraint: true,
                             scale: 'bottleneck'
                           });
                         }
                       }}
-                      className="w-full bg-slate-900 border border-slate-800 hover:border-rose-500/40 rounded-xl px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none"
+                      className="w-full bg-slate-900 border border-slate-800 hover:border-rose-500/40 rounded-xl px-2.5 py-2 text-xs text-slate-300 focus:outline-none"
                     >
-                      <option value="">+ Pin a constraint here...</option>
+                      <option value="">+ Pick a problem from Backlog...</option>
                       {pinnableCandidates.map(c => (
                         <option key={c.id} value={c.id}>
-                          [{SEVERITY_META[getProblemSeverity(c)].code}] {c.title}
+                          [{SEVERITY_VISUAL[getProblemSeverity(c)].word}] {c.title}
                         </option>
                       ))}
                     </select>
                   ) : (
                     <p className="text-[11px] text-slate-600">
-                      Log a constraint below and click the crosshair icon to pin it here.
+                      Classify a problem below, then pin your top {maxTop} battles here.
                     </p>
                   )}
                 </div>
               );
             }
 
-            const sev = SEVERITY_META[getProblemSeverity(prob)];
+            const sev = getProblemSeverity(prob);
+            const sevVis = SEVERITY_VISUAL[sev];
             const cat = resolveCategoryMeta(prob.category, problemCategories);
             const hits = getClusterTotalHits(problems, prob);
+            const notes = countClusterNotes(problems, prob);
             const ver = getFixVerificationProgress(prob, todayDate, defaultVerifyDays);
             const failed = Boolean(prob.lastFixFailedAt && prob.status === 'open');
+            const reminderText = getProblemReminderText(prob);
+            const actionText = getProblemActionText(prob);
+            const remActive = hasActiveReminder(prob);
+            const actActive = hasActiveAction(prob);
+            const noteToggleOn = shouldPromptNoteOnHit(prob);
+            const linkedRmId = resolveProblemRoadmapPlanId(prob, strategyPlans);
+            const linkedRm = linkedRmId ? strategyPlans.find(sp => sp.id === linkedRmId) : undefined;
 
             return (
               <div
                 key={prob.id}
-                className={`p-4 rounded-2xl bg-slate-950 border flex flex-col justify-between space-y-3 ${
-                  failed
-                    ? 'border-rose-500/45'
-                    : ver.readyToVerify
-                    ? 'border-emerald-500/45'
-                    : 'border-slate-800'
-                }`}
+                className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 transition-all ${sevVis.cardTintClass} ${sevVis.leftBarClass}`}
               >
-                <div className="space-y-2">
+                {/* Header & Title (Click opens Workbench directly!) */}
+                <div
+                  className="space-y-2.5 cursor-pointer"
+                  onClick={() =>
+                    setWorkbenchState({
+                      problemId: prob.id,
+                      initialTab: remActive || actActive ? 'solution' : 'observations'
+                    })
+                  }
+                >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center space-x-2">
-                      <span className="w-6 h-6 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/35 flex items-center justify-center font-mono text-xs font-extrabold shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-md bg-rose-500/20 text-rose-200 border border-rose-500/40 flex items-center justify-center font-mono text-[10px] font-extrabold shrink-0">
                         #{slotIdx + 1}
                       </span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-extrabold ${sev.badgeClass}`}
-                        title={`Severity ${sev.label}: ${sev.hint}`}
-                      >
-                        {sev.code}
+                      <span className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${sevVis.pillClass}`}>
+                        {sevVis.word}
                       </span>
-                      <span className="text-[11px] font-bold text-slate-400">{cat.shortLabel}</span>
-                      {hits > 1 && (
-                        <span className="font-mono text-[10px] font-bold text-orange-300">×{hits}</span>
-                      )}
+                      <span className="text-[11px] font-semibold text-slate-400">{cat.shortLabel}</span>
+                      <span className="font-mono text-[10px] text-slate-500">· {hits}×</span>
                     </div>
+
                     <button
                       type="button"
-                      onClick={() => updateProblem(prob.id, { isTopConstraint: false })}
+                      onClick={e => {
+                        e.stopPropagation();
+                        updateProblem(prob.id, { isTopConstraint: false });
+                      }}
                       className="p-1 text-slate-600 hover:text-slate-300"
-                      title="Unpin from Top Constraints"
+                      title="Move back to Backlog"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  <p className="text-xs sm:text-sm font-bold text-slate-100 leading-snug">
+                  <p className="text-sm font-extrabold text-slate-100 leading-snug">
                     {prob.title}
                   </p>
 
-                  {prob.fixNote?.trim() ? (
-                    <p className="text-[11px] text-slate-300 leading-snug">
-                      {prob.trigger?.trim() && (
-                        <span className="text-slate-400">
-                          <strong className="text-amber-400">IF</strong> {prob.trigger.trim()}{' '}
-                          <strong className="text-emerald-400">→</strong>{' '}
-                        </span>
-                      )}
-                      {prob.fixNote.trim()}
-                    </p>
-                  ) : (
-                    <p className="text-[11px] text-slate-500 italic">
-                      No countermeasure set yet — open below to diagnose &amp; install fix.
-                    </p>
+                  {linkedRm && (
+                    <div className="inline-flex items-center space-x-1 text-[10px] font-bold text-amber-300/90">
+                      <MapIcon className="w-3 h-3 shrink-0" />
+                      <span className="truncate max-w-[180px]">{linkedRm.title}</span>
+                    </div>
                   )}
+
+                  {/* Active Response Summary (Clear & Human) */}
+                  <div className="space-y-1.5 text-xs">
+                    {remActive && (
+                      <div className="flex items-start space-x-1.5 p-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-100">
+                        <Bell className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        <span className="leading-snug text-[11px]">
+                          {prob.trigger?.trim() && (
+                            <span className="text-amber-300/80 mr-1">When {prob.trigger.trim()} →</span>
+                          )}
+                          {reminderText || 'Reminder active'}
+                        </span>
+                      </div>
+                    )}
+
+                    {actActive && (
+                      <div className="flex items-start space-x-1.5 p-2 rounded-xl bg-sky-500/10 border border-sky-500/25 text-sky-100">
+                        <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                        <span className="leading-snug text-[11px]">
+                          {actionText || 'Action installed'}
+                          {(prob.dispatchedTo || []).length > 0 && (
+                            <span className="block text-[10px] text-emerald-300 font-semibold mt-0.5">
+                              In {(prob.dispatchedTo || []).map(d => DISPATCH_TARGET_LABELS[d]).join(', ')}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+
+                    {!remActive && !actActive && (
+                      <div className="flex items-center space-x-1.5 p-2 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-300">
+                        <Eye className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                        <span>
+                          Observing · {notes} {notes === 1 ? 'note' : 'notes'} — click to design solution
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Experiment Status Bar + Quick Verify / +1 */}
+                {/* Inline Hit-Note Input (when user clicked "Happened again" & note toggle is ON) */}
+                {topNoteOpenId === prob.id && (
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <input
+                      type="text"
+                      autoFocus
+                      value={topNoteDraft}
+                      onChange={e => setTopNoteDraft(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          commitTopHitNote(prob.id, topNoteDraft);
+                        }
+                        if (e.key === 'Escape') {
+                          setTopNoteOpenId(null);
+                          setTopNoteDraft('');
+                        }
+                      }}
+                      placeholder="What triggered it this time? (Enter)..."
+                      className="w-full bg-slate-950 border border-sky-500/45 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                    />
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => commitTopHitNote(prob.id)}
+                        className="px-2 py-1 rounded-lg text-[10px] font-bold text-slate-400 hover:text-slate-200"
+                      >
+                        Skip note
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => commitTopHitNote(prob.id, topNoteDraft)}
+                        className="px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-[10px] font-extrabold"
+                      >
+                        Save Note
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Progress / Alerts + Plain Actions */}
                 <div className="space-y-2 pt-2 border-t border-slate-800/80">
                   {failed && (
                     <div className="text-[10px] font-bold text-rose-300 flex items-center space-x-1">
                       <AlertTriangle className="w-3 h-3 shrink-0" />
-                      <span>Fix failed on {prob.lastFixFailedAt} — needs stronger fix</span>
+                      <span>Slipped on {prob.lastFixFailedAt?.slice(5)} — open to adjust</span>
+                    </div>
+                  )}
+
+                  {prob.fixTaskCompletedAt && (
+                    <div className="text-[10px] font-bold text-emerald-300 flex items-center space-x-1">
+                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                      <span>Fix task completed ({prob.fixTaskCompletedAt.slice(5)})</span>
                     </div>
                   )}
 
@@ -669,7 +812,7 @@ export const ProblemsLedgerView: React.FC = () => {
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[10px] font-mono">
                         <span className={ver.readyToVerify ? 'text-emerald-300 font-bold' : 'text-sky-300'}>
-                          {ver.readyToVerify ? '✓ Ready to verify solved' : `Testing · ${ver.daysClean}/${ver.targetDays}d clean`}
+                          {ver.readyToVerify ? '✓ Ready to resolve' : `${ver.daysClean}/${ver.targetDays}d clean`}
                         </span>
                         <span className="text-slate-500">{ver.pct}%</span>
                       </div>
@@ -682,33 +825,63 @@ export const ProblemsLedgerView: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        recordProblemRecurrence(prob.id, {
-                          date: selectedDate,
-                          sourceType: 'daily',
-                          sourceRef: selectedDate
-                        })
-                      }
-                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-orange-500/15 text-orange-300 border border-slate-800 hover:border-orange-500/40 text-[10px] font-extrabold transition-colors"
-                    >
-                      +1 Fired
-                    </button>
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleTopHit(prob)}
+                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                          topLoggedId === prob.id
+                            ? 'bg-orange-500 text-slate-950 border-orange-400'
+                            : 'bg-slate-900 hover:bg-orange-500/15 text-orange-300 border-slate-800 hover:border-orange-500/40'
+                        }`}
+                      >
+                        {topLoggedId === prob.id ? 'Logged ✓' : 'Happened again'}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => updateProblem(prob.id, { status: 'solved' })}
-                      className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-colors ${
-                        ver.readyToVerify
-                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                          : 'bg-slate-900 hover:bg-emerald-500/15 text-emerald-300 border-slate-800 hover:border-emerald-500/35'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-3 h-3" />
-                      <span>Verify Solved</span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => updateProblem(prob.id, { promptNoteOnHit: !noteToggleOn })}
+                        title={
+                          noteToggleOn
+                            ? 'Detail notes ON (default for Top 3) — click to turn OFF'
+                            : 'Detail notes OFF — click to ask for a 1-line note on each hit'
+                        }
+                        className={`inline-flex items-center space-x-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-colors ${
+                          noteToggleOn
+                            ? 'bg-sky-500/15 text-sky-300 border-sky-500/35'
+                            : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
+                        }`}
+                      >
+                        <MessageSquarePlus className="w-3 h-3" />
+                        <span>{noteToggleOn ? 'ON' : 'OFF'}</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setWorkbenchState({
+                            problemId: prob.id,
+                            initialTab: remActive || actActive ? 'solution' : 'observations'
+                          })
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-bold"
+                      >
+                        Open
+                      </button>
+
+                      {ver.readyToVerify && (
+                        <button
+                          type="button"
+                          onClick={() => updateProblem(prob.id, { status: 'solved', classified: true })}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-extrabold"
+                        >
+                          Resolve
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -718,165 +891,93 @@ export const ProblemsLedgerView: React.FC = () => {
       </div>
 
       {/* ================================================================ */}
-      {/* 2. CLEAN WORKSPACE: 1-LINE CAPTURE + 3 TABS + OPTIONAL DRAWERS   */}
+      {/* 2. ZERO-FRICTION CAPTURE + 3 CLEAR TABS (NO DUPLICATES!)         */}
       {/* ================================================================ */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-        {/* Clean 1-Line Quick Capture */}
-        <form onSubmit={handleQuickLog} className="space-y-2.5">
+        {/* Pure 1-Line Capture (Classify Later!) */}
+        <form onSubmit={handleQuickCapture} className="space-y-2">
           <div className="flex items-center gap-2">
             <input
               type="text"
               value={quickTitle}
-              onFocus={() => setComposerExpanded(true)}
               onChange={e => setQuickTitle(e.target.value)}
-              placeholder="Capture a constraint or quick slip (press Enter)..."
+              placeholder="Record something that got in your way (press Enter — classify later)..."
               className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
             />
             <button
               type="submit"
               disabled={!quickTitle.trim()}
-              className="inline-flex items-center space-x-1 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0 transition-colors"
+              className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-extrabold text-xs shrink-0 transition-colors"
             >
               <Plus className="w-4 h-4" />
-              <span>Log</span>
+              <span>Record</span>
             </button>
           </div>
-
-          {(composerExpanded || quickTitle.trim().length > 0) && (
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px]">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setQuickKind('constraint')}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                      quickKind === 'constraint'
-                        ? 'bg-amber-500/20 text-amber-300'
-                        : 'text-slate-500 hover:text-slate-300'
-                    }`}
-                  >
-                    Root Constraint
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setQuickKind('slip')}
-                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                      quickKind === 'slip'
-                        ? 'bg-slate-800 text-slate-100'
-                        : 'text-slate-500 hover:text-slate-300'
-                    }`}
-                  >
-                    Quick Slip (Inbox)
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-0.5">
-                    Severity:
-                  </span>
-                  {PROBLEM_SEVERITIES.map(sv => (
-                    <button
-                      key={sv.grade}
-                      type="button"
-                      onClick={() => setQuickSeverity(sv.grade)}
-                      title={`${sv.label}: ${sv.hint}`}
-                      className={`px-2 py-0.5 rounded-lg border font-mono text-[10px] font-extrabold transition-all ${
-                        quickSeverity === sv.grade
-                          ? sv.activeChipClass
-                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                      }`}
-                    >
-                      {sv.code}
-                    </button>
-                  ))}
-                </div>
-
-                <select
-                  value={quickCategory}
-                  onChange={e => setQuickCategory(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-300 focus:outline-none"
-                >
-                  {problemCategories.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {!quickTitle.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setComposerExpanded(false)}
-                  className="text-slate-500 hover:text-slate-300 font-bold"
-                >
-                  Hide options
-                </button>
-              )}
-            </div>
+          {captureNotice && (
+            <p className="text-xs font-semibold text-emerald-300 pl-1">✓ {captureNotice}</p>
           )}
         </form>
 
-        {/* SINGLE CLEAN TAB BAR + FILTERS & CUSTOMIZE TOGGLES */}
+        {/* Clean 3-Tab Bar: To Classify | Backlog | Resolved */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t border-slate-800/80">
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-2xl border border-slate-800">
               <button
                 type="button"
-                onClick={() => setActiveTab('constraints')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  effectiveTab === 'constraints'
+                onClick={() => setActiveTab('classify')}
+                className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'classify'
                     ? 'bg-amber-500 text-slate-950'
+                    : buckets.toClassify.length > 0
+                    ? 'text-amber-300 hover:text-amber-200'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Active Constraints ({buckets.constraints.length})
+                <Inbox className="w-3.5 h-3.5" />
+                <span>To Classify ({buckets.toClassify.length})</span>
               </button>
-
-              {separateInbox && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('inbox')}
-                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    effectiveTab === 'inbox'
-                      ? 'bg-slate-200 text-slate-950'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Inbox className="w-3.5 h-3.5" />
-                  <span>Inbox / Slips ({buckets.inbox.length})</span>
-                </button>
-              )}
 
               <button
                 type="button"
-                onClick={() => setActiveTab('solved')}
+                onClick={() => setActiveTab('backlog')}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  effectiveTab === 'solved'
+                  activeTab === 'backlog'
+                    ? 'bg-slate-100 text-slate-950'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Backlog ({buckets.backlog.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('resolved')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'resolved'
                     ? 'bg-emerald-500 text-slate-950'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Solved ({buckets.solved.length})
+                Resolved ({buckets.resolved.length})
               </button>
             </div>
 
-            {effectiveTab === 'constraints' && (
+            {activeTab === 'backlog' && (
               <div className="flex items-center gap-1 text-[11px]">
                 {(
                   [
                     { id: 'all', label: 'All' },
-                    { id: 'open', label: 'Needs Fix' },
-                    { id: 'testing', label: 'Testing' },
-                    { id: 'guardrails', label: 'Guardrails' }
+                    { id: 'observing', label: 'Observing' },
+                    { id: 'reminder', label: 'Reminders' },
+                    { id: 'action', label: 'Actions' }
                   ] as const
                 ).map(st => (
                   <button
                     key={st.id}
                     type="button"
-                    onClick={() => setSubStatus(st.id)}
+                    onClick={() => setResponseFilter(st.id)}
                     className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
-                      subStatus === st.id
+                      responseFilter === st.id
                         ? 'bg-slate-800 text-slate-100'
                         : 'text-slate-500 hover:text-slate-300'
                     }`}
@@ -917,8 +1018,8 @@ export const ProblemsLedgerView: React.FC = () => {
           </div>
         </div>
 
-        {/* SLIM ROOT-CAUSE BREAKDOWN BAR (Optional, clickable to filter) */}
-        {showBreakdownBar && breakdown.total > 0 && (
+        {/* SLIM ROOT-CAUSE BREAKDOWN BAR (Shown in Backlog when enabled) */}
+        {activeTab === 'backlog' && showBreakdownBar && breakdown.total > 0 && (
           <div className="space-y-2">
             <div className="h-2 w-full rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex">
               {problemCategories.map(c => {
@@ -987,7 +1088,7 @@ export const ProblemsLedgerView: React.FC = () => {
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search titles, root causes, triggers, fixes, tags..."
+                  placeholder="Search problems, reminders, actions, notes, tags..."
                   className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500/40 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none"
                 />
               </div>
@@ -997,11 +1098,10 @@ export const ProblemsLedgerView: React.FC = () => {
                 onChange={e => setSeverityFilter(e.target.value)}
                 className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none"
               >
-                <option value="all">Severity: All (S1–S5)</option>
-                <option value="4+">Severe &amp; Critical (S4–S5)</option>
-                <option value="5">Critical Only (S5)</option>
-                <option value="3">Moderate (S3)</option>
-                <option value="1-2">Minor &amp; Low (S1–S2)</option>
+                <option value="all">Severity: All</option>
+                <option value="4+">Critical &amp; Severe</option>
+                <option value="3">Moderate</option>
+                <option value="1-2">Low &amp; Minor</option>
               </select>
 
               <select
@@ -1009,8 +1109,8 @@ export const ProblemsLedgerView: React.FC = () => {
                 onChange={e => setSortBy(e.target.value as LedgerSort)}
                 className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none"
               >
-                <option value="priority">Sort: Severity &amp; Priority</option>
-                <option value="frequency">Sort: Most Frequent (×N)</option>
+                <option value="severity">Sort: Severity Tiers</option>
+                <option value="frequency">Sort: Most Frequent</option>
                 <option value="recent">Sort: Most Recent</option>
               </select>
 
@@ -1070,14 +1170,14 @@ export const ProblemsLedgerView: React.FC = () => {
           </div>
         )}
 
-        {/* COLLAPSIBLE CUSTOMIZE PANEL (Custom Categories + Settings — Cloud Synced!) */}
+        {/* COLLAPSIBLE CUSTOMIZE PANEL */}
         {showCustomize && (
           <div className="p-5 rounded-2xl bg-slate-950 border border-slate-700 space-y-5 text-xs">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
                 <div className="font-extrabold text-sm text-slate-100">Customize Problem Log</div>
                 <p className="text-[11px] text-slate-400">
-                  Tailor your categories, Top Constraints limit, verification window, and pre-flight guardrail strips.
+                  Configure your Top Focus limit, verification window, where Reminders appear, and custom categories.
                 </p>
               </div>
               <button
@@ -1089,11 +1189,10 @@ export const ProblemsLedgerView: React.FC = () => {
               </button>
             </div>
 
-            {/* Behavior & View Settings */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-slate-300">Max Top Constraints</span>
+                  <span className="font-bold text-slate-300">Max Top Focus Slots</span>
                   <div className="flex items-center gap-1">
                     {[1, 2, 3, 4, 5].map(n => (
                       <button
@@ -1141,19 +1240,19 @@ export const ProblemsLedgerView: React.FC = () => {
                     val: showBreakdownBar
                   },
                   {
-                    key: 'separateInboxTab' as const,
-                    label: 'Separate Inbox / Slips tab from Active Constraints',
-                    val: separateInbox
-                  },
-                  {
                     key: 'showPreFlightInDaily' as const,
-                    label: 'Show Pre-Flight Guardrails strip in Daily Plan',
+                    label: 'Show Reminders at top of Daily Plan',
                     val: problemSettings.showPreFlightInDaily !== false
                   },
                   {
                     key: 'showPreFlightInGws' as const,
-                    label: 'Show Pre-Flight Guardrails strip in GWS Studio',
+                    label: 'Show Reminders before GWS sprints',
                     val: problemSettings.showPreFlightInGws !== false
+                  },
+                  {
+                    key: 'showPreFlightInWeekly' as const,
+                    label: 'Show Reminders at top of Weekly Plan',
+                    val: problemSettings.showPreFlightInWeekly !== false
                   }
                 ].map(toggle => (
                   <label
@@ -1178,7 +1277,7 @@ export const ProblemsLedgerView: React.FC = () => {
             <div className="space-y-2.5 pt-3 border-t border-slate-800">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-                  Custom Problem Categories ({problemCategories.length})
+                  Custom Categories ({problemCategories.length})
                 </span>
                 <button
                   type="button"
@@ -1275,7 +1374,7 @@ export const ProblemsLedgerView: React.FC = () => {
                   type="text"
                   value={newCatLabel}
                   onChange={e => setNewCatLabel(e.target.value)}
-                  placeholder="New category (e.g. Risk Rules, Environment, Sales)..."
+                  placeholder="New category..."
                   className="sm:w-52 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 placeholder-slate-500 focus:outline-none"
                 />
                 <input
@@ -1308,49 +1407,74 @@ export const ProblemsLedgerView: React.FC = () => {
           </div>
         )}
 
-        {/* INBOX GUIDANCE LINE */}
-        {effectiveTab === 'inbox' && buckets.inbox.length > 0 && (
-          <div className="px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 flex items-center space-x-2">
-            <Inbox className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+        {/* TO CLASSIFY GUIDANCE */}
+        {activeTab === 'classify' && buckets.toClassify.length > 0 && (
+          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/25 text-xs text-slate-300 flex items-center space-x-2">
+            <Inbox className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              Fast 10-second triage: <strong className="text-amber-300">Merge</strong> related slips into a Root Constraint,{' '}
-              <strong className="text-slate-200">Promote</strong> a recurring slip to its own Root Constraint, or{' '}
-              <strong className="text-slate-200">Dismiss</strong> one-off noise.
+              End-of-day / weekly triage: click <strong className="text-amber-300">Classify</strong> to rate how bad it is &amp; choose a response, <strong className="text-slate-100">Merge into</strong> an existing problem, or <strong className="text-slate-100">Discard</strong> one-off noise.
             </span>
           </div>
         )}
 
-        {/* PROBLEM LIST */}
+        {/* LIST CONTENT */}
         {displayedList.length === 0 ? (
           <div className="p-10 rounded-2xl bg-slate-950/60 border border-dashed border-slate-800 text-center space-y-2">
-            {effectiveTab === 'inbox' ? (
+            {activeTab === 'classify' ? (
               <>
                 <CheckCircle2 className="w-7 h-7 text-emerald-500/70 mx-auto" />
-                <p className="text-sm font-bold text-slate-300">Inbox clear</p>
+                <p className="text-sm font-bold text-slate-300">Nothing waiting to classify</p>
                 <p className="text-xs text-slate-500">
-                  Quick slips captured during GWS sprints and Daily Reviews land here for fast triage.
+                  Quick raw notes captured during Daily, GWS, or Reviews land here so you can classify them calmly later.
                 </p>
               </>
-            ) : effectiveTab === 'solved' ? (
+            ) : activeTab === 'resolved' ? (
               <>
                 <Shield className="w-7 h-7 text-slate-600 mx-auto" />
-                <p className="text-sm font-bold text-slate-400">No verified solved problems yet</p>
+                <p className="text-sm font-bold text-slate-400">No resolved problems yet</p>
                 <p className="text-xs text-slate-500">
-                  Once a countermeasure holds through its verification window, verify it solved to archive it here.
+                  Once a solution holds and you mark a problem Resolved, it moves here as proof of what worked.
                 </p>
               </>
             ) : (
               <>
                 <AlertTriangle className="w-7 h-7 text-slate-600 mx-auto" />
-                <p className="text-sm font-bold text-slate-400">No matching constraints</p>
+                <p className="text-sm font-bold text-slate-400">Backlog clear</p>
                 <p className="text-xs text-slate-500">
-                  Log a constraint above, or promote a slip from Inbox.
+                  {topFocusProblems.length > 0
+                    ? 'All your active classified problems are already in your Top Focus above.'
+                    : 'Record a problem above or classify raw captures from "To Classify".'}
                 </p>
               </>
             )}
           </div>
+        ) : backlogTierGroups ? (
+          <div className="space-y-5">
+            {backlogTierGroups.map(tier => (
+              <div key={tier.id} className="space-y-2">
+                <div className="flex items-center space-x-2 px-1">
+                  <span className={`w-2 h-2 rounded-full ${tier.dotCls}`} />
+                  <span className={`text-[11px] font-extrabold uppercase tracking-wider ${tier.textCls}`}>
+                    {tier.label} ({tier.items.length})
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {tier.items.map(prob => (
+                    <ProblemItemRow
+                      key={prob.id}
+                      problem={prob}
+                      contextDate={selectedDate}
+                      contextSourceType="daily"
+                      targetWeekId={selectedWeekId}
+                      onOpenWorkbench={(id, tab) => setWorkbenchState({ problemId: id, initialTab: tab })}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             {displayedList.map(prob => (
               <ProblemItemRow
                 key={prob.id}
@@ -1359,12 +1483,25 @@ export const ProblemsLedgerView: React.FC = () => {
                 contextSourceType="daily"
                 targetWeekId={selectedWeekId}
                 showParentBreadcrumb={searchQuery.trim().length > 0}
-                inboxMode={effectiveTab === 'inbox'}
+                inboxMode={activeTab === 'classify'}
+                onOpenWorkbench={(id, tab) => setWorkbenchState({ problemId: id, initialTab: tab })}
               />
             ))}
           </div>
         )}
       </div>
+
+      {/* FOCUSED SINGLE-PROBLEM WORKBENCH MODAL */}
+      {workbenchState && (
+        <ProblemWorkbenchModal
+          problemId={workbenchState.problemId}
+          initialTab={workbenchState.initialTab}
+          contextDate={selectedDate}
+          contextSourceType="daily"
+          targetWeekId={selectedWeekId}
+          onClose={() => setWorkbenchState(null)}
+        />
+      )}
     </div>
   );
 };
