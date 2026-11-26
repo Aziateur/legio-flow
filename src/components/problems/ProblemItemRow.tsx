@@ -8,6 +8,7 @@ import {
   getEligibleClusterTargets,
   getLastOccurrenceDate,
   getProblemActionText,
+  getProblemNextActionCta,
   getProblemReminderText,
   getProblemSeverity,
   getSolutionTestingSummary,
@@ -139,6 +140,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
     () => problems.filter(p => p.isTopConstraint && p.status !== 'solved').length,
     [problems]
   );
+  const nextCta = getProblemNextActionCta(problem, testingSummary);
 
   const openWorkbench = (tab?: WorkbenchTab) => {
     const resolvedTab: WorkbenchTab =
@@ -519,7 +521,7 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                       }`}
                     >
                       <MessageSquarePlus className="w-3 h-3" />
-                      <span>{promptNoteActive ? 'Note: ON' : 'Note: OFF'}</span>
+                      <span>{promptNoteActive ? 'Ask note: ON' : 'Ask note: OFF'}</span>
                     </button>
                   )}
 
@@ -547,12 +549,22 @@ export const ProblemItemRow: React.FC<ProblemItemRowProps> = ({
                     </button>
                   )}
 
+                  {testingSummary.readyToResolve && (
+                    <button
+                      type="button"
+                      onClick={() => updateProblem(problem.id, { status: 'solved', classified: true })}
+                      className="px-2.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold transition-colors"
+                    >
+                      Resolve ✓
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => openWorkbench()}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold transition-colors"
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ${nextCta.buttonClass}`}
                   >
-                    Open
+                    {nextCta.label}
                   </button>
                   {confirmDelete ? (
                     <div className="inline-flex items-center gap-1">

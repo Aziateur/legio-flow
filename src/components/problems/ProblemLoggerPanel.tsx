@@ -151,6 +151,19 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
   const [inlineNoteDraft, setInlineNoteDraft] = useState('');
   const [inlineSolutionDraft, setInlineSolutionDraft] = useState('');
   const [inlineRestartTest, setInlineRestartTest] = useState(false);
+  const [rowFlashById, setRowFlashById] = useState<Record<string, string>>({});
+
+  const flashRow = (id: string, msg: string) => {
+    setRowFlashById(prev => ({ ...prev, [id]: msg }));
+    setTimeout(() => {
+      setRowFlashById(prev => {
+        if (prev[id] !== msg) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }, 1800);
+  };
 
   const [workbenchState, setWorkbenchState] = useState<{
     problemId: string;
@@ -339,6 +352,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
     const trimmed = inlineNoteDraft.trim();
     if (!trimmed) return;
     noteProblemTweak(prob.id, trimmed, { date });
+    flashRow(prob.id, '✓ Tweak idea saved');
     closeInlineDrawer();
   };
 
@@ -352,12 +366,14 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       restartTest: inlineRestartTest,
       date: todayDate
     });
+    flashRow(prob.id, '✓ Fix revised');
     closeInlineDrawer();
   };
 
   const handleCheckInFailed = (prob: ProblemEntry) => {
     if (getProblemCheckInForDate(prob, date) === 'failed') {
       recordProblemCheckIn(prob.id, null, { date, sourceType, sourceRef });
+      flashRow(prob.id, '↺ Undone');
       if (inlineDrawer?.problemId === prob.id) closeInlineDrawer();
       return;
     }
@@ -375,6 +391,7 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       sourceType,
       ...(sourceRef ? { sourceRef } : {})
     });
+    flashRow(prob.id, 'Logged Failed');
   };
 
   const commitPromptedNote = (note?: string) => {
@@ -635,7 +652,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
       {!collapsed && (
         <div className="p-4 space-y-4">
           {/* SECTION A: ACTIVE SOLUTIONS — DAILY CHECK-IN OR WEEKLY ROLLUP */}
-          {activeFixesToCheck.length > 0 && (
+          {activeFixesToCheck.length > 0 && (() => {
+            const checkedInCount = activeFixesToCheck.filter(p =>
+              Boolean(getProblemCheckInForDate(p, date))
+            ).length;
+            const allCheckedIn = checkedInCount === activeFixesToCheck.length;
+            return (
             <div className="p-3.5 rounded-2xl bg-slate-900/75 border border-slate-800 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center space-x-1.5">
@@ -646,11 +668,26 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                       : `Testing Active Solutions (${activeFixesToCheck.length})`}
                   </span>
                 </span>
-                <span className="text-[10px] text-slate-500">
-                  {isWeeklyRollup
-                    ? 'Weekly rollup of your daily check-ins — decide what to keep, revise, or resolve.'
-                    : "Mark today's outcome, or jot a tweak without losing your check-in."}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!isWeeklyRollup && (
+                    <span
+                      className={`px-2 py-0.5 rounded-full border font-mono text-[10px] font-bold ${
+                        allCheckedIn
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                          : 'bg-slate-950 text-slate-300 border-slate-700'
+                      }`}
+                    >
+                      {allCheckedIn
+                        ? `✓ All checked in (${checkedInCount}/${activeFixesToCheck.length})`
+                        : `${checkedInCount} / ${activeFixesToCheck.length} checked in`}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-slate-500">
+                    {isWeeklyRollup
+                      ? 'Weekly rollup of your daily check-ins — decide what to keep, revise, or resolve.'
+                      : "Mark today's outcome, or jot a tweak without losing your check-in."}
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -660,12 +697,14 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                   const act = getProblemActionText(p);
                   const checkInEntry = (p.checkIns || []).find(c => c.date === date);
                   const verdict = getProblemCheckInForDate(p, date);
+                  const rowFlash = rowFlashById[p.id];
                   const weekStats =
                     isWeeklyRollup && dateRange
                       ? getSolutionPeriodSummary(p, dateRange.startDate, dateRange.endDate)
                       : null;
                   const drawerMode =
                     inlineDrawer?.problemId === p.id ? inlineDrawer.mode : null;
+                  const isDoneDimmed = !isWeeklyRollup && Boolean(verdict) && !drawerMode;
                   const linkedActs = resolveProblemLinkedActions(
                     p.id,
                     weeklyPlans,
@@ -677,7 +716,9 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                   return (
                     <div
                       key={p.id}
-                      className="p-3 rounded-xl bg-slate-950 border border-slate-800/90 text-xs space-y-2.5"
+                      className={`p-3 rounded-xl bg-slate-950 border border-slate-800/90 hover:border-slate-700 text-xs space-y-2.5 transition-all ${
+                        isDoneDimmed ? 'opacity-75 hover:opacity-100' : ''
+                      }`}
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
                         <button
@@ -710,6 +751,14 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                                 {la.detail}
                               </span>
                             ))}
+                            {rowFlash ? (
+                              <span className="text-emerald-300 font-bold">{rowFlash}</span>
+                            ) : (
+                              !isWeeklyRollup &&
+                              verdict && (
+                                <span className="text-slate-400 font-semibold">· ✓ Checked in</span>
+                              )
+                            )}
                           </div>
                           {weekStats && (
                             <div className="pl-5 text-[10px] font-mono text-slate-400">
@@ -800,13 +849,16 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                             <div className="inline-flex items-center rounded-xl bg-slate-900 border border-slate-800 p-0.5">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  recordProblemCheckIn(
+                                onClick={() => {
+                                  const nextOutcome = verdict === 'effective' ? null : 'effective';
+                                  recordProblemCheckIn(p.id, nextOutcome, { date, sourceType, sourceRef });
+                                  flashRow(
                                     p.id,
-                                    verdict === 'effective' ? null : 'effective',
-                                    { date, sourceType, sourceRef }
-                                  )
-                                }
+                                    nextOutcome
+                                      ? `✓ ${testing.effectiveCount + 1}/${testing.targetCount}× worked`
+                                      : '↺ Cleared'
+                                  );
+                                }}
                                 title={
                                   verdict === 'effective'
                                     ? 'Click to clear today’s check-in'
@@ -824,13 +876,12 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
 
                               <button
                                 type="button"
-                                onClick={() =>
-                                  recordProblemCheckIn(
-                                    p.id,
-                                    verdict === 'not_triggered' ? null : 'not_triggered',
-                                    { date, sourceType, sourceRef }
-                                  )
-                                }
+                                onClick={() => {
+                                  const nextOutcome =
+                                    verdict === 'not_triggered' ? null : 'not_triggered';
+                                  recordProblemCheckIn(p.id, nextOutcome, { date, sourceType, sourceRef });
+                                  flashRow(p.id, nextOutcome ? '✓ Logged quiet' : '↺ Cleared');
+                                }}
                                 title={
                                   verdict === 'not_triggered'
                                     ? 'Click to clear today’s check-in'
@@ -876,15 +927,19 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                                 }
                               }}
                               title="Jot a tweak idea or revise active solution"
-                              className={`inline-flex items-center px-2 py-1.5 rounded-lg border text-[11px] font-bold transition-colors ${
-                                Boolean(checkInEntry?.tweakNote) ||
-                                drawerMode === 'tweak_idea' ||
-                                drawerMode === 'revise'
+                              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                                drawerMode === 'tweak_idea' || drawerMode === 'revise'
                                   ? 'bg-violet-500 text-slate-950 border-violet-400'
+                                  : checkInEntry?.tweakNote
+                                  ? 'bg-violet-500/20 text-violet-200 border-violet-500/40'
                                   : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
                               }`}
                             >
                               <Pencil className="w-3 h-3" />
+                              <span>Tweak</span>
+                              {checkInEntry?.tweakNote && drawerMode !== 'tweak_idea' && drawerMode !== 'revise' && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+                              )}
                             </button>
 
                             {testing.state === 'failed' && (
@@ -1086,7 +1141,8 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                 })}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* SECTION B: CHECK IN ON ACTIVELY OBSERVED PROBLEMS */}
           {observingToCheck.length > 0 && (
@@ -1115,10 +1171,13 @@ export const ProblemLoggerPanel: React.FC<ProblemLoggerPanelProps> = ({
                   const verdict = getProblemCheckInForDate(p, date);
                   const isClueDrawerOpen =
                     inlineDrawer?.problemId === p.id && inlineDrawer.mode === 'clue';
+                  const isObsDimmed = !isWeeklyRollup && verdict === 'not_triggered' && !isClueDrawerOpen;
                   return (
                     <div
                       key={p.id}
-                      className="p-3 rounded-xl bg-slate-950 border border-slate-800/90 text-xs space-y-2"
+                      className={`p-3 rounded-xl bg-slate-950 border border-slate-800/90 hover:border-slate-700 text-xs space-y-2 transition-all ${
+                        isObsDimmed ? 'opacity-75 hover:opacity-100' : ''
+                      }`}
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
                         <button

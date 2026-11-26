@@ -299,7 +299,7 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                   return (
                     <div
                       key={item.id}
-                      className={`space-y-2 p-3 rounded-xl bg-slate-950 border border-slate-800/90 ${sevVis.leftBarClass}`}
+                      className={`space-y-2 p-3 rounded-xl bg-slate-950 border border-slate-800/90 hover:border-slate-700 transition-colors ${sevVis.leftBarClass}`}
                     >
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                         <button
@@ -388,13 +388,14 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                             type="button"
                             onClick={() => handleTweakClick(item.id)}
                             title="Jot a tweak idea or edit active fix"
-                            className={`inline-flex items-center px-2 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                            className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
                               Boolean(checkInEntry?.tweakNote) || isTweakOpenForThis
                                 ? 'bg-violet-500 text-slate-950 border-violet-400'
                                 : 'bg-slate-900 hover:bg-violet-500/15 text-violet-300 border-slate-800'
                             }`}
                           >
                             <Pencil className="w-3 h-3" />
+                            <span>Tweak</span>
                           </button>
                         </div>
                       </div>
@@ -555,7 +556,7 @@ export const PreFlightGuardrailsStrip: React.FC<PreFlightGuardrailsStripProps> =
                   return (
                     <div
                       key={item.id}
-                      className={`space-y-2 p-3 rounded-xl bg-slate-950 border border-sky-500/25 ${sevVis.leftBarClass}`}
+                      className={`space-y-2 p-3 rounded-xl bg-slate-950 border border-sky-500/25 hover:border-sky-500/50 transition-colors ${sevVis.leftBarClass}`}
                     >
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                         <button

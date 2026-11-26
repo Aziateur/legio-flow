@@ -822,7 +822,7 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
               />
 
               {isClassified && (
-                <ProblemPulseBar problem={problem} allProblems={problems} todayDate={todayDate} />
+                <ProblemPulseBar problem={problem} allProblems={problems} todayDate={todayDate} showLegend />
               )}
             </div>
 
@@ -963,15 +963,28 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                           handleToggleWatching();
                           if (!watchingActive) setObservingExpanded(true);
                         }}
-                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-                          watchingActive ? 'bg-sky-500' : 'bg-slate-700'
-                        }`}
+                        className="flex items-center gap-2 shrink-0"
                       >
                         <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            watchingActive ? 'translate-x-6' : 'translate-x-1'
+                          className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${
+                            watchingActive
+                              ? 'bg-sky-500/15 text-sky-300 border-sky-500/35'
+                              : 'bg-slate-900 text-slate-500 border-slate-800'
                           }`}
-                        />
+                        >
+                          {watchingActive ? 'Watching' : 'Off'}
+                        </span>
+                        <span
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            watchingActive ? 'bg-sky-500' : 'bg-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              watchingActive ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </span>
                       </button>
                     </div>
 
@@ -1049,15 +1062,28 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                       role="switch"
                       aria-checked={reminderActive}
                       onClick={() => handleSaveReminder(!reminderActive)}
-                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-                        reminderActive ? 'bg-amber-500' : 'bg-slate-700'
-                      }`}
+                      className="flex items-center gap-2 shrink-0"
                     >
                       <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          reminderActive ? 'translate-x-6' : 'translate-x-1'
+                        className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${
+                          reminderActive
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                            : 'bg-slate-900 text-slate-500 border-slate-800'
                         }`}
-                      />
+                      >
+                        {reminderActive ? 'Live in Pre-Flight' : 'Off'}
+                      </span>
+                      <span
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          reminderActive ? 'bg-amber-500' : 'bg-slate-700'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            reminderActive ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </span>
                     </button>
                   </div>
 
@@ -1121,6 +1147,21 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                         </p>
                       </div>
                     </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-full border text-[10px] font-bold shrink-0 ${
+                        linkedActions.length > 0
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                          : actionActive
+                          ? 'bg-sky-500/15 text-sky-300 border-sky-500/35'
+                          : 'bg-slate-900 text-slate-500 border-slate-800'
+                      }`}
+                    >
+                      {linkedActions.length > 0
+                        ? `Linked (${linkedActions.length})`
+                        : actionActive
+                        ? 'Active'
+                        : 'None yet'}
+                    </span>
                   </div>
 
                   {linkedActions.length > 0 && (
@@ -1174,30 +1215,35 @@ export const ProblemWorkbenchModal: React.FC<ProblemWorkbenchModalProps> = ({
                     className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500/50 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-600 focus:outline-none"
                   />
 
-                  <div className="flex flex-wrap gap-1.5">
-                    {ACTION_DESTINATIONS.map(dest => {
-                      const alreadySent = (problem.dispatchedTo || []).includes(dest.target);
-                      return (
-                        <button
-                          key={dest.target}
-                          type="button"
-                          onClick={() => handleDispatchAction(dest.target)}
-                          title={dest.hint}
-                          className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
-                            alreadySent
-                              ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-200'
-                              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-sky-500/40 text-slate-200'
-                          }`}
-                        >
-                          {alreadySent ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
-                          ) : (
-                            <Send className="w-3 h-3 text-sky-400" />
-                          )}
-                          <span>{alreadySent ? `In ${dest.label}` : dest.label}</span>
-                        </button>
-                      );
-                    })}
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Send this action to:
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ACTION_DESTINATIONS.map(dest => {
+                        const alreadySent = (problem.dispatchedTo || []).includes(dest.target);
+                        return (
+                          <button
+                            key={dest.target}
+                            type="button"
+                            onClick={() => handleDispatchAction(dest.target)}
+                            title={dest.hint}
+                            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
+                              alreadySent
+                                ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-200'
+                                : 'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-sky-500/40 text-slate-200'
+                            }`}
+                          >
+                            {alreadySent ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Send className="w-3 h-3 text-sky-400" />
+                            )}
+                            <span>{alreadySent ? `In ${dest.label}` : dest.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               );

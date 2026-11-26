@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   CustomProblemCategory,
   ProblemColorKey,
@@ -14,6 +14,7 @@ import {
   getClusterTotalHits,
   getLastOccurrenceDate,
   getProblemActionText,
+  getProblemNextActionCta,
   getProblemReminderText,
   getProblemSeverity,
   getSolutionTestingSummary,
@@ -39,6 +40,7 @@ import { ProblemWorkbenchModal, WorkbenchTab } from './ProblemWorkbenchModal';
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Bell,
   CheckCircle2,
@@ -111,9 +113,11 @@ export const ProblemsLedgerView: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
 
-  // Zero-friction 1-line raw capture
+  // Zero-friction 1-line raw capture + section scroll refs
   const [quickTitle, setQuickTitle] = useState('');
   const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const quickInputRef = useRef<HTMLInputElement>(null);
+  const tabsSectionRef = useRef<HTMLDivElement>(null);
 
   // Top 3 inline 1-line hit note state (keyed by problem.id)
   const [topNoteOpenId, setTopNoteOpenId] = useState<string | null>(null);
@@ -194,6 +198,37 @@ export const ProblemsLedgerView: React.FC = () => {
       ),
     [buckets.backlog, problems]
   );
+
+  const loopMetrics = useMemo(() => {
+    let testingActiveCount = 0;
+    let failedSolutionCount = 0;
+    let watchingOnlyCount = 0;
+    let readyToResolveCount = 0;
+    let firstReadyProblemId: string | null = null;
+
+    topLevelProblems.forEach(p => {
+      if (p.status === 'solved') return;
+      const summary = getSolutionTestingSummary(p, defaultVerifyTarget);
+      if (summary.hasSolution) {
+        testingActiveCount += 1;
+        if (summary.state === 'failed') failedSolutionCount += 1;
+        if (summary.readyToResolve) {
+          readyToResolveCount += 1;
+          if (!firstReadyProblemId) firstReadyProblemId = p.id;
+        }
+      } else if (isProblemWatching(p)) {
+        watchingOnlyCount += 1;
+      }
+    });
+
+    return {
+      testingActiveCount,
+      failedSolutionCount,
+      watchingOnlyCount,
+      readyToResolveCount,
+      firstReadyProblemId
+    };
+  }, [topLevelProblems, defaultVerifyTarget]);
 
   const breakdown = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -571,7 +606,87 @@ export const ProblemsLedgerView: React.FC = () => {
   }
 
   return (
-    <div className="w-full max-w-[1280px] mx-auto space-y-6">
+    <div className="w-full max-w-[1280px] mx-auto space-y-5">
+      {/* ================================================================ */}
+      {/* 0. SELF-EXPLANATORY 5-STEP LOOP STRIP                            */}
+      {/* ================================================================ */}
+      <div className="bg-slate-900/75 border border-slate-800/90 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              quickInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              setTimeout(() => quickInputRef.current?.focus(), 200);
+            }}
+            className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold transition-colors"
+          >
+            1. Record
+          </button>
+          <ArrowRight className="w-3 h-3 text-slate-600 shrink-0" />
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('classify');
+              tabsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            className={`px-2.5 py-1 rounded-lg border font-bold transition-colors ${
+              buckets.toClassify.length > 0
+                ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-500/40'
+                : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+            }`}
+          >
+            2. Classify ({buckets.toClassify.length})
+          </button>
+          <ArrowRight className="w-3 h-3 text-slate-600 shrink-0" />
+          <span
+            className={`px-2.5 py-1 rounded-lg border font-bold ${
+              topFocusProblems.length < maxTop && buckets.backlog.length > 0
+                ? 'bg-rose-500/10 text-rose-200 border-rose-500/35'
+                : 'bg-slate-950 text-slate-300 border-slate-800'
+            }`}
+          >
+            3. Focus Top {maxTop} ({topFocusProblems.length}/{maxTop})
+          </span>
+          <ArrowRight className="w-3 h-3 text-slate-600 shrink-0" />
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('backlog');
+              setResponseFilter('all');
+              tabsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            className={`px-2.5 py-1 rounded-lg border font-bold transition-colors ${
+              loopMetrics.failedSolutionCount > 0
+                ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/40'
+                : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+            }`}
+          >
+            4. Observe / Test ({loopMetrics.testingActiveCount} testing · {loopMetrics.watchingOnlyCount} watching
+            {loopMetrics.failedSolutionCount > 0 ? ` · ${loopMetrics.failedSolutionCount} need rethink` : ''})
+          </button>
+          <ArrowRight className="w-3 h-3 text-slate-600 shrink-0" />
+          <button
+            type="button"
+            onClick={() => {
+              if (loopMetrics.firstReadyProblemId) {
+                setWorkbenchState({ problemId: loopMetrics.firstReadyProblemId });
+              } else {
+                setActiveTab('resolved');
+                tabsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }}
+            className={`px-2.5 py-1 rounded-lg border font-bold transition-colors ${
+              loopMetrics.readyToResolveCount > 0
+                ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border-emerald-400/45'
+                : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+            }`}
+          >
+            5. Prove &amp; Resolve
+            {loopMetrics.readyToResolveCount > 0 ? ` (${loopMetrics.readyToResolveCount} ready!)` : ''}
+          </button>
+        </div>
+      </div>
+
       {/* ================================================================ */}
       {/* 1. TOP 3 ACTIVE FOCUS (WIP Limit — Editable Directly, No Dupe!)  */}
       {/* ================================================================ */}
@@ -672,10 +787,12 @@ export const ProblemsLedgerView: React.FC = () => {
               selectedWeekId
             );
 
+            const cta = getProblemNextActionCta(prob, testing);
+
             return (
               <div
                 key={prob.id}
-                className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 transition-all ${sevVis.cardTintClass} ${sevVis.leftBarClass}`}
+                className={`p-4 rounded-2xl border flex flex-col justify-between space-y-3 transition-all hover:border-slate-600 ${sevVis.cardTintClass} ${sevVis.leftBarClass}`}
               >
                 {/* Header & Title (Click opens Case File!) */}
                 <div
@@ -892,8 +1009,8 @@ export const ProblemsLedgerView: React.FC = () => {
                         onClick={() => updateProblem(prob.id, { promptNoteOnHit: !noteToggleOn })}
                         title={
                           noteToggleOn
-                            ? 'Detail notes ON (default for Top 3) — click to turn OFF'
-                            : 'Detail notes OFF — click to ask for a 1-line note on each hit'
+                            ? 'Asks for a 1-line clue whenever this fires — click to count silently'
+                            : 'Counts silently on hit — click to ask for a 1-line note'
                         }
                         className={`inline-flex items-center space-x-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-colors ${
                           noteToggleOn
@@ -902,7 +1019,7 @@ export const ProblemsLedgerView: React.FC = () => {
                         }`}
                       >
                         <MessageSquarePlus className="w-3 h-3" />
-                        <span>{noteToggleOn ? 'ON' : 'OFF'}</span>
+                        <span>{noteToggleOn ? 'Ask note: ON' : 'Ask note: OFF'}</span>
                       </button>
                     </div>
 
@@ -910,9 +1027,9 @@ export const ProblemsLedgerView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setWorkbenchState({ problemId: prob.id })}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-bold"
+                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${cta.buttonClass}`}
                       >
-                        Open
+                        {cta.label}
                       </button>
 
                       {testing.readyToResolve && (
@@ -921,7 +1038,7 @@ export const ProblemsLedgerView: React.FC = () => {
                           onClick={() => updateProblem(prob.id, { status: 'solved', classified: true })}
                           className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-extrabold"
                         >
-                          Resolve
+                          Resolve ✓
                         </button>
                       )}
                     </div>
@@ -936,10 +1053,14 @@ export const ProblemsLedgerView: React.FC = () => {
       {/* ================================================================ */}
       {/* 2. ZERO-FRICTION CAPTURE + 3 CLEAR TABS (NO DUPLICATES!)         */}
       {/* ================================================================ */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div
+        ref={tabsSectionRef}
+        className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5"
+      >
         <form onSubmit={handleQuickCapture} className="space-y-2">
           <div className="flex items-center gap-2">
             <input
+              ref={quickInputRef}
               type="text"
               value={quickTitle}
               onChange={e => setQuickTitle(e.target.value)}

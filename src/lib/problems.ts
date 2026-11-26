@@ -1048,6 +1048,40 @@ export const getSolutionPeriodSummary = (
   };
 };
 
+export const getProblemNextActionCta = (
+  problem: ProblemEntry,
+  testingSummary: SolutionTestingSummary
+): { label: string; buttonClass: string } => {
+  if (testingSummary.state === 'failed') {
+    return {
+      label: 'Rethink fix →',
+      buttonClass: 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/35'
+    };
+  }
+  if (testingSummary.state === 'tweaked') {
+    return {
+      label: 'Apply tweak →',
+      buttonClass: 'bg-violet-500/15 hover:bg-violet-500/25 text-violet-200 border-violet-500/35'
+    };
+  }
+  if (testingSummary.hasSolution) {
+    return {
+      label: 'Edit fix',
+      buttonClass: 'bg-slate-800 hover:bg-slate-700 text-slate-100 border-slate-700'
+    };
+  }
+  if (isProblemWatching(problem)) {
+    return {
+      label: 'Design fix →',
+      buttonClass: 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-500/35'
+    };
+  }
+  return {
+    label: 'Investigate / Fix →',
+    buttonClass: 'bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 border-sky-500/35'
+  };
+};
+
 const shiftIsoDate = (dateStr: string, deltaDays: number): string => {
   const d = new Date(`${dateStr.slice(0, 10)}T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return dateStr.slice(0, 10);
