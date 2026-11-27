@@ -5318,6 +5318,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const hasDailyContent = (d: DailyEntry) =>
       Boolean(
         (d.priorityItems && d.priorityItems.length > 0) ||
+          Boolean(d.daySpirit && d.daySpirit.trim().length > 0) ||
           (d.planNotes && d.planNotes.trim().length > 0) ||
           (d.reviewNotes && d.reviewNotes.trim().length > 0) ||
           (d.problemsEncountered && d.problemsEncountered.trim().length > 0) ||
@@ -5452,11 +5453,17 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const mergedAlignmentNote = chosen.alignmentNote?.trim()
           ? chosen.alignmentNote
           : other.alignmentNote;
+        const mergedDaySpirit = chosen.daySpirit?.trim() ? chosen.daySpirit : other.daySpirit;
+        const mergedDaySpiritMode = chosen.daySpiritMode || other.daySpiritMode;
+        const mergedDaySpiritHonored = chosen.daySpiritHonored ?? other.daySpiritHonored;
 
         if (
           unionGwsIds.length > (c.gwsSessionIds || []).length ||
           mergedPrios.length !== (c.priorityItems || []).length ||
           mergedReviewNotes !== (c.reviewNotes || '') ||
+          (mergedDaySpirit || '') !== (c.daySpirit || '') ||
+          mergedDaySpiritMode !== c.daySpiritMode ||
+          mergedDaySpiritHonored !== c.daySpiritHonored ||
           JSON.stringify(mergedEnergyCheck || null) !== JSON.stringify(c.energyCheck || null) ||
           mergedAlignmentVerdict !== c.alignmentVerdict ||
           (mergedAlignmentNote || '') !== (c.alignmentNote || '') ||
@@ -5474,6 +5481,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           reviewNotes: mergedReviewNotes,
           problemsEncountered: mergedProblems,
           executionScore: mergedScore,
+          ...(mergedDaySpirit?.trim() ? { daySpirit: mergedDaySpirit } : {}),
+          ...(mergedDaySpiritMode ? { daySpiritMode: mergedDaySpiritMode } : {}),
+          ...(mergedDaySpiritHonored !== undefined ? { daySpiritHonored: mergedDaySpiritHonored } : {}),
           ...(mergedEnergyCheck ? { energyCheck: mergedEnergyCheck } : {}),
           ...(mergedAlignmentVerdict ? { alignmentVerdict: mergedAlignmentVerdict } : {}),
           ...(mergedAlignmentNote?.trim() ? { alignmentNote: mergedAlignmentNote } : {}),

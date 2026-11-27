@@ -97,6 +97,8 @@ import {
   Layers, 
   Plus, 
   X, 
+  HeartPulse,
+  Wrench,
   FilePlus,
   Compass,
   ArrowRight,
@@ -2504,6 +2506,83 @@ export const ReviewHub: React.FC = () => {
                         </span>
                       </div>
                     </div>
+
+                    {currentDailyEntry.daySpirit?.trim() && (() => {
+                      const mode = currentDailyEntry.daySpiritMode || 'spirit';
+                      const boxCls =
+                        mode === 'recovery'
+                          ? 'bg-teal-500/10 border-teal-500/35 text-teal-100'
+                          : mode === 'fix'
+                          ? 'bg-orange-500/10 border-orange-500/35 text-orange-100'
+                          : mode === 'goal'
+                          ? 'bg-amber-500/10 border-amber-500/35 text-amber-100'
+                          : 'bg-violet-500/10 border-violet-500/35 text-violet-100';
+                      const labelCls =
+                        mode === 'recovery'
+                          ? 'text-teal-300'
+                          : mode === 'fix'
+                          ? 'text-orange-300'
+                          : mode === 'goal'
+                          ? 'text-amber-300'
+                          : 'text-violet-300';
+                      const ModeIcon =
+                        mode === 'recovery'
+                          ? HeartPulse
+                          : mode === 'fix'
+                          ? Wrench
+                          : mode === 'goal'
+                          ? Target
+                          : Sparkles;
+                      return (
+                        <div className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${boxCls}`}>
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <div className={`text-[10px] font-extrabold uppercase tracking-wider flex items-center space-x-1.5 ${labelCls}`}>
+                              <ModeIcon className="w-3.5 h-3.5 shrink-0" />
+                              <span>Goal / Spirit of the Day</span>
+                            </div>
+                            <p className="text-xs sm:text-sm font-bold leading-snug break-words">
+                              {currentDailyEntry.daySpirit.trim()}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                saveDailyEntry(selectedDate, {
+                                  daySpiritHonored:
+                                    currentDailyEntry.daySpiritHonored === true ? undefined : true
+                                })
+                              }
+                              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors ${
+                                currentDailyEntry.daySpiritHonored === true
+                                  ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                                  : 'bg-slate-950/80 hover:bg-emerald-500/15 text-emerald-300 border-slate-800'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Honored</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                saveDailyEntry(selectedDate, {
+                                  daySpiritHonored:
+                                    currentDailyEntry.daySpiritHonored === false ? undefined : false
+                                })
+                              }
+                              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors ${
+                                currentDailyEntry.daySpiritHonored === false
+                                  ? 'bg-rose-500 text-slate-950 border-rose-400'
+                                  : 'bg-slate-950/80 hover:bg-rose-500/15 text-rose-300 border-slate-800'
+                              }`}
+                            >
+                              <X className="w-3 h-3" />
+                              <span>Off-track</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {dayPrios.length > 0 ? (
                       <div className="space-y-2.5">

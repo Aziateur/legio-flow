@@ -35,6 +35,7 @@ import {
 import { ModularCardGrid } from '../modular/ModularCardGrid';
 import { QuickCopyPasteBar } from '../common/QuickCopyPasteBar';
 import { DailyContextBrief } from './DailyContextBrief';
+import { DailySpiritCard } from './DailySpiritCard';
 import { PreFlightGuardrailsStrip } from '../problems/PreFlightGuardrailsStrip';
 
 export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemplate: () => void }> = ({
@@ -101,7 +102,10 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     return currentWeekRange.days.map((dateStr) => {
       const d = new Date(`${dateStr}T12:00:00`);
       const dayEntry = dailyEntries[dateStr];
-      const hasPlan = !!(dayEntry && dayEntry.planNotes && dayEntry.planNotes.trim().length > 0);
+      const hasPlan = Boolean(
+        (dayEntry?.planNotes && dayEntry.planNotes.trim().length > 0) ||
+          (dayEntry?.daySpirit && dayEntry.daySpirit.trim().length > 0)
+      );
       const completedTasks = dayEntry?.mainTasksCompleted || 0;
       return {
         dateStr,
@@ -708,6 +712,12 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
               </div>
             </div>
           )}
+
+          {/* 0. GOAL / SPIRIT OF THE DAY */}
+          <DailySpiritCard
+            selectedDate={selectedDate}
+            weeklyFocusTheme={activeWeeklyPlan.focusTheme}
+          />
 
           {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
           {dailyTemplate && (

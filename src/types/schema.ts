@@ -148,6 +148,7 @@ export interface DailyPriorityItem {
 
 export type NervousSystemState = 'calm' | 'sharp' | 'wired' | 'foggy' | 'drained';
 export type AlignmentVerdict = 'on_plan' | 'better_pivot' | 'mixed' | 'unwise_drift';
+export type DailySpiritMode = 'spirit' | 'goal' | 'recovery' | 'fix';
 
 export interface DailyEnergyCheck {
   wakeUp?: number; // 1–10 energy at wake-up
@@ -173,6 +174,9 @@ export interface DailyEntry {
   executionScore: number; // e.g. 6 out of 10
   automaticTasksCompleted: boolean;
   automaticTaskList?: TaskItem[];
+  daySpirit?: string; // Goal / Spirit / Posture of the Day
+  daySpiritMode?: DailySpiritMode; // Optional lens: 'spirit' | 'goal' | 'recovery' | 'fix'
+  daySpiritHonored?: boolean; // Optional end-of-day check: honored today's goal/spirit?
   planNotes: string; // e.g. Day priorities
   priorityItems?: DailyPriorityItem[];
   restBlocks?: ScheduledRestBlock[]; // LVL 0 / recovery scheduled rest blocks

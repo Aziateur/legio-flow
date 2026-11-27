@@ -30,9 +30,14 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
       .map((line, idx) => `${idx + 1} ${line}`)
       .join('\n');
 
-    const text = cleanLines
-      ? `${currentEntry.date}\n\n${cleanLines}`
-      : `${currentEntry.date}`;
+    const spiritLine = currentEntry.daySpirit?.trim()
+      ? `Goal / Spirit: ${currentEntry.daySpirit.trim()}\n\n`
+      : '';
+
+    const text =
+      spiritLine || cleanLines
+        ? `${currentEntry.date}\n\n${spiritLine}${cleanLines}`.trim()
+        : `${currentEntry.date}`;
 
     navigator.clipboard.writeText(text);
     setCopiedType('plan');
@@ -44,6 +49,15 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
     const todaySessions = gwsSessions.filter(s => s.date === currentEntry.date);
 
     let text = `${currentEntry.date} — Daily Review\n\n`;
+    if (currentEntry.daySpirit?.trim()) {
+      const honorTag =
+        currentEntry.daySpiritHonored === true
+          ? ' [Honored]'
+          : currentEntry.daySpiritHonored === false
+          ? ' [Off-track]'
+          : '';
+      text += `Goal / Spirit: ${currentEntry.daySpirit.trim()}${honorTag}\n\n`;
+    }
     text += `Main Tasks Completed: ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
     text += `Execution Score: ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
     text += `Automatic Habits: ${currentEntry.automaticTasksCompleted ? 'Yes' : 'No'}\n`;
