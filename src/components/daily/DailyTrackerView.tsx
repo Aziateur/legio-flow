@@ -102,9 +102,10 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
     return currentWeekRange.days.map((dateStr) => {
       const d = new Date(`${dateStr}T12:00:00`);
       const dayEntry = dailyEntries[dateStr];
-      const hasPlan = Boolean(
-        (dayEntry?.planNotes && dayEntry.planNotes.trim().length > 0) ||
-          (dayEntry?.daySpirit && dayEntry.daySpirit.trim().length > 0)
+      const hasPlan = !!(
+        dayEntry &&
+        ((dayEntry.planNotes && dayEntry.planNotes.trim().length > 0) ||
+          (dayEntry.daySpirit && dayEntry.daySpirit.trim().length > 0))
       );
       const completedTasks = dayEntry?.mainTasksCompleted || 0;
       return {
@@ -713,11 +714,8 @@ export const DailyTrackerView: React.FC<{ onOpenGWS: () => void; onCustomizeTemp
             </div>
           )}
 
-          {/* 0. GOAL / SPIRIT OF THE DAY */}
-          <DailySpiritCard
-            selectedDate={selectedDate}
-            weeklyFocusTheme={activeWeeklyPlan.focusTheme}
-          />
+          {/* GOAL / SPIRIT OF THE DAY */}
+          <DailySpiritCard selectedDate={selectedDate} />
 
           {/* 1. FIRST THING YOU SEE: DAY MISSION & PRIORITIES + DAILY CARDS */}
           {dailyTemplate && (

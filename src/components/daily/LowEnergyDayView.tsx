@@ -251,8 +251,7 @@ export const LowEnergyDayView: React.FC<{ selectedDate: string }> = ({ selectedD
         )}
       </div>
 
-      {/* Goal / Spirit of the Day (defaults to Recovery posture in LVL 0) */}
-      <DailySpiritCard selectedDate={selectedDate} defaultMode="recovery" />
+      <DailySpiritCard selectedDate={selectedDate} />
 
       {/* Main 2-Card Calm Grid: 1) Low-Ambition Essentials  2) Scheduled Rest */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">

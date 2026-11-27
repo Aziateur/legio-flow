@@ -31,13 +31,12 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
       .join('\n');
 
     const spiritLine = currentEntry.daySpirit?.trim()
-      ? `Goal / Spirit: ${currentEntry.daySpirit.trim()}\n\n`
+      ? `Goal / Spirit: ${currentEntry.daySpirit.trim()}`
       : '';
-
-    const text =
-      spiritLine || cleanLines
-        ? `${currentEntry.date}\n\n${spiritLine}${cleanLines}`.trim()
-        : `${currentEntry.date}`;
+    const sections = [spiritLine, cleanLines].filter(Boolean).join('\n\n');
+    const text = sections
+      ? `${currentEntry.date}\n\n${sections}`
+      : `${currentEntry.date}`;
 
     navigator.clipboard.writeText(text);
     setCopiedType('plan');
@@ -50,13 +49,7 @@ export const QuickCopyPasteBar: React.FC<QuickCopyPasteBarProps> = ({
 
     let text = `${currentEntry.date} — Daily Review\n\n`;
     if (currentEntry.daySpirit?.trim()) {
-      const honorTag =
-        currentEntry.daySpiritHonored === true
-          ? ' [Honored]'
-          : currentEntry.daySpiritHonored === false
-          ? ' [Off-track]'
-          : '';
-      text += `Goal / Spirit: ${currentEntry.daySpirit.trim()}${honorTag}\n\n`;
+      text += `Goal / Spirit: ${currentEntry.daySpirit.trim()}\n`;
     }
     text += `Main Tasks Completed: ${currentEntry.mainTasksCompleted}/${currentEntry.mainTasksTotal}\n`;
     text += `Execution Score: ${currentEntry.executionScore > 0 ? `${currentEntry.executionScore}/10` : 'Unscored'}\n`;
